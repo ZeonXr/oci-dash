@@ -21,8 +21,8 @@ function localOrigin(value: string | undefined) {
 async function guardNetwork(context: BrowserContext, origin: string) {
   const guard: Guard = { external: [], mutations: [], errors: [] };
   guards.set(context, guard);
-  context.on("page", page => page.on("pageerror", error => guard.errors.push(error.message)));
-  await context.route("**/*", async route => {
+  context.on("page", (page) => page.on("pageerror", (error) => guard.errors.push(error.message)));
+  await context.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin !== origin && url.protocol !== "data:") {
@@ -45,7 +45,7 @@ async function guardNetwork(context: BrowserContext, origin: string) {
 async function requireDemo(context: BrowserContext, origin: string) {
   const response = await context.request.get(`${origin}/api/auth/me`);
   expect(response.status()).toBe(200);
-  const body = await response.json() as { user: SessionUser; demo: boolean };
+  const body = (await response.json()) as { user: SessionUser; demo: boolean };
   if (body.demo !== true) throw new Error("This readonly smoke suite requires demo=true.");
 }
 
@@ -53,12 +53,17 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
   // beforeEach has already verified demo=true. Screenshots remain opt-in and
   // contain only demonstration resources, never login values or session tokens.
   if (process.env.E2E_SCREENSHOTS === "1") {
-    await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true, animations: "disabled" });
+    await page.screenshot({
+      path: testInfo.outputPath(`${name}.png`),
+      fullPage: true,
+      animations: "disabled",
+    });
   }
 }
 
 async function instancePage(page: Page) {
-  const instance = demo.instances.find(item => item.displayName === "SG-Oracle-02") || demo.instances[0];
+  const instance =
+    demo.instances.find((item) => item.displayName === "SG-Oracle-02") || demo.instances[0];
   expect(instance).toBeTruthy();
   await page.goto(`/instances/${encodeURIComponent(instance.id)}`);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(instance.displayName);
@@ -67,7 +72,10 @@ async function instancePage(page: Page) {
 
 test.beforeAll(async ({ browser, baseURL }) => {
   const password = process.env.ADMIN_PASSWORD;
-  if (!password) throw new Error("Inject ADMIN_PASSWORD for the local demo administrator before running E2E tests.");
+  if (!password)
+    throw new Error(
+      "Inject ADMIN_PASSWORD for the local demo administrator before running E2E tests.",
+    );
   const origin = localOrigin(baseURL);
   const context = await browser.newContext({ baseURL: origin, locale: "zh-CN" });
   await guardNetwork(context, origin);
@@ -88,7 +96,7 @@ test.beforeAll(async ({ browser, baseURL }) => {
     await requireDemo(context, origin);
     const response = await context.request.get(`${origin}/api/dashboard`);
     expect(response.status()).toBe(200);
-    demo = await response.json() as DashboardData;
+    demo = (await response.json()) as DashboardData;
     expect(demo.demo).toBe(true);
     expect(demo.instances.length).toBeGreaterThan(0);
     cookies = await context.cookies();
@@ -108,9 +116,12 @@ test.afterAll(async ({ browser, baseURL }) => {
     await context.addCookies(cookies);
     // Also remove the test session when an earlier serial test fails and skips
     // the logout test. This is the only cleanup write, and never affects OCI.
-    await context.request.post(`${origin}/api/auth/logout`, {
-      headers: { Origin: origin }, timeout: 5000,
-    }).catch(() => undefined);
+    await context.request
+      .post(`${origin}/api/auth/logout`, {
+        headers: { Origin: origin },
+        timeout: 5000,
+      })
+      .catch(() => undefined);
   } finally {
     cookies = [];
     await context.close();
@@ -126,7 +137,10 @@ test.beforeEach(async ({ context, baseURL }) => {
 
 test.afterEach(async ({ context }) => {
   const guard = guards.get(context);
-  expect(guard?.mutations, "The UI must never submit cloud/configuration writes in demo mode").toEqual([]);
+  expect(
+    guard?.mutations,
+    "The UI must never submit cloud/configuration writes in demo mode",
+  ).toEqual([]);
   expect(guard?.external, "No external service should be contacted").toEqual([]);
   expect(guard?.errors, "The page should not raise uncaught JavaScript errors").toEqual([]);
 });
@@ -142,7 +156,9 @@ test("总览展示资源指标与动态监控", async ({ page }, testInfo) => {
   await test.step("监控时间范围可以切换", async () => {
     await page.getByLabel("监控时间范围").selectOption("7d");
     await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toBeVisible();
-    await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toContainText(/\d{2}\/\d{2}/);
+    await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toContainText(
+      /\d{2}\/\d{2}/,
+    );
   });
   await capture(page, testInfo, "overview-desktop");
 });
@@ -159,13 +175,17 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
   });
   await test.step("停止状态计数和结果一致", async () => {
     await page.getByRole("button", { name: /^已停止/ }).click();
-    await expect(rows).toHaveCount(demo.instances.filter(item => item.state === "STOPPED").length);
+    await expect(rows).toHaveCount(
+      demo.instances.filter((item) => item.state === "STOPPED").length,
+    );
     await page.getByRole("button", { name: /^全部实例/ }).click();
   });
   await test.step("账号筛选限定资源范围", async () => {
     const account = demo.instances[0].accountId;
     await page.getByLabel("筛选账号").selectOption(account);
-    await expect(rows).toHaveCount(demo.instances.filter(item => item.accountId === account).length);
+    await expect(rows).toHaveCount(
+      demo.instances.filter((item) => item.accountId === account).length,
+    );
     await page.getByLabel("筛选账号").selectOption("");
   });
   await test.step("演示环境禁止创建实例", async () => {
@@ -180,17 +200,27 @@ test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
     await test.step(`${label}内容可以加载`, async () => {
       await page.getByRole("tab", { name: label, exact: true }).click();
       await expect(page.getByRole("tabpanel")).toBeVisible();
-      if (label === "安全规则") await expect(page.getByRole("button", { name: "刷新规则", exact: true })).toBeVisible();
-      if (label === "存储") await expect(page.getByRole("button", { name: "调整容量与性能" }).first()).toBeDisabled();
-      expect((await page.getByRole("alert").allTextContents()).filter(value => value.trim())).toEqual([]);
+      if (label === "安全规则")
+        await expect(page.getByRole("button", { name: "刷新规则", exact: true })).toBeVisible();
+      if (label === "存储")
+        await expect(page.getByRole("button", { name: "调整容量与性能" }).first()).toBeDisabled();
+      expect(
+        (await page.getByRole("alert").allTextContents()).filter((value) => value.trim()),
+      ).toEqual([]);
     });
   }
   await test.step("方向键切换标签", async () => {
     await page.getByRole("tab", { name: "概览", exact: true }).click();
     await page.getByRole("tab", { name: "概览", exact: true }).press("ArrowRight");
-    await expect(page.getByRole("tab", { name: "监控", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "监控", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await page.getByRole("tab", { name: "监控", exact: true }).press("Home");
-    await expect(page.getByRole("tab", { name: "概览", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: "概览", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
   await capture(page, testInfo, "instance-overview");
 });
@@ -201,7 +231,9 @@ test("连接对话框与公网地址保护", async ({ page }, testInfo) => {
     await page.getByRole("button", { name: "连接实例", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "连接实例" })).toBeVisible();
     await page.keyboard.press("Tab");
-    expect(await page.evaluate(() => Boolean(document.activeElement?.closest("dialog")))).toBe(true);
+    expect(await page.evaluate(() => Boolean(document.activeElement?.closest("dialog")))).toBe(
+      true,
+    );
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "连接实例" })).not.toBeVisible();
   });
@@ -223,7 +255,8 @@ test("账号列表完成加载且凭据操作只读", async ({ page }, testInfo)
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
   for (const name of ["验证", "同步", "编辑", "移除"]) {
     await test.step(`${name}按钮在演示模式禁用`, async () => {
-      for (const button of await page.getByRole("button", { name, exact: true }).all()) await expect(button).toBeDisabled();
+      for (const button of await page.getByRole("button", { name, exact: true }).all())
+        await expect(button).toBeDisabled();
     });
   }
   await capture(page, testInfo, "accounts");
@@ -260,21 +293,32 @@ test("390px 小屏导航与已加载的实例表格不撑宽页面", async ({ pa
   await expect(page.locator(".metric-card")).toHaveCount(4);
   await test.step("侧栏默认隐藏且不接受焦点", async () => {
     await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
-    const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
+    const width = await page.evaluate(() => ({
+      viewport: innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
     expect(width.document).toBeLessThanOrEqual(width.viewport + 1);
     await capture(page, testInfo, "overview-mobile");
   });
   await test.step("展开导航并进入实例页", async () => {
     await page.getByRole("button", { name: "展开导航", exact: true }).click();
-    await expect(page.getByRole("button", { name: "展开导航", exact: true })).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("button", { name: "展开导航", exact: true })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     await page.locator(".sidebar nav").getByRole("link", { name: "实例", exact: true }).click();
     await expect(page.locator(".resource-table tbody tr").first()).toBeVisible();
     await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
   });
   await test.step("宽表格只在自身容器内横向滚动", async () => {
-    const width = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
+    const width = await page.evaluate(() => ({
+      viewport: innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
     expect(width.document).toBeLessThanOrEqual(width.viewport + 1);
-    const table = await page.locator(".table-scroll").evaluate(element => ({ visible: element.clientWidth, content: element.scrollWidth }));
+    const table = await page
+      .locator(".table-scroll")
+      .evaluate((element) => ({ visible: element.clientWidth, content: element.scrollWidth }));
     expect(table.content).toBeGreaterThan(table.visible);
     await capture(page, testInfo, "instances-mobile");
   });

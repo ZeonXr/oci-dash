@@ -97,7 +97,17 @@ SQLite 保存账号元数据、资源缓存、任务、审计和登录状态。O
 
 ## 验证与项目结构
 
+代码使用固定版本的 Prettier 格式化，统一为 2 空格缩进、约 100 字符行宽和 LF 换行。编辑器可读取 `.editorconfig`；配置 Prettier 扩展后可使用项目内的 `.prettierrc.json`。
+
 ```sh
+npm run format        # 格式化源码、测试、配置与文档
+npm run format:check  # 只检查，不修改文件
+```
+
+CI 会先检查格式，再执行类型检查、测试与构建。格式化排除生成文件、本地环境配置、私钥、数据库和测试产物，具体见 `.prettierignore`。
+
+```sh
+npm run format:check
 npm run typecheck
 npm test
 npm run build

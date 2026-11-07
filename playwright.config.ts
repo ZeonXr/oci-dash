@@ -5,7 +5,11 @@ const parsed = new URL(requestedBaseURL);
 if (
   !["http:", "https:"].includes(parsed.protocol) ||
   !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) ||
-  parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash
+  parsed.username ||
+  parsed.password ||
+  parsed.pathname !== "/" ||
+  parsed.search ||
+  parsed.hash
 ) {
   throw new Error("E2E_BASE_URL must be the origin of a local OCI Dash demo server.");
 }
@@ -23,7 +27,8 @@ export default defineConfig({
   use: {
     baseURL: parsed.origin,
     browserName: "chromium",
-    channel: process.env.E2E_BROWSER_CHANNEL || (process.platform === "win32" ? "msedge" : undefined),
+    channel:
+      process.env.E2E_BROWSER_CHANNEL || (process.platform === "win32" ? "msedge" : undefined),
     headless: true,
     viewport: { width: 1440, height: 1080 },
     locale: "zh-CN",

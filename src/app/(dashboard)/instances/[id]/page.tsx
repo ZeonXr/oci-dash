@@ -1,46 +1,636 @@
 "use client";
-import { useState,type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowUpRight,ChevronDown,ChevronRight,HardDrive,ListChecks,Network,Play,RefreshCw,RotateCw,Terminal } from "lucide-react";
-import type { InstanceSummary,JobSummary,MetricsResult } from "@/lib/contracts";
+import {
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  HardDrive,
+  ListChecks,
+  Network,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Terminal,
+} from "lucide-react";
+import type { InstanceSummary, JobSummary, MetricsResult } from "@/lib/contracts";
 import { useApp } from "@/components/app-provider";
-import { send,useAction,useResource } from "@/components/api";
-import { Badge,Button,Card,CopyButton,EmptyState,ErrorState,Field,LoadingState,MetricCard,Modal,PageHeader,Select,Status } from "@/components/ui";
-import { formatDate,number,operationLabels,percent,primaryAddress,publicBindings,regionName,shortId,taskHref } from "@/components/format";
+import { send, useAction, useResource } from "@/components/api";
+import {
+  Badge,
+  Button,
+  Card,
+  CopyButton,
+  EmptyState,
+  ErrorState,
+  Field,
+  LoadingState,
+  MetricCard,
+  Modal,
+  PageHeader,
+  Select,
+  Status,
+} from "@/components/ui";
+import {
+  formatDate,
+  number,
+  operationLabels,
+  percent,
+  primaryAddress,
+  publicBindings,
+  regionName,
+  shortId,
+  taskHref,
+} from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
-import { NetworkPanel,SecurityPanel,StoragePanel } from "@/components/instance-resources";
-import { OperationDialog,type OperationDialogProps } from "@/components/operation-dialog";
+import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
+import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
 
-function RenameDialog({instance,onClose}:{instance:InstanceSummary;onClose:()=>void}) {
-  const {demo,notify}=useApp();const [name,setName]=useState(instance.displayName);const action=useAction();const [idempotencyKey]=useState(()=>crypto.randomUUID());
-  const submit=async(e:FormEvent)=>{e.preventDefault();if(demo||!name.trim())return;const response=await action.run(()=>send<{job:JobSummary}>("/api/operations",{kind:"instance-rename",accountId:instance.accountId,region:instance.region,resourceId:instance.id,payload:{displayName:name.trim()},idempotencyKey}));if(response){notify("重命名任务已提交。",taskHref(response.job.id));onClose()}};
-  return <Modal open title="重命名实例" description="更新 OCI 实例显示名称。" busy={action.pending} onClose={onClose} footer={<><Button onClick={onClose}>取消</Button><Button type="submit" form="rename-form" variant="primary" disabled={demo||name.trim()===instance.displayName} loading={action.pending}>保存名称</Button></>}><form id="rename-form" className="stack" onSubmit={submit}><Field label="实例名称" required><input autoFocus required maxLength={255} value={name} onChange={e=>setName(e.target.value)}/></Field>{action.error&&<ErrorState message={action.error}/>}</form></Modal>;
+function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClose: () => void }) {
+  const { demo, notify } = useApp();
+  const [name, setName] = useState(instance.displayName);
+  const action = useAction();
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (demo || !name.trim()) return;
+    const response = await action.run(() =>
+      send<{ job: JobSummary }>("/api/operations", {
+        kind: "instance-rename",
+        accountId: instance.accountId,
+        region: instance.region,
+        resourceId: instance.id,
+        payload: { displayName: name.trim() },
+        idempotencyKey,
+      }),
+    );
+    if (response) {
+      notify("重命名任务已提交。", taskHref(response.job.id));
+      onClose();
+    }
+  };
+  return (
+    <Modal
+      open
+      title="重命名实例"
+      description="更新 OCI 实例显示名称。"
+      busy={action.pending}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="submit"
+            form="rename-form"
+            variant="primary"
+            disabled={demo || name.trim() === instance.displayName}
+            loading={action.pending}
+          >
+            保存名称
+          </Button>
+        </>
+      }
+    >
+      <form id="rename-form" className="stack" onSubmit={submit}>
+        <Field label="实例名称" required>
+          <input
+            autoFocus
+            required
+            maxLength={255}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        {action.error && <ErrorState message={action.error} />}
+      </form>
+    </Modal>
+  );
 }
-function ConnectionDialog({instance,onClose}:{instance:InstanceSummary;onClose:()=>void}) {
-  const addresses=publicBindings(instance).map(b=>b.publicIp!);const [host,setHost]=useState(primaryAddress(instance));const [username,setUsername]=useState(instance.os.toLowerCase().includes("ubuntu")?"ubuntu":"opc");
-  const validUser=/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(username);const command=`ssh ${username}@${host}`;
-  return <Modal open title="连接实例" description="使用你已有的 SSH 私钥登录服务器。" onClose={onClose} footer={<Button onClick={onClose}>完成</Button>}><div className="stack"><Field label="连接地址"><Select value={host} onChange={e=>setHost(e.target.value)}>{Array.from(new Set([primaryAddress(instance),...addresses])).filter(a=>a!=="—").map(a=><option key={a}>{a}</option>)}</Select></Field><Field label="SSH 用户名" hint="Ubuntu 默认使用 ubuntu，Oracle Linux 默认使用 opc。"><input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="off"/></Field>{validUser&&host!=="—"?<div className="code-block"><code>{command}</code><CopyButton value={command} label="复制 SSH 命令"/></div>:<ErrorState message="请输入有效的 SSH 用户名，并选择连接地址。"/>}<p className="muted small">在已配置对应 SSH 密钥的终端中运行上述命令。密钥路径和 SSH 端口可根据你的服务器设置调整。</p></div></Modal>;
+function ConnectionDialog({
+  instance,
+  onClose,
+}: {
+  instance: InstanceSummary;
+  onClose: () => void;
+}) {
+  const addresses = publicBindings(instance).map((b) => b.publicIp!);
+  const [host, setHost] = useState(primaryAddress(instance));
+  const [username, setUsername] = useState(
+    instance.os.toLowerCase().includes("ubuntu") ? "ubuntu" : "opc",
+  );
+  const validUser = /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(username);
+  const command = `ssh ${username}@${host}`;
+  return (
+    <Modal
+      open
+      title="连接实例"
+      description="使用你已有的 SSH 私钥登录服务器。"
+      onClose={onClose}
+      footer={<Button onClick={onClose}>完成</Button>}
+    >
+      <div className="stack">
+        <Field label="连接地址">
+          <Select value={host} onChange={(e) => setHost(e.target.value)}>
+            {Array.from(new Set([primaryAddress(instance), ...addresses]))
+              .filter((a) => a !== "—")
+              .map((a) => (
+                <option key={a}>{a}</option>
+              ))}
+          </Select>
+        </Field>
+        <Field label="SSH 用户名" hint="Ubuntu 默认使用 ubuntu，Oracle Linux 默认使用 opc。">
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+          />
+        </Field>
+        {validUser && host !== "—" ? (
+          <div className="code-block">
+            <code>{command}</code>
+            <CopyButton value={command} label="复制 SSH 命令" />
+          </div>
+        ) : (
+          <ErrorState message="请输入有效的 SSH 用户名，并选择连接地址。" />
+        )}
+        <p className="muted small">
+          在已配置对应 SSH 密钥的终端中运行上述命令。密钥路径和 SSH 端口可根据你的服务器设置调整。
+        </p>
+      </div>
+    </Modal>
+  );
 }
-const tabs=[{id:"overview",label:"概览"},{id:"monitoring",label:"监控"},{id:"network",label:"网络"},{id:"security",label:"安全规则"},{id:"storage",label:"存储"},{id:"activity",label:"任务与活动"}];
+const tabs = [
+  { id: "overview", label: "概览" },
+  { id: "monitoring", label: "监控" },
+  { id: "network", label: "网络" },
+  { id: "security", label: "安全规则" },
+  { id: "storage", label: "存储" },
+  { id: "activity", label: "任务与活动" },
+];
 export default function InstanceDetailPage() {
-  const params=useParams<{id:string}>();const id=params.id;const {demo}=useApp();const [tab,setTab]=useState("overview");const [range,setRange]=useState("1h");const [mode,setMode]=useState<"cpu"|"network">("cpu");
-  const resource=useResource<{instance:InstanceSummary;demo:boolean}>(`/api/instances/${encodeURIComponent(id)}`,30000);const instance=resource.data?.instance;
-  const metrics=useResource<MetricsResult>(instance&&(tab==="overview"||tab==="monitoring")?`/api/instances/${encodeURIComponent(id)}/metrics?range=${range}`:null,60000);
-  const jobs=useResource<{jobs:JobSummary[];demo:boolean}>(tab==="overview"||tab==="activity"?"/api/jobs":null,5000);
-  const [operation,setOperation]=useState<Omit<OperationDialogProps,"onClose">|null>(null);const [renaming,setRenaming]=useState(false);const [connecting,setConnecting]=useState(false);
-  if(resource.loading)return <LoadingState/>;
-  if(!instance)return <ErrorState message={resource.error||"未找到此实例。"} retry={resource.reload}/>;
-  const instanceJobs=jobs.data?.jobs.filter(job=>job.resourceId===instance.id&&job.accountId===instance.accountId)||[];
-  const lifecycle=(kind:"instance-start"|"instance-stop"|"instance-reboot"|"instance-terminate")=>setOperation({title:operationLabels[kind],description:kind==="instance-terminate"?"此操作将永久终止实例，保留现有启动卷和数据卷。":kind==="instance-stop"?"实例将正常关机，正在运行的服务会中断。":kind==="instance-reboot"?"实例将重启，正在运行的服务会短暂中断。":"启动此实例及其操作系统。",summary:[["实例",instance.displayName],["账号",instance.accountName],["区域",regionName(instance.region)]],danger:kind==="instance-terminate",requireName:kind==="instance-terminate"?instance.displayName:undefined,operation:{kind,accountId:instance.accountId,region:instance.region,resourceId:instance.id,payload:kind==="instance-terminate"?{preserveBootVolume:true,preserveDataVolumes:true}:{}}});
-  const metricCards=<div className="metrics-grid"><MetricCard label="CPU 使用率" value={percent(instance.metrics?.cpuPercent??metrics.data?.points.at(-1)?.cpu)} note="最近一次可用采样"/><MetricCard label="内存使用率" value={percent(instance.metrics?.memoryPercent)} note={instance.metrics?.memoryPercent==null?"当前未返回来宾内存指标":"最近一次可用采样"}/><MetricCard label="网络接收" value={instance.metrics?.receivedMbps==null?"—":`${number(instance.metrics.receivedMbps,1)} Mbps`} note="最近一次可用采样"/><MetricCard label="网络发送" value={instance.metrics?.sentMbps==null?"—":`${number(instance.metrics.sentMbps,1)} Mbps`} note="最近一次可用采样"/></div>;
-  const taskRows=(limit?:number)=>instanceJobs.length?<div className="table-scroll"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>开始时间</th><th>尝试次数</th><th>操作</th></tr></thead><tbody>{instanceJobs.slice(0,limit).map(job=><tr key={job.id}><td>{operationLabels[job.kind]}<div className="task-id mono">{job.id.slice(0,12)}</div></td><td><Status value={job.state}/></td><td>{formatDate(job.startedAt||job.createdAt)}</td><td>{job.attempt} / {job.maxAttempts}</td><td><Link href={taskHref(job.id)} className="text-link">查看任务</Link></td></tr>)}</tbody></table></div>:<EmptyState title="暂无关联任务" description="在此实例上提交的操作会显示在这里。"/>;
-  return <><PageHeader eyebrow={<><Link href="/instances">实例</Link><ChevronRight size={12}/><span>{instance.displayName}</span></>} title={<>{instance.displayName}<Status value={instance.state}/></>} description={`${regionName(instance.region)} · ${instance.region} · ${instance.accountName}`}><Button onClick={resource.reload} loading={resource.refreshing} aria-label="刷新实例"><RefreshCw size={15}/></Button>{instance.state==="STOPPED"?<Button disabled={demo} onClick={()=>lifecycle("instance-start")}><Play size={15}/>启动</Button>:<Button disabled={demo||instance.state!=="RUNNING"} onClick={()=>lifecycle("instance-reboot")}><RotateCw size={15}/>重启</Button>}<details className="dropdown"><summary className="button">更多 <ChevronDown size={14}/></summary><div className="dropdown-menu"><button disabled={demo} onClick={e=>{e.currentTarget.closest("details")?.removeAttribute("open");setRenaming(true)}}>重命名</button><button disabled={demo||instance.state!=="RUNNING"} onClick={e=>{e.currentTarget.closest("details")?.removeAttribute("open");lifecycle("instance-stop")}}>停止实例</button><button className="danger-text" disabled={demo||instance.state==="TERMINATED"||instance.state==="TERMINATING"} onClick={e=>{e.currentTarget.closest("details")?.removeAttribute("open");lifecycle("instance-terminate")}}>终止实例</button></div></details><Button variant="primary" disabled={primaryAddress(instance)==="—"||instance.state!=="RUNNING"} onClick={()=>setConnecting(true)}><Terminal size={15}/>连接实例</Button></PageHeader>
-    {resource.error&&<div style={{marginBottom:20}}><ErrorState message={resource.error} retry={resource.reload}/></div>}<div className="tabs" role="tablist" aria-label="实例详情">{tabs.map(item=><button key={item.id} role="tab" id={`tab-${item.id}`} aria-selected={tab===item.id} tabIndex={tab===item.id?0:-1} onKeyDown={event=>{const index=tabs.findIndex(t=>t.id===item.id);const next=event.key==="ArrowRight"?(index+1)%tabs.length:event.key==="ArrowLeft"?(index+tabs.length-1)%tabs.length:event.key==="Home"?0:event.key==="End"?tabs.length-1:-1;if(next>=0){event.preventDefault();setTab(tabs[next].id);document.getElementById(`tab-${tabs[next].id}`)?.focus()}}} aria-controls={`panel-${item.id}`} className={tab===item.id?"active":""} onClick={()=>setTab(item.id)}>{item.label}</button>)}</div>
-    <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-      {tab==="overview"&&<>{metricCards}<div className="grid-2 instance-overview-grid" style={{marginBottom:24}}><Card title="基本信息"><dl className="details-list"><dt>账号</dt><dd><Link href="/accounts" className="text-link">{instance.accountName}</Link></dd><dt>区域 / 可用域</dt><dd>{instance.region} / {instance.availabilityDomain.split(":").at(-1)}</dd><dt>规格</dt><dd>{instance.shape}<span className="muted small">{number(instance.ocpus,1)} OCPU / {number(instance.memoryGb,1)} GB</span></dd><dt>操作系统</dt><dd>{instance.os||"未提供"}</dd><dt>实例 OCID</dt><dd><span className="mono" title={instance.id}>{shortId(instance.id)}</span><CopyButton value={instance.id}/></dd><dt>区间</dt><dd><span className="mono" title={instance.compartmentId}>{shortId(instance.compartmentId)}</span><CopyButton value={instance.compartmentId}/></dd><dt>标签</dt><dd>{Object.keys(instance.tags).length?Object.entries(instance.tags).slice(0,8).map(([key,value])=><Badge key={key} tone="info">{key}: {value}</Badge>):<span className="muted">暂无标签</span>}</dd></dl><p className="muted small" style={{marginTop:20}}>创建于 {formatDate(instance.createdAt,true)}</p></Card><Card title="性能趋势" action={<Select aria-label="监控时间范围" value={range} onChange={e=>setRange(e.target.value)}><option value="1h">最近 1 小时</option><option value="24h">最近 24 小时</option><option value="7d">过去 7 天</option></Select>}><MetricsChart data={metrics.data} loading={metrics.loading} error={metrics.error}/></Card><Card title="网络" action={<Badge>{publicBindings(instance).length} 个公网地址</Badge>}><div className="row"><span className="resource-icon"><Network size={19}/></span><div className="resource-label"><strong>{instance.vnics.length} 个虚拟网卡</strong><span>{instance.vnics[0]?.privateIps[0]?.privateIp||"暂无私网地址"}</span></div></div><div className="row between" style={{marginTop:18}}><span className="mono small muted">{primaryAddress(instance)}{publicBindings(instance).length>1?` +${publicBindings(instance).length-1}`:""}</span><button className="text-link" onClick={()=>setTab("network")}>查看网络详情 <ArrowUpRight size={14}/></button></div></Card><Card title="存储" action={<Badge>{instance.bootVolumes.length} 个启动卷</Badge>}><div className="row"><span className="resource-icon"><HardDrive size={19}/></span><div className="resource-label"><strong>{number(instance.bootVolumes.reduce((sum,v)=>sum+v.sizeGb,0))} GiB</strong><span>{instance.bootVolumes[0]?`${instance.bootVolumes[0].vpusPerGb} VPU / GB`:"暂无启动卷"}</span></div></div><div className="row between" style={{marginTop:18}}><span className="small muted">{instance.bootVolumes[0]?.name||"—"}</span><button className="text-link" onClick={()=>setTab("storage")}>查看存储详情 <ArrowUpRight size={14}/></button></div></Card></div><Card className="recent-task-summary"><div className="row row-wrap"><ListChecks size={17} className="muted"/><h2>近期任务</h2>{instanceJobs[0]?<><Link href={taskHref(instanceJobs[0].id)} className="grow small">{operationLabels[instanceJobs[0].kind]} · {formatDate(instanceJobs[0].createdAt)}</Link><Status value={instanceJobs[0].state}/></>:<span className="muted small grow">暂无关联任务</span>}<button className="text-link" onClick={()=>setTab("activity")}>查看全部 <ChevronRight size={14}/></button></div></Card></>}
-      {tab==="monitoring"&&<>{metricCards}<Card title="监控指标" action={<div className="row"><Select aria-label="选择监控指标" value={mode} onChange={e=>setMode(e.target.value as "cpu"|"network")}><option value="cpu">CPU 使用率</option><option value="network">网络流量</option></Select><Select aria-label="监控时间范围" value={range} onChange={e=>setRange(e.target.value)}><option value="1h">最近 1 小时</option><option value="24h">最近 24 小时</option><option value="7d">过去 7 天</option></Select><Button onClick={metrics.reload} loading={metrics.refreshing}><RefreshCw size={14}/></Button></div>}><MetricsChart data={metrics.data} loading={metrics.loading} error={metrics.error} mode={mode}/></Card></>}
-      {tab==="network"&&<NetworkPanel instance={instance}/>} {tab==="security"&&<SecurityPanel instance={instance}/>} {tab==="storage"&&<StoragePanel instance={instance}/>} {tab==="activity"&&<Card title="任务与活动" action={<Button onClick={jobs.reload} loading={jobs.refreshing}><RefreshCw size={14}/>刷新</Button>}>{jobs.error&&<ErrorState message={jobs.error} retry={jobs.reload}/>}{jobs.loading?<LoadingState/>:taskRows()}</Card>}
-    </div>{operation&&<OperationDialog {...operation} onClose={()=>setOperation(null)}/>}{renaming&&<RenameDialog instance={instance} onClose={()=>setRenaming(false)}/>}{connecting&&<ConnectionDialog instance={instance} onClose={()=>setConnecting(false)}/>}<p className="muted small" style={{marginTop:20}}>资源快照同步于 {formatDate(instance.syncedAt,true)}</p>
-  </>;
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+  const { demo } = useApp();
+  const [tab, setTab] = useState("overview");
+  const [range, setRange] = useState("1h");
+  const [mode, setMode] = useState<"cpu" | "network">("cpu");
+  const resource = useResource<{ instance: InstanceSummary; demo: boolean }>(
+    `/api/instances/${encodeURIComponent(id)}`,
+    30000,
+  );
+  const instance = resource.data?.instance;
+  const metrics = useResource<MetricsResult>(
+    instance && (tab === "overview" || tab === "monitoring")
+      ? `/api/instances/${encodeURIComponent(id)}/metrics?range=${range}`
+      : null,
+    60000,
+  );
+  const jobs = useResource<{ jobs: JobSummary[]; demo: boolean }>(
+    tab === "overview" || tab === "activity" ? "/api/jobs" : null,
+    5000,
+  );
+  const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  if (resource.loading) return <LoadingState />;
+  if (!instance)
+    return <ErrorState message={resource.error || "未找到此实例。"} retry={resource.reload} />;
+  const instanceJobs =
+    jobs.data?.jobs.filter(
+      (job) => job.resourceId === instance.id && job.accountId === instance.accountId,
+    ) || [];
+  const lifecycle = (
+    kind: "instance-start" | "instance-stop" | "instance-reboot" | "instance-terminate",
+  ) =>
+    setOperation({
+      title: operationLabels[kind],
+      description:
+        kind === "instance-terminate"
+          ? "此操作将永久终止实例，保留现有启动卷和数据卷。"
+          : kind === "instance-stop"
+            ? "实例将正常关机，正在运行的服务会中断。"
+            : kind === "instance-reboot"
+              ? "实例将重启，正在运行的服务会短暂中断。"
+              : "启动此实例及其操作系统。",
+      summary: [
+        ["实例", instance.displayName],
+        ["账号", instance.accountName],
+        ["区域", regionName(instance.region)],
+      ],
+      danger: kind === "instance-terminate",
+      requireName: kind === "instance-terminate" ? instance.displayName : undefined,
+      operation: {
+        kind,
+        accountId: instance.accountId,
+        region: instance.region,
+        resourceId: instance.id,
+        payload:
+          kind === "instance-terminate"
+            ? { preserveBootVolume: true, preserveDataVolumes: true }
+            : {},
+      },
+    });
+  const metricCards = (
+    <div className="metrics-grid">
+      <MetricCard
+        label="CPU 使用率"
+        value={percent(instance.metrics?.cpuPercent ?? metrics.data?.points.at(-1)?.cpu)}
+        note="最近一次可用采样"
+      />
+      <MetricCard
+        label="内存使用率"
+        value={percent(instance.metrics?.memoryPercent)}
+        note={
+          instance.metrics?.memoryPercent == null ? "当前未返回来宾内存指标" : "最近一次可用采样"
+        }
+      />
+      <MetricCard
+        label="网络接收"
+        value={
+          instance.metrics?.receivedMbps == null
+            ? "—"
+            : `${number(instance.metrics.receivedMbps, 1)} Mbps`
+        }
+        note="最近一次可用采样"
+      />
+      <MetricCard
+        label="网络发送"
+        value={
+          instance.metrics?.sentMbps == null ? "—" : `${number(instance.metrics.sentMbps, 1)} Mbps`
+        }
+        note="最近一次可用采样"
+      />
+    </div>
+  );
+  const taskRows = (limit?: number) =>
+    instanceJobs.length ? (
+      <div className="table-scroll">
+        <table className="task-table">
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>状态</th>
+              <th>开始时间</th>
+              <th>尝试次数</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {instanceJobs.slice(0, limit).map((job) => (
+              <tr key={job.id}>
+                <td>
+                  {operationLabels[job.kind]}
+                  <div className="task-id mono">{job.id.slice(0, 12)}</div>
+                </td>
+                <td>
+                  <Status value={job.state} />
+                </td>
+                <td>{formatDate(job.startedAt || job.createdAt)}</td>
+                <td>
+                  {job.attempt} / {job.maxAttempts}
+                </td>
+                <td>
+                  <Link href={taskHref(job.id)} className="text-link">
+                    查看任务
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <EmptyState title="暂无关联任务" description="在此实例上提交的操作会显示在这里。" />
+    );
+  return (
+    <>
+      <PageHeader
+        eyebrow={
+          <>
+            <Link href="/instances">实例</Link>
+            <ChevronRight size={12} />
+            <span>{instance.displayName}</span>
+          </>
+        }
+        title={
+          <>
+            {instance.displayName}
+            <Status value={instance.state} />
+          </>
+        }
+        description={`${regionName(instance.region)} · ${instance.region} · ${instance.accountName}`}
+      >
+        <Button onClick={resource.reload} loading={resource.refreshing} aria-label="刷新实例">
+          <RefreshCw size={15} />
+        </Button>
+        {instance.state === "STOPPED" ? (
+          <Button disabled={demo} onClick={() => lifecycle("instance-start")}>
+            <Play size={15} />
+            启动
+          </Button>
+        ) : (
+          <Button
+            disabled={demo || instance.state !== "RUNNING"}
+            onClick={() => lifecycle("instance-reboot")}
+          >
+            <RotateCw size={15} />
+            重启
+          </Button>
+        )}
+        <details className="dropdown">
+          <summary className="button">
+            更多 <ChevronDown size={14} />
+          </summary>
+          <div className="dropdown-menu">
+            <button
+              disabled={demo}
+              onClick={(e) => {
+                e.currentTarget.closest("details")?.removeAttribute("open");
+                setRenaming(true);
+              }}
+            >
+              重命名
+            </button>
+            <button
+              disabled={demo || instance.state !== "RUNNING"}
+              onClick={(e) => {
+                e.currentTarget.closest("details")?.removeAttribute("open");
+                lifecycle("instance-stop");
+              }}
+            >
+              停止实例
+            </button>
+            <button
+              className="danger-text"
+              disabled={demo || instance.state === "TERMINATED" || instance.state === "TERMINATING"}
+              onClick={(e) => {
+                e.currentTarget.closest("details")?.removeAttribute("open");
+                lifecycle("instance-terminate");
+              }}
+            >
+              终止实例
+            </button>
+          </div>
+        </details>
+        <Button
+          variant="primary"
+          disabled={primaryAddress(instance) === "—" || instance.state !== "RUNNING"}
+          onClick={() => setConnecting(true)}
+        >
+          <Terminal size={15} />
+          连接实例
+        </Button>
+      </PageHeader>
+      {resource.error && (
+        <div style={{ marginBottom: 20 }}>
+          <ErrorState message={resource.error} retry={resource.reload} />
+        </div>
+      )}
+      <div className="tabs" role="tablist" aria-label="实例详情">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            role="tab"
+            id={`tab-${item.id}`}
+            aria-selected={tab === item.id}
+            tabIndex={tab === item.id ? 0 : -1}
+            onKeyDown={(event) => {
+              const index = tabs.findIndex((t) => t.id === item.id);
+              const next =
+                event.key === "ArrowRight"
+                  ? (index + 1) % tabs.length
+                  : event.key === "ArrowLeft"
+                    ? (index + tabs.length - 1) % tabs.length
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? tabs.length - 1
+                        : -1;
+              if (next >= 0) {
+                event.preventDefault();
+                setTab(tabs[next].id);
+                document.getElementById(`tab-${tabs[next].id}`)?.focus();
+              }
+            }}
+            aria-controls={`panel-${item.id}`}
+            className={tab === item.id ? "active" : ""}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+        {tab === "overview" && (
+          <>
+            {metricCards}
+            <div className="grid-2 instance-overview-grid" style={{ marginBottom: 24 }}>
+              <Card title="基本信息">
+                <dl className="details-list">
+                  <dt>账号</dt>
+                  <dd>
+                    <Link href="/accounts" className="text-link">
+                      {instance.accountName}
+                    </Link>
+                  </dd>
+                  <dt>区域 / 可用域</dt>
+                  <dd>
+                    {instance.region} / {instance.availabilityDomain.split(":").at(-1)}
+                  </dd>
+                  <dt>规格</dt>
+                  <dd>
+                    {instance.shape}
+                    <span className="muted small">
+                      {number(instance.ocpus, 1)} OCPU / {number(instance.memoryGb, 1)} GB
+                    </span>
+                  </dd>
+                  <dt>操作系统</dt>
+                  <dd>{instance.os || "未提供"}</dd>
+                  <dt>实例 OCID</dt>
+                  <dd>
+                    <span className="mono" title={instance.id}>
+                      {shortId(instance.id)}
+                    </span>
+                    <CopyButton value={instance.id} />
+                  </dd>
+                  <dt>区间</dt>
+                  <dd>
+                    <span className="mono" title={instance.compartmentId}>
+                      {shortId(instance.compartmentId)}
+                    </span>
+                    <CopyButton value={instance.compartmentId} />
+                  </dd>
+                  <dt>标签</dt>
+                  <dd>
+                    {Object.keys(instance.tags).length ? (
+                      Object.entries(instance.tags)
+                        .slice(0, 8)
+                        .map(([key, value]) => (
+                          <Badge key={key} tone="info">
+                            {key}: {value}
+                          </Badge>
+                        ))
+                    ) : (
+                      <span className="muted">暂无标签</span>
+                    )}
+                  </dd>
+                </dl>
+                <p className="muted small" style={{ marginTop: 20 }}>
+                  创建于 {formatDate(instance.createdAt, true)}
+                </p>
+              </Card>
+              <Card
+                title="性能趋势"
+                action={
+                  <Select
+                    aria-label="监控时间范围"
+                    value={range}
+                    onChange={(e) => setRange(e.target.value)}
+                  >
+                    <option value="1h">最近 1 小时</option>
+                    <option value="24h">最近 24 小时</option>
+                    <option value="7d">过去 7 天</option>
+                  </Select>
+                }
+              >
+                <MetricsChart data={metrics.data} loading={metrics.loading} error={metrics.error} />
+              </Card>
+              <Card
+                title="网络"
+                action={<Badge>{publicBindings(instance).length} 个公网地址</Badge>}
+              >
+                <div className="row">
+                  <span className="resource-icon">
+                    <Network size={19} />
+                  </span>
+                  <div className="resource-label">
+                    <strong>{instance.vnics.length} 个虚拟网卡</strong>
+                    <span>{instance.vnics[0]?.privateIps[0]?.privateIp || "暂无私网地址"}</span>
+                  </div>
+                </div>
+                <div className="row between" style={{ marginTop: 18 }}>
+                  <span className="mono small muted">
+                    {primaryAddress(instance)}
+                    {publicBindings(instance).length > 1
+                      ? ` +${publicBindings(instance).length - 1}`
+                      : ""}
+                  </span>
+                  <button className="text-link" onClick={() => setTab("network")}>
+                    查看网络详情 <ArrowUpRight size={14} />
+                  </button>
+                </div>
+              </Card>
+              <Card title="存储" action={<Badge>{instance.bootVolumes.length} 个启动卷</Badge>}>
+                <div className="row">
+                  <span className="resource-icon">
+                    <HardDrive size={19} />
+                  </span>
+                  <div className="resource-label">
+                    <strong>
+                      {number(instance.bootVolumes.reduce((sum, v) => sum + v.sizeGb, 0))} GiB
+                    </strong>
+                    <span>
+                      {instance.bootVolumes[0]
+                        ? `${instance.bootVolumes[0].vpusPerGb} VPU / GB`
+                        : "暂无启动卷"}
+                    </span>
+                  </div>
+                </div>
+                <div className="row between" style={{ marginTop: 18 }}>
+                  <span className="small muted">{instance.bootVolumes[0]?.name || "—"}</span>
+                  <button className="text-link" onClick={() => setTab("storage")}>
+                    查看存储详情 <ArrowUpRight size={14} />
+                  </button>
+                </div>
+              </Card>
+            </div>
+            <Card className="recent-task-summary">
+              <div className="row row-wrap">
+                <ListChecks size={17} className="muted" />
+                <h2>近期任务</h2>
+                {instanceJobs[0] ? (
+                  <>
+                    <Link href={taskHref(instanceJobs[0].id)} className="grow small">
+                      {operationLabels[instanceJobs[0].kind]} ·{" "}
+                      {formatDate(instanceJobs[0].createdAt)}
+                    </Link>
+                    <Status value={instanceJobs[0].state} />
+                  </>
+                ) : (
+                  <span className="muted small grow">暂无关联任务</span>
+                )}
+                <button className="text-link" onClick={() => setTab("activity")}>
+                  查看全部 <ChevronRight size={14} />
+                </button>
+              </div>
+            </Card>
+          </>
+        )}
+        {tab === "monitoring" && (
+          <>
+            {metricCards}
+            <Card
+              title="监控指标"
+              action={
+                <div className="row">
+                  <Select
+                    aria-label="选择监控指标"
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value as "cpu" | "network")}
+                  >
+                    <option value="cpu">CPU 使用率</option>
+                    <option value="network">网络流量</option>
+                  </Select>
+                  <Select
+                    aria-label="监控时间范围"
+                    value={range}
+                    onChange={(e) => setRange(e.target.value)}
+                  >
+                    <option value="1h">最近 1 小时</option>
+                    <option value="24h">最近 24 小时</option>
+                    <option value="7d">过去 7 天</option>
+                  </Select>
+                  <Button onClick={metrics.reload} loading={metrics.refreshing}>
+                    <RefreshCw size={14} />
+                  </Button>
+                </div>
+              }
+            >
+              <MetricsChart
+                data={metrics.data}
+                loading={metrics.loading}
+                error={metrics.error}
+                mode={mode}
+              />
+            </Card>
+          </>
+        )}
+        {tab === "network" && <NetworkPanel instance={instance} />}{" "}
+        {tab === "security" && <SecurityPanel instance={instance} />}{" "}
+        {tab === "storage" && <StoragePanel instance={instance} />}{" "}
+        {tab === "activity" && (
+          <Card
+            title="任务与活动"
+            action={
+              <Button onClick={jobs.reload} loading={jobs.refreshing}>
+                <RefreshCw size={14} />
+                刷新
+              </Button>
+            }
+          >
+            {jobs.error && <ErrorState message={jobs.error} retry={jobs.reload} />}
+            {jobs.loading ? <LoadingState /> : taskRows()}
+          </Card>
+        )}
+      </div>
+      {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
+      {renaming && <RenameDialog instance={instance} onClose={() => setRenaming(false)} />}
+      {connecting && <ConnectionDialog instance={instance} onClose={() => setConnecting(false)} />}
+      <p className="muted small" style={{ marginTop: 20 }}>
+        资源快照同步于 {formatDate(instance.syncedAt, true)}
+      </p>
+    </>
+  );
 }

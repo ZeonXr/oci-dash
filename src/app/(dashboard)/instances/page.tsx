@@ -1,33 +1,443 @@
 "use client";
-import { Suspense,useEffect,useMemo,useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowDownUp,Plus,RefreshCw,Search,Server } from "lucide-react";
-import type { InstanceSummary,JobSummary } from "@/lib/contracts";
-import { errorMessage,send,useAction,useResource } from "@/components/api";
+import { ArrowDownUp, Plus, RefreshCw, Search, Server } from "lucide-react";
+import type { InstanceSummary, JobSummary } from "@/lib/contracts";
+import { errorMessage, send, useAction, useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
-import { Alert,Button,CopyButton,EmptyState,ErrorState,LoadingState,Modal,PageHeader,Pagination,Select,Status } from "@/components/ui";
-import { formatDate,instanceHref,number,percent,primaryAddress,regionName } from "@/components/format";
+import {
+  Alert,
+  Button,
+  CopyButton,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  Modal,
+  PageHeader,
+  Pagination,
+  Select,
+  Status,
+} from "@/components/ui";
+import {
+  formatDate,
+  instanceHref,
+  number,
+  percent,
+  primaryAddress,
+  regionName,
+} from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 
 function InstancesContent() {
-  const {demo,accounts,notify}=useApp();const params=useSearchParams();const resource=useResource<{instances:InstanceSummary[];demo:boolean}>("/api/instances",30000);
-  const [query,setQuery]=useState(params.get("q")||"");const [region,setRegion]=useState(params.get("region")||"");const [account,setAccount]=useState("");const [state,setState]=useState("");
-  const [page,setPage]=useState(1);const [pageSize,setPageSize]=useState(10);const [sort,setSort]=useState<"name"|"created">("name");const [selected,setSelected]=useState<string[]>([]);
-  const [creating,setCreating]=useState(false);const [bulk,setBulk]=useState<"instance-start"|"instance-stop"|null>(null);const action=useAction();const [bulkErrors,setBulkErrors]=useState<string[]>([]);
-  useEffect(()=>{setQuery(params.get("q")||"");setRegion(params.get("region")||"")},[params]);
-  const instances=resource.data?.instances||[];
-  const filtered=useMemo(()=>instances.filter(i=>(!account||i.accountId===account)&&(!region||i.region===region)&&(!state||i.state===state)&&[i.displayName,i.id,i.accountName,...i.vnics.flatMap(v=>v.privateIps.flatMap(b=>[b.privateIp,b.publicIp||""]))].join(" ").toLowerCase().includes(query.toLowerCase())).sort((a,b)=>sort==="name"?a.displayName.localeCompare(b.displayName):b.createdAt.localeCompare(a.createdAt)),[instances,query,account,region,state,sort]);
-  useEffect(()=>{setPage(1);setSelected([])},[query,account,region,state,pageSize]);
-  const safePage=Math.min(page,Math.max(1,Math.ceil(filtered.length/pageSize)));const visible=filtered.slice((safePage-1)*pageSize,safePage*pageSize);
-  const selectedInstances=instances.filter(i=>selected.includes(i.id));const candidates=selectedInstances.filter(i=>bulk==="instance-start"?i.state==="STOPPED":i.state==="RUNNING");
-  const select=(id:string)=>setSelected(current=>current.includes(id)?current.filter(v=>v!==id):[...current,id]);
-  const executeBulk=async()=>{if(demo||!bulk)return;setBulkErrors([]);await action.run(async()=>{const results=await Promise.allSettled(candidates.map(i=>send<{job:JobSummary}>("/api/operations",{kind:bulk,accountId:i.accountId,region:i.region,resourceId:i.id,payload:{},idempotencyKey:crypto.randomUUID()})));const errors=results.flatMap((r,index)=>r.status==="rejected"?[`${candidates[index].displayName}：${errorMessage(r.reason)}`]:[]);const success=results.length-errors.length;if(success)notify(`已提交 ${success} 个实例操作。`,"/tasks");setBulkErrors(errors);if(!errors.length){setBulk(null);setSelected([])}else setSelected(candidates.filter((_,i)=>results[i].status==="rejected").map(i=>i.id));return true})};
-  return <><PageHeader title="实例" description="跨账号查看与管理计算资源。"><Button onClick={resource.reload} loading={resource.refreshing}><RefreshCw size={15}/>刷新</Button><Button variant="primary" disabled={demo||!accounts.length} title={demo?"演示模式仅供查看":!accounts.length?"请先添加 OCI 账号":undefined} onClick={()=>setCreating(true)}><Plus size={16}/>创建实例</Button></PageHeader>
-    {resource.error&&<div style={{marginBottom:18}}><ErrorState message={resource.error} retry={resource.reload}/></div>}
-    <div className="instance-state-bar"><div className="state-pills"><button className={!state?"selected":""} onClick={()=>setState("")}>全部实例 <span>{resource.loading?"—":instances.length}</span></button><button className={state==="RUNNING"?"selected":""} onClick={()=>setState("RUNNING")}>运行中 <span>{resource.loading?"—":instances.filter(i=>i.state==="RUNNING").length}</span></button><button className={state==="STOPPED"?"selected":""} onClick={()=>setState("STOPPED")}>已停止 <span>{resource.loading?"—":instances.filter(i=>i.state==="STOPPED").length}</span></button></div><span className="muted small">最近同步 {formatDate(instances.map(i=>i.syncedAt).sort().at(-1))}</span></div><div className="filters"><div className="search-field"><Search size={16}/><input aria-label="搜索实例名称、地址或 OCID" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索名称、IP 或 OCID"/></div><Select aria-label="筛选账号" value={account} onChange={e=>setAccount(e.target.value)}><option value="">全部账号</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select><Select aria-label="筛选区域" value={region} onChange={e=>setRegion(e.target.value)}><option value="">全部区域</option>{Array.from(new Set(instances.map(i=>i.region))).sort().map(r=><option key={r} value={r}>{regionName(r)}</option>)}</Select><Select aria-label="筛选状态" value={state} onChange={e=>setState(e.target.value)}><option value="">全部状态</option><option value="RUNNING">运行中</option><option value="STOPPED">已停止</option><option value="PROVISIONING">创建中</option><option value="STARTING">启动中</option><option value="STOPPING">停止中</option></Select>{(query||account||region||state)&&<Button variant="ghost" onClick={()=>{setQuery("");setAccount("");setRegion("");setState("")}}>重置筛选</Button>}</div>
-    <section className="card table-card"><div className="table-toolbar" hidden={!selected.length}>{selected.length?<div className="row row-wrap"><strong>已选择 {selected.length} 项</strong><Button className="button-sm" disabled={demo||!selectedInstances.some(i=>i.state==="STOPPED")} onClick={()=>{setBulk("instance-start");setBulkErrors([])}}>启动</Button><Button className="button-sm" disabled={demo||!selectedInstances.some(i=>i.state==="RUNNING")} onClick={()=>{setBulk("instance-stop");setBulkErrors([])}}>停止</Button><Button variant="ghost" className="button-sm" onClick={()=>setSelected([])}>取消选择</Button></div>:<strong>{filtered.length} 个实例</strong>}<span className="muted small">点击名称查看资源详情</span></div>
-      {resource.loading?<LoadingState/>:filtered.length?<><div className="table-scroll"><table className="resource-table"><thead><tr><th><input type="checkbox" aria-label="选择当前页全部实例" checked={visible.length>0&&visible.every(i=>selected.includes(i.id))} onChange={e=>setSelected(current=>e.target.checked?Array.from(new Set([...current,...visible.map(i=>i.id)])):current.filter(id=>!visible.some(i=>i.id===id)))}/></th><th><button onClick={()=>setSort(sort==="name"?"created":"name")}>实例名称 <ArrowDownUp size={12}/></button></th><th>账号 / 区域</th><th>状态</th><th>规格</th><th>CPU / 内存</th><th>主要地址</th><th>操作</th></tr></thead><tbody>{visible.map(i=><tr key={i.id}><td><input type="checkbox" aria-label={`选择 ${i.displayName}`} checked={selected.includes(i.id)} onChange={()=>select(i.id)}/></td><td><div className="table-identity"><span className="table-resource-icon"><Server size={17}/></span><div><Link href={instanceHref(i.id)} className="name-link">{i.displayName}</Link><span className="cell-secondary">{formatDate(i.createdAt)} 创建</span></div></div></td><td>{i.accountName}<span className="cell-secondary">{regionName(i.region)}</span></td><td><Status value={i.state}/></td><td>{i.shape.replace("VM.Standard.","")}<span className="cell-secondary">{number(i.ocpus,1)} OCPU / {number(i.memoryGb,1)} GB</span></td><td className="tabular">{i.state==="STOPPED"?"— / —":`${percent(i.metrics?.cpuPercent)} / ${percent(i.metrics?.memoryPercent)}`}</td><td><div className="table-address mono">{primaryAddress(i)}{primaryAddress(i)!=="—"&&<CopyButton value={primaryAddress(i)} label={`复制 ${i.displayName} 地址`}/>}</div></td><td><Link href={instanceHref(i.id)} className="text-link">详情</Link></td></tr>)}</tbody></table></div><Pagination page={safePage} pageSize={pageSize} total={filtered.length} onPage={setPage} onPageSize={setPageSize}/></>:<EmptyState title={instances.length?"没有匹配的实例":"还没有实例资源"} description={instances.length?"尝试调整搜索条件或清除筛选。":"先添加账号并同步资源，也可以创建一个新实例。"} action={<Link href="/accounts" className="button">管理账号</Link>}/>}
-    </section>{creating&&<CreateInstanceDialog onClose={()=>setCreating(false)}/>}{bulk&&<Modal open title={bulk==="instance-start"?"启动所选实例":"停止所选实例"} description={`将为 ${candidates.length} 个符合当前状态的实例创建独立任务。`} onClose={()=>setBulk(null)} busy={action.pending} footer={<><Button onClick={()=>setBulk(null)} disabled={action.pending}>取消</Button><Button variant="primary" loading={action.pending} disabled={demo||!candidates.length} onClick={executeBulk}>确认提交</Button></>}><div className="stack-sm"><div className="confirm-summary">{candidates.map(i=><div key={i.id}><span>{i.accountName}</span><strong>{i.displayName}</strong></div>)}</div>{bulk==="instance-stop"&&<Alert>停止会中断实例上正在运行的服务。</Alert>}{bulkErrors.map(error=><ErrorState key={error} message={error}/>)}{action.error&&<ErrorState message={action.error}/>}</div></Modal>}</>;
+  const { demo, accounts, notify } = useApp();
+  const params = useSearchParams();
+  const resource = useResource<{ instances: InstanceSummary[]; demo: boolean }>(
+    "/api/instances",
+    30000,
+  );
+  const [query, setQuery] = useState(params.get("q") || "");
+  const [region, setRegion] = useState(params.get("region") || "");
+  const [account, setAccount] = useState("");
+  const [state, setState] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [sort, setSort] = useState<"name" | "created">("name");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [bulk, setBulk] = useState<"instance-start" | "instance-stop" | null>(null);
+  const action = useAction();
+  const [bulkErrors, setBulkErrors] = useState<string[]>([]);
+  useEffect(() => {
+    setQuery(params.get("q") || "");
+    setRegion(params.get("region") || "");
+  }, [params]);
+  const instances = resource.data?.instances || [];
+  const filtered = useMemo(
+    () =>
+      instances
+        .filter(
+          (i) =>
+            (!account || i.accountId === account) &&
+            (!region || i.region === region) &&
+            (!state || i.state === state) &&
+            [
+              i.displayName,
+              i.id,
+              i.accountName,
+              ...i.vnics.flatMap((v) =>
+                v.privateIps.flatMap((b) => [b.privateIp, b.publicIp || ""]),
+              ),
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(query.toLowerCase()),
+        )
+        .sort((a, b) =>
+          sort === "name"
+            ? a.displayName.localeCompare(b.displayName)
+            : b.createdAt.localeCompare(a.createdAt),
+        ),
+    [instances, query, account, region, state, sort],
+  );
+  useEffect(() => {
+    setPage(1);
+    setSelected([]);
+  }, [query, account, region, state, pageSize]);
+  const safePage = Math.min(page, Math.max(1, Math.ceil(filtered.length / pageSize)));
+  const visible = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const selectedInstances = instances.filter((i) => selected.includes(i.id));
+  const candidates = selectedInstances.filter((i) =>
+    bulk === "instance-start" ? i.state === "STOPPED" : i.state === "RUNNING",
+  );
+  const select = (id: string) =>
+    setSelected((current) =>
+      current.includes(id) ? current.filter((v) => v !== id) : [...current, id],
+    );
+  const executeBulk = async () => {
+    if (demo || !bulk) return;
+    setBulkErrors([]);
+    await action.run(async () => {
+      const results = await Promise.allSettled(
+        candidates.map((i) =>
+          send<{ job: JobSummary }>("/api/operations", {
+            kind: bulk,
+            accountId: i.accountId,
+            region: i.region,
+            resourceId: i.id,
+            payload: {},
+            idempotencyKey: crypto.randomUUID(),
+          }),
+        ),
+      );
+      const errors = results.flatMap((r, index) =>
+        r.status === "rejected"
+          ? [`${candidates[index].displayName}：${errorMessage(r.reason)}`]
+          : [],
+      );
+      const success = results.length - errors.length;
+      if (success) notify(`已提交 ${success} 个实例操作。`, "/tasks");
+      setBulkErrors(errors);
+      if (!errors.length) {
+        setBulk(null);
+        setSelected([]);
+      } else
+        setSelected(candidates.filter((_, i) => results[i].status === "rejected").map((i) => i.id));
+      return true;
+    });
+  };
+  return (
+    <>
+      <PageHeader title="实例" description="跨账号查看与管理计算资源。">
+        <Button onClick={resource.reload} loading={resource.refreshing}>
+          <RefreshCw size={15} />
+          刷新
+        </Button>
+        <Button
+          variant="primary"
+          disabled={demo || !accounts.length}
+          title={demo ? "演示模式仅供查看" : !accounts.length ? "请先添加 OCI 账号" : undefined}
+          onClick={() => setCreating(true)}
+        >
+          <Plus size={16} />
+          创建实例
+        </Button>
+      </PageHeader>
+      {resource.error && (
+        <div style={{ marginBottom: 18 }}>
+          <ErrorState message={resource.error} retry={resource.reload} />
+        </div>
+      )}
+      <div className="instance-state-bar">
+        <div className="state-pills">
+          <button className={!state ? "selected" : ""} onClick={() => setState("")}>
+            全部实例 <span>{resource.loading ? "—" : instances.length}</span>
+          </button>
+          <button
+            className={state === "RUNNING" ? "selected" : ""}
+            onClick={() => setState("RUNNING")}
+          >
+            运行中{" "}
+            <span>
+              {resource.loading ? "—" : instances.filter((i) => i.state === "RUNNING").length}
+            </span>
+          </button>
+          <button
+            className={state === "STOPPED" ? "selected" : ""}
+            onClick={() => setState("STOPPED")}
+          >
+            已停止{" "}
+            <span>
+              {resource.loading ? "—" : instances.filter((i) => i.state === "STOPPED").length}
+            </span>
+          </button>
+        </div>
+        <span className="muted small">
+          最近同步{" "}
+          {formatDate(
+            instances
+              .map((i) => i.syncedAt)
+              .sort()
+              .at(-1),
+          )}
+        </span>
+      </div>
+      <div className="filters">
+        <div className="search-field">
+          <Search size={16} />
+          <input
+            aria-label="搜索实例名称、地址或 OCID"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索名称、IP 或 OCID"
+          />
+        </div>
+        <Select aria-label="筛选账号" value={account} onChange={(e) => setAccount(e.target.value)}>
+          <option value="">全部账号</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </Select>
+        <Select aria-label="筛选区域" value={region} onChange={(e) => setRegion(e.target.value)}>
+          <option value="">全部区域</option>
+          {Array.from(new Set(instances.map((i) => i.region)))
+            .sort()
+            .map((r) => (
+              <option key={r} value={r}>
+                {regionName(r)}
+              </option>
+            ))}
+        </Select>
+        <Select aria-label="筛选状态" value={state} onChange={(e) => setState(e.target.value)}>
+          <option value="">全部状态</option>
+          <option value="RUNNING">运行中</option>
+          <option value="STOPPED">已停止</option>
+          <option value="PROVISIONING">创建中</option>
+          <option value="STARTING">启动中</option>
+          <option value="STOPPING">停止中</option>
+        </Select>
+        {(query || account || region || state) && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setQuery("");
+              setAccount("");
+              setRegion("");
+              setState("");
+            }}
+          >
+            重置筛选
+          </Button>
+        )}
+      </div>
+      <section className="card table-card">
+        <div className="table-toolbar" hidden={!selected.length}>
+          {selected.length ? (
+            <div className="row row-wrap">
+              <strong>已选择 {selected.length} 项</strong>
+              <Button
+                className="button-sm"
+                disabled={demo || !selectedInstances.some((i) => i.state === "STOPPED")}
+                onClick={() => {
+                  setBulk("instance-start");
+                  setBulkErrors([]);
+                }}
+              >
+                启动
+              </Button>
+              <Button
+                className="button-sm"
+                disabled={demo || !selectedInstances.some((i) => i.state === "RUNNING")}
+                onClick={() => {
+                  setBulk("instance-stop");
+                  setBulkErrors([]);
+                }}
+              >
+                停止
+              </Button>
+              <Button variant="ghost" className="button-sm" onClick={() => setSelected([])}>
+                取消选择
+              </Button>
+            </div>
+          ) : (
+            <strong>{filtered.length} 个实例</strong>
+          )}
+          <span className="muted small">点击名称查看资源详情</span>
+        </div>
+        {resource.loading ? (
+          <LoadingState />
+        ) : filtered.length ? (
+          <>
+            <div className="table-scroll">
+              <table className="resource-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        type="checkbox"
+                        aria-label="选择当前页全部实例"
+                        checked={
+                          visible.length > 0 && visible.every((i) => selected.includes(i.id))
+                        }
+                        onChange={(e) =>
+                          setSelected((current) =>
+                            e.target.checked
+                              ? Array.from(new Set([...current, ...visible.map((i) => i.id)]))
+                              : current.filter((id) => !visible.some((i) => i.id === id)),
+                          )
+                        }
+                      />
+                    </th>
+                    <th>
+                      <button onClick={() => setSort(sort === "name" ? "created" : "name")}>
+                        实例名称 <ArrowDownUp size={12} />
+                      </button>
+                    </th>
+                    <th>账号 / 区域</th>
+                    <th>状态</th>
+                    <th>规格</th>
+                    <th>CPU / 内存</th>
+                    <th>主要地址</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((i) => (
+                    <tr key={i.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${i.displayName}`}
+                          checked={selected.includes(i.id)}
+                          onChange={() => select(i.id)}
+                        />
+                      </td>
+                      <td>
+                        <div className="table-identity">
+                          <span className="table-resource-icon">
+                            <Server size={17} />
+                          </span>
+                          <div>
+                            <Link href={instanceHref(i.id)} className="name-link">
+                              {i.displayName}
+                            </Link>
+                            <span className="cell-secondary">{formatDate(i.createdAt)} 创建</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {i.accountName}
+                        <span className="cell-secondary">{regionName(i.region)}</span>
+                      </td>
+                      <td>
+                        <Status value={i.state} />
+                      </td>
+                      <td>
+                        {i.shape.replace("VM.Standard.", "")}
+                        <span className="cell-secondary">
+                          {number(i.ocpus, 1)} OCPU / {number(i.memoryGb, 1)} GB
+                        </span>
+                      </td>
+                      <td className="tabular">
+                        {i.state === "STOPPED"
+                          ? "— / —"
+                          : `${percent(i.metrics?.cpuPercent)} / ${percent(i.metrics?.memoryPercent)}`}
+                      </td>
+                      <td>
+                        <div className="table-address mono">
+                          {primaryAddress(i)}
+                          {primaryAddress(i) !== "—" && (
+                            <CopyButton
+                              value={primaryAddress(i)}
+                              label={`复制 ${i.displayName} 地址`}
+                            />
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <Link href={instanceHref(i.id)} className="text-link">
+                          详情
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              page={safePage}
+              pageSize={pageSize}
+              total={filtered.length}
+              onPage={setPage}
+              onPageSize={setPageSize}
+            />
+          </>
+        ) : (
+          <EmptyState
+            title={instances.length ? "没有匹配的实例" : "还没有实例资源"}
+            description={
+              instances.length
+                ? "尝试调整搜索条件或清除筛选。"
+                : "先添加账号并同步资源，也可以创建一个新实例。"
+            }
+            action={
+              <Link href="/accounts" className="button">
+                管理账号
+              </Link>
+            }
+          />
+        )}
+      </section>
+      {creating && <CreateInstanceDialog onClose={() => setCreating(false)} />}
+      {bulk && (
+        <Modal
+          open
+          title={bulk === "instance-start" ? "启动所选实例" : "停止所选实例"}
+          description={`将为 ${candidates.length} 个符合当前状态的实例创建独立任务。`}
+          onClose={() => setBulk(null)}
+          busy={action.pending}
+          footer={
+            <>
+              <Button onClick={() => setBulk(null)} disabled={action.pending}>
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                loading={action.pending}
+                disabled={demo || !candidates.length}
+                onClick={executeBulk}
+              >
+                确认提交
+              </Button>
+            </>
+          }
+        >
+          <div className="stack-sm">
+            <div className="confirm-summary">
+              {candidates.map((i) => (
+                <div key={i.id}>
+                  <span>{i.accountName}</span>
+                  <strong>{i.displayName}</strong>
+                </div>
+              ))}
+            </div>
+            {bulk === "instance-stop" && <Alert>停止会中断实例上正在运行的服务。</Alert>}
+            {bulkErrors.map((error) => (
+              <ErrorState key={error} message={error} />
+            ))}
+            {action.error && <ErrorState message={action.error} />}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
 }
-export default function InstancesPage() { return <Suspense fallback={<LoadingState/>}><InstancesContent/></Suspense>; }
+export default function InstancesPage() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <InstancesContent />
+    </Suspense>
+  );
+}

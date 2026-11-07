@@ -1,0 +1,25 @@
+# Dependencies, build outputs and local runtime files.
+node_modules/
+.next/
+dist/
+out/
+data/
+.tools/
+.test-tmp/
+coverage/
+test-results/
+playwright-report/
+playwright/.auth/
+.oci/
+.env*
+*.pem
+*.key
+*.db*
+*.sqlite*
+*.log
+*.tsbuildinfo
+
+# Generated or framework-managed files.
+package-lock.json
+next-env.d.ts
+AGENTS.md

@@ -1,24 +1,249 @@
 "use client";
-import { useEffect,useState } from "react";
-import { useParams,useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { AlertCircle,CheckCircle2,ChevronRight,Clock3,Info,RefreshCw,RotateCcw,Square } from "lucide-react";
-import type { JobEvent,JobSummary } from "@/lib/contracts";
-import { send,useAction,useResource } from "@/components/api";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Info,
+  RefreshCw,
+  RotateCcw,
+  Square,
+} from "lucide-react";
+import type { JobEvent, JobSummary } from "@/lib/contracts";
+import { send, useAction, useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
-import { Alert,Button,Card,CopyButton,EmptyState,ErrorState,LoadingState,Modal,PageHeader,Status } from "@/components/ui";
-import { activeJobStates,formatDate,instanceHref,operationLabels,regionName,shortId,taskHref } from "@/components/format";
+import {
+  Alert,
+  Button,
+  Card,
+  CopyButton,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  Modal,
+  PageHeader,
+  Status,
+} from "@/components/ui";
+import {
+  activeJobStates,
+  formatDate,
+  instanceHref,
+  operationLabels,
+  regionName,
+  shortId,
+  taskHref,
+} from "@/components/format";
 export default function TaskDetailPage() {
-  const {id}=useParams<{id:string}>();const router=useRouter();const {demo,notify}=useApp();const [poll,setPoll]=useState(3000);const resource=useResource<{job:JobSummary;events:JobEvent[]}>(`/api/jobs/${encodeURIComponent(id)}`,poll);const [confirm,setConfirm]=useState<"cancel"|"retry"|null>(null);const action=useAction();const job=resource.data?.job;
-  useEffect(()=>setPoll(3000),[id]);useEffect(()=>{if(job&&!activeJobStates.has(job.state))setPoll(0)},[job]);
-  const execute=async()=>{if(demo||!confirm)return;const response=await action.run(()=>send<{job?:JobSummary}>(`/api/jobs/${encodeURIComponent(id)}/${confirm}`));if(response){notify(confirm==="cancel"?"取消请求已提交。":"重试任务已提交。");setConfirm(null);setPoll(3000);if(response.job?.id&&response.job.id!==id)router.push(taskHref(response.job.id));else resource.reload()}};
-  if(resource.loading)return <LoadingState/>;
-  if(!job)return <ErrorState message={resource.error||"未找到任务。"} retry={resource.reload}/>;
-  const stages=["已排队","执行中","已结束"];const stage=job.state==="queued"?0:activeJobStates.has(job.state)?1:2;
-  return <><PageHeader eyebrow={<><Link href="/tasks">任务</Link><ChevronRight size={12}/><span>{job.id.slice(0,12)}</span></>} title={<>{operationLabels[job.kind]}<Status value={job.state}/></>} description={`${job.accountName} · ${regionName(job.region)} · ${formatDate(job.createdAt,true)}`}><Button onClick={resource.reload} loading={resource.refreshing}><RefreshCw size={15}/>刷新</Button>{["failed","interrupted","cancelled"].includes(job.state)&&<Button disabled={demo} onClick={()=>{action.clearError();setConfirm("retry")}}><RotateCcw size={15}/>重试</Button>}{["queued","running","retrying"].includes(job.state)&&<Button disabled={demo} onClick={()=>{action.clearError();setConfirm("cancel")}}><Square size={13}/>取消任务</Button>}</PageHeader>
-    <div className="stack">{resource.error&&<ErrorState message={resource.error} retry={resource.reload}/>}{job.lastError&&<Alert tone="error">{job.lastError}</Alert>}<Card><div className="task-progress">{stages.map((label,index)=><div className={`task-step ${index<stage?"done":index===stage?"current":""}`} key={label}>{index<stage?<CheckCircle2 size={18}/>:<Clock3 size={18}/>}<span>{label}</span>{index<2&&<ChevronRight size={15}/>}</div>)}</div><dl className="details-list"><dt>任务 ID</dt><dd className="mono">{job.id}<CopyButton value={job.id}/></dd><dt>关联资源</dt><dd>{job.resourceId?<Link href={instanceHref(job.resourceId)} className="text-link mono">{shortId(job.resourceId)}</Link>:"账号级操作"}</dd><dt>执行次数</dt><dd>{job.attempt} / {job.maxAttempts}</dd><dt>开始时间</dt><dd>{formatDate(job.startedAt,true)}</dd><dt>结束时间</dt><dd>{formatDate(job.finishedAt,true)}</dd>{job.nextRunAt&&<><dt>下次执行</dt><dd>{formatDate(job.nextRunAt,true)}</dd></>}</dl></Card>
-    {job.result&&<Card title="执行结果"><pre className="task-result">{JSON.stringify(job.result,null,2)}</pre></Card>}
-    <Card title="执行日志" description={activeJobStates.has(job.state)?"任务执行期间自动更新":"已保存的完整执行记录"}>{resource.data?.events.length?<div className="timeline">{resource.data.events.map(event=><div className="timeline-item" key={event.id}><div className={`timeline-marker ${event.level==="error"?"danger-text":""}`}>{event.level==="error"?<AlertCircle size={17}/>:event.level==="warning"?<AlertCircle size={17}/>:<Info size={17}/>}</div><div><div className="timeline-message"><p>{event.message}</p><time>{formatDate(event.createdAt,true)}</time></div>{event.detail&&<details className="event-detail"><summary>查看事件详情</summary><pre>{JSON.stringify(event.detail,null,2)}</pre></details>}</div></div>)}</div>:<EmptyState title="等待第一条执行记录" description="任务开始后，执行阶段与结果会显示在这里。"/>}</Card></div>
-    {confirm&&<Modal open title={confirm==="cancel"?"取消任务":"重试任务"} description={confirm==="cancel"?"发送取消请求。已经完成的云端步骤不会自动撤销。":"重新提交此任务；执行器会核对资源状态与已保存的执行记录。"} busy={action.pending} onClose={()=>setConfirm(null)} footer={<><Button onClick={()=>setConfirm(null)} disabled={action.pending}>返回</Button><Button variant="primary" disabled={demo} loading={action.pending} onClick={execute}>确认{confirm==="cancel"?"取消":"重试"}</Button></>}><div className="stack-sm"><p>{operationLabels[job.kind]} · {job.accountName}</p>{action.error&&<ErrorState message={action.error}/>}</div></Modal>}
-  </>;
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const { demo, notify } = useApp();
+  const [poll, setPoll] = useState(3000);
+  const resource = useResource<{ job: JobSummary; events: JobEvent[] }>(
+    `/api/jobs/${encodeURIComponent(id)}`,
+    poll,
+  );
+  const [confirm, setConfirm] = useState<"cancel" | "retry" | null>(null);
+  const action = useAction();
+  const job = resource.data?.job;
+  useEffect(() => setPoll(3000), [id]);
+  useEffect(() => {
+    if (job && !activeJobStates.has(job.state)) setPoll(0);
+  }, [job]);
+  const execute = async () => {
+    if (demo || !confirm) return;
+    const response = await action.run(() =>
+      send<{ job?: JobSummary }>(`/api/jobs/${encodeURIComponent(id)}/${confirm}`),
+    );
+    if (response) {
+      notify(confirm === "cancel" ? "取消请求已提交。" : "重试任务已提交。");
+      setConfirm(null);
+      setPoll(3000);
+      if (response.job?.id && response.job.id !== id) router.push(taskHref(response.job.id));
+      else resource.reload();
+    }
+  };
+  if (resource.loading) return <LoadingState />;
+  if (!job)
+    return <ErrorState message={resource.error || "未找到任务。"} retry={resource.reload} />;
+  const stages = ["已排队", "执行中", "已结束"];
+  const stage = job.state === "queued" ? 0 : activeJobStates.has(job.state) ? 1 : 2;
+  return (
+    <>
+      <PageHeader
+        eyebrow={
+          <>
+            <Link href="/tasks">任务</Link>
+            <ChevronRight size={12} />
+            <span>{job.id.slice(0, 12)}</span>
+          </>
+        }
+        title={
+          <>
+            {operationLabels[job.kind]}
+            <Status value={job.state} />
+          </>
+        }
+        description={`${job.accountName} · ${regionName(job.region)} · ${formatDate(job.createdAt, true)}`}
+      >
+        <Button onClick={resource.reload} loading={resource.refreshing}>
+          <RefreshCw size={15} />
+          刷新
+        </Button>
+        {["failed", "interrupted", "cancelled"].includes(job.state) && (
+          <Button
+            disabled={demo}
+            onClick={() => {
+              action.clearError();
+              setConfirm("retry");
+            }}
+          >
+            <RotateCcw size={15} />
+            重试
+          </Button>
+        )}
+        {["queued", "running", "retrying"].includes(job.state) && (
+          <Button
+            disabled={demo}
+            onClick={() => {
+              action.clearError();
+              setConfirm("cancel");
+            }}
+          >
+            <Square size={13} />
+            取消任务
+          </Button>
+        )}
+      </PageHeader>
+      <div className="stack">
+        {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
+        {job.lastError && <Alert tone="error">{job.lastError}</Alert>}
+        <Card>
+          <div className="task-progress">
+            {stages.map((label, index) => (
+              <div
+                className={`task-step ${index < stage ? "done" : index === stage ? "current" : ""}`}
+                key={label}
+              >
+                {index < stage ? <CheckCircle2 size={18} /> : <Clock3 size={18} />}
+                <span>{label}</span>
+                {index < 2 && <ChevronRight size={15} />}
+              </div>
+            ))}
+          </div>
+          <dl className="details-list">
+            <dt>任务 ID</dt>
+            <dd className="mono">
+              {job.id}
+              <CopyButton value={job.id} />
+            </dd>
+            <dt>关联资源</dt>
+            <dd>
+              {job.resourceId ? (
+                <Link href={instanceHref(job.resourceId)} className="text-link mono">
+                  {shortId(job.resourceId)}
+                </Link>
+              ) : (
+                "账号级操作"
+              )}
+            </dd>
+            <dt>执行次数</dt>
+            <dd>
+              {job.attempt} / {job.maxAttempts}
+            </dd>
+            <dt>开始时间</dt>
+            <dd>{formatDate(job.startedAt, true)}</dd>
+            <dt>结束时间</dt>
+            <dd>{formatDate(job.finishedAt, true)}</dd>
+            {job.nextRunAt && (
+              <>
+                <dt>下次执行</dt>
+                <dd>{formatDate(job.nextRunAt, true)}</dd>
+              </>
+            )}
+          </dl>
+        </Card>
+        {job.result && (
+          <Card title="执行结果">
+            <pre className="task-result">{JSON.stringify(job.result, null, 2)}</pre>
+          </Card>
+        )}
+        <Card
+          title="执行日志"
+          description={
+            activeJobStates.has(job.state) ? "任务执行期间自动更新" : "已保存的完整执行记录"
+          }
+        >
+          {resource.data?.events.length ? (
+            <div className="timeline">
+              {resource.data.events.map((event) => (
+                <div className="timeline-item" key={event.id}>
+                  <div
+                    className={`timeline-marker ${event.level === "error" ? "danger-text" : ""}`}
+                  >
+                    {event.level === "error" ? (
+                      <AlertCircle size={17} />
+                    ) : event.level === "warning" ? (
+                      <AlertCircle size={17} />
+                    ) : (
+                      <Info size={17} />
+                    )}
+                  </div>
+                  <div>
+                    <div className="timeline-message">
+                      <p>{event.message}</p>
+                      <time>{formatDate(event.createdAt, true)}</time>
+                    </div>
+                    {event.detail && (
+                      <details className="event-detail">
+                        <summary>查看事件详情</summary>
+                        <pre>{JSON.stringify(event.detail, null, 2)}</pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="等待第一条执行记录"
+              description="任务开始后，执行阶段与结果会显示在这里。"
+            />
+          )}
+        </Card>
+      </div>
+      {confirm && (
+        <Modal
+          open
+          title={confirm === "cancel" ? "取消任务" : "重试任务"}
+          description={
+            confirm === "cancel"
+              ? "发送取消请求。已经完成的云端步骤不会自动撤销。"
+              : "重新提交此任务；执行器会核对资源状态与已保存的执行记录。"
+          }
+          busy={action.pending}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <Button onClick={() => setConfirm(null)} disabled={action.pending}>
+                返回
+              </Button>
+              <Button variant="primary" disabled={demo} loading={action.pending} onClick={execute}>
+                确认{confirm === "cancel" ? "取消" : "重试"}
+              </Button>
+            </>
+          }
+        >
+          <div className="stack-sm">
+            <p>
+              {operationLabels[job.kind]} · {job.accountName}
+            </p>
+            {action.error && <ErrorState message={action.error} />}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
 }

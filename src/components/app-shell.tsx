@@ -1,26 +1,186 @@
 "use client";
-import { useEffect,useRef,useState,type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname,useRouter } from "next/navigation";
-import { ArrowUpRight,ChevronRight,KeyRound,LayoutDashboard,ListChecks,LogOut,Menu,Moon,Search,Server,Settings2,Sun,X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  ArrowUpRight,
+  ChevronRight,
+  KeyRound,
+  LayoutDashboard,
+  ListChecks,
+  LogOut,
+  Menu,
+  Moon,
+  Search,
+  Server,
+  Settings2,
+  Sun,
+  X,
+} from "lucide-react";
 import { useApp } from "./app-provider";
-import { Badge,IconButton } from "./ui";
-const navigation=[{href:"/overview",label:"总览",icon:LayoutDashboard},{href:"/instances",label:"实例",icon:Server},{href:"/accounts",label:"账号",icon:KeyRound},{href:"/tasks",label:"任务",icon:ListChecks},{href:"/settings",label:"设置",icon:Settings2}];
-export function AppShell({children}:{children:ReactNode}) {
-  const {user,demo,accounts,theme,setTheme,logout}=useApp();const pathname=usePathname();const router=useRouter();const search=useRef<HTMLInputElement>(null);
-  const [mobileOpen,setMobileOpen]=useState(false);const [isMobile,setIsMobile]=useState(false);const [query,setQuery]=useState("");
-  const active=navigation.find(item=>pathname.startsWith(item.href));
-  useEffect(()=>{const query=window.matchMedia("(max-width:900px)");const update=()=>setIsMobile(query.matches);update();query.addEventListener("change",update);return()=>query.removeEventListener("change",update)},[]);
-  useEffect(()=>{const key=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();search.current?.focus()}if(event.key==="Escape")setMobileOpen(false)};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key)},[]);
-  useEffect(()=>{setMobileOpen(false)},[pathname]);
-  return <div className="app-shell"><a href="#main-content" className="skip-link">跳至主要内容</a>{mobileOpen&&<button className="sidebar-backdrop" onClick={()=>setMobileOpen(false)} aria-label="关闭导航"/>}
-    <aside className={`sidebar ${mobileOpen?"sidebar-open":""}`} id="workspace-navigation" aria-label="主导航" inert={isMobile&&!mobileOpen}><Link href="/overview" className="brand"><span className="brand-symbol"><Server size={21}/></span><span>OCI Dash</span></Link>
-      <div className="workspace"><div><strong>个人工作区</strong><span>{accounts.length} 个 OCI 账号</span></div><KeyRound size={16}/></div>
-      <div className="nav-label">工作空间</div><nav aria-label="主导航">{navigation.map(item=><Link href={item.href} key={item.href} className={`nav-item ${pathname.startsWith(item.href)?"active":""}`} aria-current={pathname.startsWith(item.href)?"page":undefined}><item.icon size={19}/><span>{item.label}</span></Link>)}</nav>
-      <div className="sidebar-bottom"><div className="sidebar-note"><span className={`status-dot ${demo?"demo-dot":""}`}/>{demo?"演示工作区":"私有云管理工作区"}</div><div className="profile"><span className="avatar">{user.username.slice(0,1).toUpperCase()}</span><div><strong>{user.username}</strong><span>管理员</span></div><IconButton label="退出登录" onClick={logout}><LogOut size={16}/></IconButton></div></div>
-    </aside>
-    <div className="app-main"><header className="topbar"><IconButton label="展开导航" aria-controls="workspace-navigation" aria-expanded={mobileOpen} className="mobile-menu" onClick={()=>setMobileOpen(true)}><Menu size={20}/></IconButton><div className="breadcrumb"><span>工作空间</span><ChevronRight size={12}/><span>{active?.label||"实例"}</span>{pathname.split("/").filter(Boolean).length>1&&<><ChevronRight size={12}/><span>详情</span></>}</div><div className="topbar-actions"><form className="global-search" role="search" onSubmit={event=>{event.preventDefault();router.push(`/instances?q=${encodeURIComponent(query.trim())}`)}}><Search size={15}/><input ref={search} value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索资源、地址…" aria-label="搜索实例"/><kbd>⌘ K</kbd></form>{demo&&<Badge tone="info">演示环境 · 只读</Badge>}<IconButton label={theme==="light"?"切换深色主题":"切换浅色主题"} onClick={()=>setTheme(theme==="light"?"dark":"light")}>{theme==="light"?<Moon size={18}/>:<Sun size={18}/>}</IconButton><Link href="/settings" className="top-avatar" aria-label="个人设置">{user.username.slice(0,1).toUpperCase()}</Link></div></header>
-      <main id="main-content" className="page-content">{children}</main><footer className="app-footer"><span>{demo?"当前为演示数据，所有云操作已禁用":"OCI Dash · 你的资源，清晰掌握"}</span><Link href="/settings">工作区设置 <ArrowUpRight size={12}/></Link></footer>
+import { Badge, IconButton } from "./ui";
+const navigation = [
+  { href: "/overview", label: "总览", icon: LayoutDashboard },
+  { href: "/instances", label: "实例", icon: Server },
+  { href: "/accounts", label: "账号", icon: KeyRound },
+  { href: "/tasks", label: "任务", icon: ListChecks },
+  { href: "/settings", label: "设置", icon: Settings2 },
+];
+export function AppShell({ children }: { children: ReactNode }) {
+  const { user, demo, accounts, theme, setTheme, logout } = useApp();
+  const pathname = usePathname();
+  const router = useRouter();
+  const search = useRef<HTMLInputElement>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [query, setQuery] = useState("");
+  const active = navigation.find((item) => pathname.startsWith(item.href));
+  useEffect(() => {
+    const query = window.matchMedia("(max-width:900px)");
+    const update = () => setIsMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        search.current?.focus();
+      }
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+  return (
+    <div className="app-shell">
+      <a href="#main-content" className="skip-link">
+        跳至主要内容
+      </a>
+      {mobileOpen && (
+        <button
+          className="sidebar-backdrop"
+          onClick={() => setMobileOpen(false)}
+          aria-label="关闭导航"
+        />
+      )}
+      <aside
+        className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}
+        id="workspace-navigation"
+        aria-label="主导航"
+        inert={isMobile && !mobileOpen}
+      >
+        <Link href="/overview" className="brand">
+          <span className="brand-symbol">
+            <Server size={21} />
+          </span>
+          <span>OCI Dash</span>
+        </Link>
+        <div className="workspace">
+          <div>
+            <strong>个人工作区</strong>
+            <span>{accounts.length} 个 OCI 账号</span>
+          </div>
+          <KeyRound size={16} />
+        </div>
+        <div className="nav-label">工作空间</div>
+        <nav aria-label="主导航">
+          {navigation.map((item) => (
+            <Link
+              href={item.href}
+              key={item.href}
+              className={`nav-item ${pathname.startsWith(item.href) ? "active" : ""}`}
+              aria-current={pathname.startsWith(item.href) ? "page" : undefined}
+            >
+              <item.icon size={19} />
+              <span>{item.label}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="sidebar-note">
+            <span className={`status-dot ${demo ? "demo-dot" : ""}`} />
+            {demo ? "演示工作区" : "私有云管理工作区"}
+          </div>
+          <div className="profile">
+            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+            <div>
+              <strong>{user.username}</strong>
+              <span>管理员</span>
+            </div>
+            <IconButton label="退出登录" onClick={logout}>
+              <LogOut size={16} />
+            </IconButton>
+          </div>
+        </div>
+      </aside>
+      <div className="app-main">
+        <header className="topbar">
+          <IconButton
+            label="展开导航"
+            aria-controls="workspace-navigation"
+            aria-expanded={mobileOpen}
+            className="mobile-menu"
+            onClick={() => setMobileOpen(true)}
+          >
+            <Menu size={20} />
+          </IconButton>
+          <div className="breadcrumb">
+            <span>工作空间</span>
+            <ChevronRight size={12} />
+            <span>{active?.label || "实例"}</span>
+            {pathname.split("/").filter(Boolean).length > 1 && (
+              <>
+                <ChevronRight size={12} />
+                <span>详情</span>
+              </>
+            )}
+          </div>
+          <div className="topbar-actions">
+            <form
+              className="global-search"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                router.push(`/instances?q=${encodeURIComponent(query.trim())}`);
+              }}
+            >
+              <Search size={15} />
+              <input
+                ref={search}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索资源、地址…"
+                aria-label="搜索实例"
+              />
+              <kbd>⌘ K</kbd>
+            </form>
+            {demo && <Badge tone="info">演示环境 · 只读</Badge>}
+            <IconButton
+              label={theme === "light" ? "切换深色主题" : "切换浅色主题"}
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+            </IconButton>
+            <Link href="/settings" className="top-avatar" aria-label="个人设置">
+              {user.username.slice(0, 1).toUpperCase()}
+            </Link>
+          </div>
+        </header>
+        <main id="main-content" className="page-content">
+          {children}
+        </main>
+        <footer className="app-footer">
+          <span>{demo ? "当前为演示数据，所有云操作已禁用" : "OCI Dash · 你的资源，清晰掌握"}</span>
+          <Link href="/settings">
+            工作区设置 <ArrowUpRight size={12} />
+          </Link>
+        </footer>
+      </div>
     </div>
-  </div>;
+  );
 }
