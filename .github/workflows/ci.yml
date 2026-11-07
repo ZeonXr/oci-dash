@@ -4,9 +4,15 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      E2E_BROWSER_CHANNEL: chrome
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,7 +26,8 @@ jobs:
         env:
           NEXT_TELEMETRY_DISABLED: '1'
       - run: node scripts/bootstrap.mjs
-      - run: npx playwright install --with-deps chromium
+      - name: Check runner-provided Chrome
+        run: google-chrome --version
       - name: Start local demonstration services
         run: docker compose up -d --build --wait --wait-timeout 60
       - name: Browser smoke tests against Docker

@@ -50,7 +50,7 @@ node --env-file=.env node_modules/@playwright/test/cli.js test
 
 Windows 默认使用已安装的 Edge；其他平台默认 Chromium，可通过 E2E_BROWSER_CHANNEL 指定浏览器通道。E2E_BASE_URL 仅接受本机源地址。ADMIN_PASSWORD 从环境注入，不能提交到代码。需要演示截图时设置 E2E_SCREENSHOTS=1，输出在已忽略的 test-results/。
 
-CI 配置执行类型检查、离线测试、生产构建、Compose 双服务启动和同一套浏览器回归；执行记录在仓库 Actions 页面。
+CI 使用 GitHub Ubuntu runner 预装的 Chrome，执行类型检查、离线测试、生产构建、Compose 双服务启动和同一套浏览器回归；不额外下载 Chromium。执行记录在仓库 Actions 页面。
 
 ## 验收边界
 
