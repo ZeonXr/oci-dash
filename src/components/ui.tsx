@@ -416,11 +416,12 @@ export function Pagination({
   onPageSize?: (size: number) => void;
 }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.max(1, Math.min(page, pages));
   return (
-    <div className="pagination">
+    <nav className="pagination" aria-label="表格分页">
       <span>
         {total
-          ? `显示 ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} 条，共 ${total} 条`
+          ? `显示 ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, total)} 条，共 ${total} 条`
           : "共 0 条"}
       </span>
       <div>
@@ -435,16 +436,24 @@ export function Pagination({
             <option value={50}>每页 50 条</option>
           </Select>
         )}
-        <IconButton label="上一页" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+        <IconButton
+          label="上一页"
+          disabled={currentPage <= 1}
+          onClick={() => onPage(currentPage - 1)}
+        >
           <ChevronLeft size={16} />
         </IconButton>
         <span>
-          {page} / {pages}
+          {currentPage} / {pages}
         </span>
-        <IconButton label="下一页" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+        <IconButton
+          label="下一页"
+          disabled={currentPage >= pages}
+          onClick={() => onPage(currentPage + 1)}
+        >
           <ChevronRight size={16} />
         </IconButton>
       </div>
-    </div>
+    </nav>
   );
 }

@@ -1,10 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { KeyRound, Plus, RefreshCw } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { api, send, useAction, useResource } from "@/components/api";
 import { AccountDialog } from "@/components/account-dialog";
 import { useApp } from "@/components/app-provider";
+import { useInventoryRefresh } from "@/components/inventory-refresh";
 import {
   Alert,
   Badge,
@@ -28,6 +29,9 @@ const pendingSyncStates = new Set([
   "cancel_requested",
   "interrupted",
 ]);
+const pendingSync = (job: JobSummary) =>
+  pendingSyncStates.has(job.state) &&
+  (job.state !== "interrupted" || (Boolean(job.nextRunAt) && job.attempt < job.maxAttempts));
 function connectionLabel(account: AccountSummary, job: JobSummary): string {
   if (job.state === "queued") return account.lastSyncAt ? "等待刷新" : "等待连接";
   if (job.state === "retrying") return "正在重试";
@@ -36,8 +40,11 @@ function connectionLabel(account: AccountSummary, job: JobSummary): string {
   return account.lastSyncAt ? "刷新中" : "连接中";
 }
 function connectionAction(account: AccountSummary, job?: JobSummary): string {
-  if (job && pendingSyncStates.has(job.state)) return connectionLabel(account, job);
-  if (account.status === "error" || job?.state === "failed" || job?.state === "cancelled") {
+  if (job && pendingSync(job)) return connectionLabel(account, job);
+  if (
+    account.status === "error" ||
+    (job && ["failed", "cancelled", "interrupted"].includes(job.state))
+  ) {
     return account.lastSyncAt ? "重试刷新" : "重试连接";
   }
   return account.status === "unchecked" ? "连接账号" : "刷新资源";
@@ -45,11 +52,17 @@ function connectionAction(account: AccountSummary, job?: JobSummary): string {
 
 export default function AccountsPage() {
   const { demo, notify, reloadAccounts } = useApp();
+  const [pollMs, setPollMs] = useState(30000);
   const resource = useResource<{
     accounts: AccountSummary[];
     syncJobs?: JobSummary[];
     demo: boolean;
-  }>("/api/accounts", 3000);
+  }>("/api/accounts", pollMs);
+  const inventory = useInventoryRefresh({ onUpdated: resource.reload });
+  useEffect(() => {
+    const active = resource.data?.syncJobs?.some(pendingSync);
+    setPollMs(active ? 3000 : 30000);
+  }, [resource.data?.syncJobs]);
   const action = useAction();
   const [editing, setEditing] = useState<AccountSummary | null | undefined>(undefined);
   const [removing, setRemoving] = useState<AccountSummary | null>(null);
@@ -104,6 +117,7 @@ export default function AccountsPage() {
       </PageHeader>
       <div className="stack">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
+        {inventory.error && <ErrorState message={inventory.error} retry={inventory.refresh} />}
         {action.error && !removing && <ErrorState message={action.error} />}
         {resource.loading ? (
           <LoadingState />
@@ -111,8 +125,10 @@ export default function AccountsPage() {
           <div className="grid-3">
             {resource.data.accounts.map((account) => {
               const job = syncJobs.get(account.id);
-              const syncing = Boolean(job && pendingSyncStates.has(job.state));
-              const error = account.lastError || (job?.state === "failed" ? job.lastError : null);
+              const syncing = Boolean(job && pendingSync(job));
+              const error =
+                account.lastError ||
+                (job && ["failed", "interrupted"].includes(job.state) ? job.lastError : null);
               const label = connectionAction(account, job);
               const requesting = busyKey === `${account.id}:sync`;
               return (

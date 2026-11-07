@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -18,6 +18,8 @@ import {
 import type { InstanceSummary, JobSummary, MetricsResult } from "@/lib/contracts";
 import { useApp } from "@/components/app-provider";
 import { send, useAction, useResource } from "@/components/api";
+import { useInventoryRefresh } from "@/components/inventory-refresh";
+import { SortableHeader, TablePanel } from "@/components/table";
 import {
   Badge,
   Button,
@@ -30,6 +32,7 @@ import {
   MetricCard,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Status,
 } from "@/components/ui";
@@ -182,6 +185,11 @@ export default function InstanceDetailPage() {
     30000,
   );
   const instance = resource.data?.instance;
+  const sync = useInventoryRefresh({
+    accountIds: instance ? [instance.accountId] : [],
+    enabled: Boolean(instance),
+    onUpdated: resource.reload,
+  });
   const metrics = useResource<MetricsResult>(
     instance && (tab === "overview" || tab === "monitoring")
       ? `/api/instances/${encodeURIComponent(id)}/metrics?range=${range}`
@@ -195,13 +203,25 @@ export default function InstanceDetailPage() {
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [activityPage, setActivityPage] = useState(1);
+  const [activityPageSize, setActivityPageSize] = useState(10);
+  const [activityOrder, setActivityOrder] = useState<"ascending" | "descending">("descending");
+  useEffect(() => setActivityPage(1), [id, activityPageSize, activityOrder]);
   if (resource.loading) return <LoadingState />;
   if (!instance)
     return <ErrorState message={resource.error || "未找到此实例。"} retry={resource.reload} />;
-  const instanceJobs =
+  const instanceJobs = (
     jobs.data?.jobs.filter(
       (job) => job.resourceId === instance.id && job.accountId === instance.accountId,
-    ) || [];
+    ) || []
+  ).sort((a, b) => {
+    const result = a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+    return activityOrder === "ascending" ? result : -result;
+  });
+  const safeActivityPage = Math.min(
+    activityPage,
+    Math.max(1, Math.ceil(instanceJobs.length / activityPageSize)),
+  );
   const lifecycle = (
     kind: "instance-start" | "instance-stop" | "instance-reboot" | "instance-terminate",
   ) =>
@@ -265,46 +285,71 @@ export default function InstanceDetailPage() {
       />
     </div>
   );
-  const taskRows = (limit?: number) =>
-    instanceJobs.length ? (
-      <div className="table-scroll">
-        <table className="task-table">
-          <thead>
-            <tr>
-              <th>任务</th>
-              <th>状态</th>
-              <th>开始时间</th>
-              <th>尝试次数</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {instanceJobs.slice(0, limit).map((job) => (
-              <tr key={job.id}>
-                <td>
+  const taskRows = (limit?: number) => (
+    <TablePanel
+      embedded
+      label="实例任务"
+      loading={jobs.loading}
+      refreshing={jobs.refreshing}
+      hasRows={instanceJobs.length > 0}
+      empty={<EmptyState title="暂无关联任务" description="在此实例上提交的操作会显示在这里。" />}
+      footer={
+        !limit && (
+          <Pagination
+            page={safeActivityPage}
+            pageSize={activityPageSize}
+            total={instanceJobs.length}
+            onPage={setActivityPage}
+            onPageSize={setActivityPageSize}
+          />
+        )
+      }
+    >
+      <table className="task-table">
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>状态</th>
+            <SortableHeader
+              label="提交时间"
+              direction={activityOrder}
+              onSort={() =>
+                setActivityOrder((value) => (value === "ascending" ? "descending" : "ascending"))
+              }
+            />
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(limit
+            ? instanceJobs.slice(0, limit)
+            : instanceJobs.slice(
+                (safeActivityPage - 1) * activityPageSize,
+                safeActivityPage * activityPageSize,
+              )
+          ).map((job) => (
+            <tr key={job.id}>
+              <td>
+                <Link href={taskHref(job.id)} className="name-link">
                   {operationLabels[job.kind]}
-                  <div className="task-id mono">{job.id.slice(0, 12)}</div>
-                </td>
-                <td>
-                  <Status value={job.state} />
-                </td>
-                <td>{formatDate(job.startedAt || job.createdAt)}</td>
-                <td>
-                  {job.attempt} / {job.maxAttempts}
-                </td>
-                <td>
-                  <Link href={taskHref(job.id)} className="text-link">
-                    查看任务
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    ) : (
-      <EmptyState title="暂无关联任务" description="在此实例上提交的操作会显示在这里。" />
-    );
+                </Link>
+                <div className="task-id mono">{job.id.slice(0, 12)}</div>
+              </td>
+              <td>
+                <Status value={job.state} />
+              </td>
+              <td className="nowrap">{formatDate(job.createdAt)}</td>
+              <td>
+                <Link href={taskHref(job.id)} className="text-link">
+                  查看详情
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TablePanel>
+  );
   return (
     <>
       <PageHeader
@@ -323,7 +368,11 @@ export default function InstanceDetailPage() {
         }
         description={`${regionName(instance.region)} · ${instance.region} · ${instance.accountName}`}
       >
-        <Button onClick={resource.reload} loading={resource.refreshing} aria-label="刷新实例">
+        <Button
+          onClick={sync.refresh}
+          loading={resource.refreshing || sync.refreshing}
+          aria-label="刷新实例"
+        >
           <RefreshCw size={15} />
         </Button>
         {instance.state === "STOPPED" ? (
@@ -396,6 +445,11 @@ export default function InstanceDetailPage() {
       {resource.error && (
         <div style={{ marginBottom: 20 }}>
           <ErrorState message={resource.error} retry={resource.reload} />
+        </div>
+      )}
+      {sync.error && (
+        <div style={{ marginBottom: 20 }}>
+          <ErrorState message={sync.error} retry={sync.refresh} />
         </div>
       )}
       <div className="tabs" role="tablist" aria-label="实例详情">
@@ -631,7 +685,7 @@ export default function InstanceDetailPage() {
             }
           >
             {jobs.error && <ErrorState message={jobs.error} retry={jobs.reload} />}
-            {jobs.loading ? <LoadingState /> : taskRows()}
+            {taskRows()}
           </Card>
         )}
       </div>

@@ -173,6 +173,18 @@ export interface JobSummary {
   lastError: string | null;
   result: Record<string, unknown> | null;
 }
+export interface InventoryRefreshAccount {
+  accountId: string;
+  status: "queued" | "active" | "fresh" | "backoff" | "throttled";
+  jobId: string | null;
+  lastSyncedAt: string | null;
+  nextRefreshAt: string | null;
+}
+export interface InventoryRefreshResult {
+  jobs: JobSummary[];
+  accounts: InventoryRefreshAccount[];
+  demo: boolean;
+}
 export interface JobEvent {
   id: number;
   jobId: string;

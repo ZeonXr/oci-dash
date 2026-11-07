@@ -39,6 +39,7 @@ All responses are JSON. Errors: `{error, code?}` with an appropriate HTTP status
 - `PATCH /api/accounts/:id` accepts name/regions and optional replacement credentials. Credential or actual region changes atomically queue a connection task; a rename does not. `DELETE /api/accounts/:id` removes only this application's account configuration, not cloud resources.
 - `POST /api/accounts/:id/sync` queues a durable connection/resource refresh task, reusing an active task for that account. The worker verifies credentials before reading inventory and reports failures on the account. `POST /api/accounts/:id/verify` remains available for API diagnostics; normal onboarding needs no separate verification request.
 - `GET /api/instances` → `{instances,demo}`; `GET /api/instances/:id` → `{instance,demo}` (IDs URL encoded).
+- `POST /api/inventory/refresh` accepts `{mode:"auto"|"manual",accountIds?:string[]}` and returns `InventoryRefreshResult` with queued/reused jobs and per-account freshness/backoff status. GETs remain side-effect free. Visible resource pages request automatic checks every 60 seconds; manual refresh waits for the durable job before reloading the snapshot. Automatic jobs are deduplicated across tabs, excluded from ordinary history, and retain only the latest terminal record per account. Explicit user jobs retain their history.
 - `GET /api/instances/:id/metrics?range=1h|24h|7d` → `MetricsResult`.
 - `GET /api/instances/:id/security` → `{groups,demo}`.
 - `GET /api/accounts/:id/create-options?region=...&compartmentId=...` → `CreateOptions`.

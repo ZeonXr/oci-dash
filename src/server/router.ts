@@ -26,6 +26,7 @@ import {
 } from "./accounts";
 import { createAccountConnection, updateAccountConnection } from "./account-connection";
 import { getInstance, listInstances, recentActivity } from "./inventory";
+import { requestInventoryRefresh } from "./inventory-refresh";
 import {
   demoAccounts,
   demoActivity,
@@ -43,7 +44,6 @@ import {
   cancelJob,
   retryJob,
   getWorkerStatus,
-  enqueueAccountSync,
   listAccountSyncJobs,
 } from "./jobs";
 import { ociAdapter } from "./oci/adapter";
@@ -87,6 +87,14 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     const user = requireUser(request),
       demo = isDemo();
     if (method === "GET" && path === "auth/me") return json({ user, demo });
+    if (method === "POST" && path === "inventory/refresh") {
+      liveOnly();
+      const result = requestInventoryRefresh(await readJson(request), user.username);
+      const active = result.jobs.some((job) =>
+        ["queued", "running", "retrying", "interrupted"].includes(job.state),
+      );
+      return json(result, active ? 202 : 200);
+    }
     if (method === "GET" && path === "dashboard") {
       const accounts = demo ? demoAccounts() : listAccounts(),
         instances = demo ? demoInstances() : listInstances();
@@ -165,8 +173,13 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         liveOnly();
         const account = getAccount(id);
         if (!account) throw new AppError("账号不存在", 404);
-        const job = enqueueAccountSync(id, user.username);
-        audit(user.username, "inventory.sync", account.name, "连接检查与资源刷新已排队");
+        const refreshed = requestInventoryRefresh(
+          { mode: "manual", accountIds: [id] },
+          user.username,
+        );
+        const job = refreshed.jobs[0];
+        if (refreshed.accounts[0]?.status === "queued")
+          audit(user.username, "inventory.sync", account.name, "连接检查与资源刷新已排队");
         return json({ job }, 202);
       }
       if (segments.length === 3 && method === "GET" && segments[2] === "create-options") {

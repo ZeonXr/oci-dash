@@ -26,6 +26,7 @@ import {
   Status,
 } from "./ui";
 import { OperationDialog, type OperationDialogProps } from "./operation-dialog";
+import { TablePanel } from "./table";
 
 export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
   const { demo } = useApp();
@@ -56,15 +57,20 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
               <span>子网 {shortId(vnic.subnetId)}</span>
               <span>{vnic.nsgIds.length} 个网络安全组</span>
             </div>
-            <div className="table-scroll">
+            <TablePanel
+              embedded
+              label={`${vnic.name || "虚拟网卡"} IPv4 地址`}
+              hasRows={vnic.privateIps.length > 0}
+              empty={<EmptyState title="此网卡没有 IPv4 地址信息" />}
+            >
               <table className="network-table">
                 <thead>
                   <tr>
-                    <th>私网 IPv4</th>
-                    <th>公网 IPv4</th>
-                    <th>分配方式</th>
-                    <th>保护状态</th>
-                    <th>操作</th>
+                    <th scope="col">私网 IPv4</th>
+                    <th scope="col">公网 IPv4</th>
+                    <th scope="col">分配方式</th>
+                    <th scope="col">保护状态</th>
+                    <th scope="col">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -150,7 +156,7 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TablePanel>
             <div className="row between row-wrap" style={{ marginTop: 20 }}>
               <div>
                 <p className="subsection-title">IPv6 地址</p>
@@ -600,58 +606,60 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
               <p className="mono small muted break-all" style={{ marginBottom: 14 }}>
                 {group.id} <CopyButton value={group.id} />
               </p>
-              {group.rules.length ? (
-                <div className="table-scroll">
-                  <table className="network-table">
-                    <thead>
-                      <tr>
-                        <th>方向</th>
-                        <th>协议</th>
-                        <th>来源 / 目标</th>
-                        <th>目标端口</th>
-                        <th>说明</th>
-                        <th>操作</th>
+              <TablePanel
+                embedded
+                label={`${group.name}安全规则`}
+                refreshing={resource.refreshing}
+                hasRows={group.rules.length > 0}
+                empty={<EmptyState title="此资源中没有安全规则" icon={<ShieldCheck size={25} />} />}
+              >
+                <table className="network-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">方向</th>
+                      <th scope="col">协议</th>
+                      <th scope="col">来源 / 目标</th>
+                      <th scope="col">目标端口</th>
+                      <th scope="col">说明</th>
+                      <th scope="col">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.rules.map((rule) => (
+                      <tr key={rule.id}>
+                        <td>
+                          <Badge tone={rule.direction === "INGRESS" ? "info" : "neutral"}>
+                            {rule.direction === "INGRESS" ? "入站" : "出站"}
+                          </Badge>
+                        </td>
+                        <td>
+                          {protocolLabels[rule.protocol] || rule.protocol}
+                          {rule.stateless && <span className="cell-secondary">无状态</span>}
+                        </td>
+                        <td className="mono">{rule.peer}</td>
+                        <td>
+                          {rule.portMin != null
+                            ? `${rule.portMin}${rule.portMax != null && rule.portMax !== rule.portMin ? `–${rule.portMax}` : ""}`
+                            : rule.icmpType != null
+                              ? `类型 ${rule.icmpType}${rule.icmpCode != null ? ` / ${rule.icmpCode}` : ""}`
+                              : "所有"}
+                        </td>
+                        <td>{rule.description || "—"}</td>
+                        <td>
+                          <Button
+                            variant="ghost"
+                            className="button-sm danger-text"
+                            disabled={demo}
+                            onClick={() => setDeleting({ group, rule })}
+                          >
+                            删除
+                          </Button>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {group.rules.map((rule) => (
-                        <tr key={rule.id}>
-                          <td>
-                            <Badge tone={rule.direction === "INGRESS" ? "info" : "neutral"}>
-                              {rule.direction === "INGRESS" ? "入站" : "出站"}
-                            </Badge>
-                          </td>
-                          <td>
-                            {protocolLabels[rule.protocol] || rule.protocol}
-                            {rule.stateless && <span className="cell-secondary">无状态</span>}
-                          </td>
-                          <td className="mono">{rule.peer}</td>
-                          <td>
-                            {rule.portMin != null
-                              ? `${rule.portMin}${rule.portMax != null && rule.portMax !== rule.portMin ? `–${rule.portMax}` : ""}`
-                              : rule.icmpType != null
-                                ? `类型 ${rule.icmpType}${rule.icmpCode != null ? ` / ${rule.icmpCode}` : ""}`
-                                : "所有"}
-                          </td>
-                          <td>{rule.description || "—"}</td>
-                          <td>
-                            <Button
-                              variant="ghost"
-                              className="button-sm danger-text"
-                              disabled={demo}
-                              onClick={() => setDeleting({ group, rule })}
-                            >
-                              删除
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <EmptyState title="此资源中没有安全规则" icon={<ShieldCheck size={25} />} />
-              )}
+                    ))}
+                  </tbody>
+                </table>
+              </TablePanel>
             </Card>
           ))
         : !resource.error && (

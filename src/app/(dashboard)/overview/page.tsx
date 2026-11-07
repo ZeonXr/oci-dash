@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { DashboardData, MetricsResult } from "@/lib/contracts";
 import { useResource } from "@/components/api";
+import { useInventoryRefresh } from "@/components/inventory-refresh";
 import {
   Card,
   EmptyState,
@@ -37,6 +38,7 @@ import {
 import { MetricsChart } from "@/components/metrics-chart";
 export default function OverviewPage() {
   const resource = useResource<DashboardData>("/api/dashboard", 30000);
+  const sync = useInventoryRefresh({ onUpdated: resource.reload });
   const data = resource.data;
   const [selected, setSelected] = useState("");
   const [range, setRange] = useState("24h");
@@ -76,10 +78,10 @@ export default function OverviewPage() {
         </span>
         <Button
           onClick={() => {
-            resource.reload();
-            metrics.reload();
+            void sync.refresh();
+            void metrics.reload();
           }}
-          loading={resource.refreshing}
+          loading={resource.refreshing || sync.refreshing}
         >
           <RefreshCw size={15} />
           刷新数据
@@ -87,6 +89,7 @@ export default function OverviewPage() {
       </PageHeader>
       <div className="stack">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
+        {sync.error && <ErrorState message={sync.error} retry={sync.refresh} />}
       </div>
       <div className="metrics-grid">
         <MetricCard

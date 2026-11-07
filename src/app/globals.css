@@ -1078,12 +1078,29 @@ pre {
 .table-scroll {
   overflow-x: auto;
 }
-.resource-table {
-  min-width: 920px;
+.table-scroll:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: -2px;
 }
-.resource-table td {
-  font-size: 13px;
-  height: 72px;
+.table-sort {
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.table-sort:hover {
+  color: var(--ink);
+}
+.resource-table {
+  min-width: 820px;
+}
+.resource-table td,
+.task-table td {
+  font-size: 12px;
+  height: 56px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.table-card tr.is-selected {
+  background: var(--soft);
 }
 .resource-table th:first-child,
 .resource-table td:first-child {
@@ -1469,9 +1486,6 @@ pre {
 }
 .task-list-table {
   min-width: 720px;
-}
-.task-table td {
-  font-size: 12px;
 }
 .task-id {
   font-size: 11px;
@@ -2133,41 +2147,8 @@ pre {
   }
 }
 
-.instance-state-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 15px;
-  margin-bottom: 22px;
-}
-.state-pills {
-  display: flex;
-  gap: 8px;
-}
-.state-pills button {
-  background: transparent;
-  border: 0;
-  padding: 6px 12px;
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 13px;
-}
-.state-pills button span {
-  font-size: 11px;
-  margin-left: 5px;
-}
-.state-pills button.selected {
-  background: var(--soft);
-  color: var(--primary);
-  font-weight: 500;
-}
 .table-toolbar[hidden] {
   display: none;
-}
-.resource-table td {
-  height: 56px;
-  padding-top: 6px;
-  padding-bottom: 6px;
 }
 .table-identity {
   display: flex;
@@ -2185,19 +2166,6 @@ pre {
   color: var(--muted);
   flex-shrink: 0;
 }
-@media (max-width: 620px) {
-  .instance-state-bar {
-    margin-bottom: 15px;
-  }
-  .instance-state-bar > .muted {
-    display: none;
-  }
-  .state-pills button {
-    padding: 6px 10px;
-    font-size: 12px;
-  }
-}
-
 .login-note {
   display: flex;
   align-items: center;

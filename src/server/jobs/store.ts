@@ -5,6 +5,7 @@ import type {
   JobEvent,
   JobState,
   JobSummary,
+  InventoryRefreshResult,
   OperationKind,
   OperationRequest,
 } from "@/lib/contracts";
@@ -25,6 +26,9 @@ const kinds = new Set<OperationKind>([
 ]);
 const terminal = new Set<JobState>(["succeeded", "failed", "cancelled"]);
 const MAX_ATTEMPTS = 4;
+const INVENTORY_FRESH_MS = 60_000;
+const MANUAL_REFRESH_THROTTLE_MS = 2_000;
+const AUTO_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
 export const DEFAULT_LEASE_MS = 30_000;
 const PRIVATE_KEY = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g;
 const secretField =
@@ -112,6 +116,15 @@ interface JobRow {
   lease_expires_at: string | null;
   cancel_requested: number;
   needs_reconcile: number;
+  background: number;
+}
+interface InventoryRefreshRow {
+  account_id: string;
+  failure_count: number;
+  last_failure_at: string | null;
+  retry_after: string | null;
+  manual_requested_at: string | null;
+  manual_job_id: string | null;
 }
 export interface ClaimedJob {
   summary: JobSummary;
@@ -181,7 +194,8 @@ export function ensureJobSchema(db: Database.Database): void {
       result_json TEXT, operation_json TEXT NOT NULL, requested_by TEXT NOT NULL,
       idempotency_key TEXT, payload_hash TEXT NOT NULL, checkpoints_json TEXT NOT NULL DEFAULT '{}',
       lease_owner TEXT, lease_expires_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
-      needs_reconcile INTEGER NOT NULL DEFAULT 0
+      needs_reconcile INTEGER NOT NULL DEFAULT 0,
+      background INTEGER NOT NULL DEFAULT 0 CHECK(background IN (0,1))
     );
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs(account_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state,next_run_at,created_at);
@@ -200,9 +214,25 @@ export function ensureJobSchema(db: Database.Database): void {
       id TEXT PRIMARY KEY, started_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL,
       lease_seconds INTEGER NOT NULL, stopped_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS inventory_refresh_state (
+      account_id TEXT PRIMARY KEY,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      last_failure_at TEXT,
+      retry_after TEXT,
+      manual_requested_at TEXT,
+      manual_job_id TEXT
+    );
   `);
   // Backfill locks for jobs saved before a worker was started or after a schema upgrade.
   db.transaction(() => {
+    const columns = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+    if (!columns.some((column) => column.name === "background"))
+      db.exec(
+        "ALTER TABLE jobs ADD COLUMN background INTEGER NOT NULL DEFAULT 0 CHECK(background IN (0,1))",
+      );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS jobs_background_history ON jobs(account_id,background,finished_at)",
+    );
     const insert = db.prepare(
       "INSERT OR IGNORE INTO job_resources(job_id,resource_key) VALUES(?,?)",
     );
@@ -252,6 +282,70 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     )
       throw new LeaseLostError();
     return found;
+  }
+  function activeAccountSync(accountId: string): JobRow | undefined {
+    return db
+      .prepare(
+        `SELECT * FROM jobs WHERE account_id=? AND kind='sync-account' AND cancel_requested=0
+        AND (state IN ('queued','running','retrying') OR
+          (state='interrupted' AND next_run_at IS NOT NULL AND attempt<max_attempts))
+        ORDER BY created_at DESC,rowid DESC LIMIT 1`,
+      )
+      .get(accountId) as JobRow | undefined;
+  }
+  function refreshState(accountId: string): InventoryRefreshRow {
+    db.prepare("INSERT OR IGNORE INTO inventory_refresh_state(account_id) VALUES(?)").run(
+      accountId,
+    );
+    return db
+      .prepare("SELECT * FROM inventory_refresh_state WHERE account_id=?")
+      .get(accountId) as InventoryRefreshRow;
+  }
+  function pruneAutomaticHistory(accountId: string): void {
+    // Keep the latest completed automatic refresh, plus every live job. Explicit user
+    // jobs and their references/events are never removed by this retention policy.
+    const obsolete = db
+      .prepare(
+        `SELECT id FROM jobs WHERE account_id=? AND kind='sync-account' AND background=1
+        AND lease_owner IS NULL AND (state IN ('succeeded','failed','cancelled') OR
+          (state='interrupted' AND next_run_at IS NULL))
+        ORDER BY COALESCE(finished_at,created_at) DESC,rowid DESC LIMIT -1 OFFSET 1`,
+      )
+      .all(accountId) as { id: string }[];
+    for (const { id } of obsolete) {
+      db.prepare("DELETE FROM job_events WHERE job_id=?").run(id);
+      db.prepare("DELETE FROM job_resources WHERE job_id=?").run(id);
+      db.prepare("DELETE FROM jobs WHERE id=?").run(id);
+    }
+  }
+  function recordSyncOutcome(
+    job: JobRow,
+    state: "succeeded" | "failed" | "cancelled",
+    result?: Record<string, unknown>,
+  ): void {
+    if (job.kind !== "sync-account") return;
+    const previous = refreshState(job.account_id);
+    const partial =
+      state === "succeeded" && Array.isArray(result?.warnings) && result.warnings.length > 0;
+    if (state === "succeeded" && !partial) {
+      db.prepare(
+        "UPDATE inventory_refresh_state SET failure_count=0,last_failure_at=NULL,retry_after=NULL WHERE account_id=?",
+      ).run(job.account_id);
+    } else {
+      const failures =
+        state === "cancelled" ? previous.failure_count : Math.min(previous.failure_count + 1, 32);
+      const wait =
+        state === "cancelled"
+          ? INVENTORY_FRESH_MS
+          : Math.min(
+              AUTO_REFRESH_BACKOFF_MAX_MS,
+              INVENTORY_FRESH_MS * 2 ** Math.max(0, failures - 1),
+            );
+      db.prepare(
+        "UPDATE inventory_refresh_state SET failure_count=?,last_failure_at=?,retry_after=? WHERE account_id=?",
+      ).run(failures, timestamp(), new Date(now().getTime() + wait).toISOString(), job.account_id);
+    }
+    pruneAutomaticHistory(job.account_id);
   }
   function enqueueOperation(operation: OperationRequest, requestedBy: string): JobSummary {
     if (
@@ -354,18 +448,121 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         if (!account) throw new JobError("Account not found.", "ACCOUNT_NOT_FOUND", 404);
         if (!requestedBy || requestedBy.length > 200)
           throw new JobError("The requesting user is required.", "INVALID_REQUESTER");
-        const existing = db
-          .prepare(
-            `SELECT * FROM jobs WHERE account_id=? AND kind='sync-account'
-              AND state IN ('queued','running','retrying','interrupted') AND cancel_requested=0
-              ORDER BY created_at DESC,rowid DESC LIMIT 1`,
-          )
-          .get(accountId) as JobRow | undefined;
-        if (existing) return summary(existing);
+        const existing = activeAccountSync(accountId);
+        if (existing) {
+          db.prepare("UPDATE jobs SET background=0 WHERE id=?").run(existing.id);
+          return summary(existing);
+        }
         return enqueueOperation(
           { kind: "sync-account", accountId, region: account.homeRegion, payload: {} },
           requestedBy,
         );
+      })
+      .immediate();
+  }
+  function refreshInventory(
+    accountIds: string[],
+    mode: "auto" | "manual",
+    requestedBy: string,
+  ): Omit<InventoryRefreshResult, "demo"> {
+    if (!["auto", "manual"].includes(mode) || !requestedBy || requestedBy.length > 200)
+      throw new JobError(
+        "A valid refresh mode and requesting user are required.",
+        "INVALID_REFRESH",
+      );
+    return db
+      .transaction(() => {
+        const jobs: JobSummary[] = [];
+        const accounts: InventoryRefreshResult["accounts"] = [];
+        for (const accountId of new Set(accountIds)) {
+          const account = getAccount(accountId);
+          if (!account) throw new JobError("Account not found.", "ACCOUNT_NOT_FOUND", 404);
+          const metadata = refreshState(accountId);
+          const add = (
+            status: InventoryRefreshResult["accounts"][number]["status"],
+            job: JobRow | null = null,
+            nextRefreshAt: string | null = null,
+          ) => {
+            if (job) jobs.push(summary(job));
+            accounts.push({
+              accountId,
+              status,
+              jobId: job?.id ?? null,
+              lastSyncedAt: account.lastSyncAt,
+              nextRefreshAt,
+            });
+          };
+          const manual = (job: JobRow) => {
+            db.prepare("UPDATE jobs SET background=0 WHERE id=?").run(job.id);
+            db.prepare(
+              "UPDATE inventory_refresh_state SET manual_requested_at=?,manual_job_id=? WHERE account_id=?",
+            ).run(timestamp(), job.id, accountId);
+          };
+          const existing = activeAccountSync(accountId);
+          if (existing) {
+            if (mode === "manual") manual(existing);
+            add("active", existing);
+            continue;
+          }
+          const currentTime = now().getTime();
+          const lastSync = account.lastSyncAt ? Date.parse(account.lastSyncAt) : NaN;
+          // A successful post-operation inventory read also repairs prior sync failures.
+          if (
+            account.status === "connected" &&
+            Number.isFinite(lastSync) &&
+            metadata.last_failure_at &&
+            lastSync > Date.parse(metadata.last_failure_at)
+          ) {
+            db.prepare(
+              "UPDATE inventory_refresh_state SET failure_count=0,last_failure_at=NULL,retry_after=NULL WHERE account_id=?",
+            ).run(accountId);
+            metadata.failure_count = 0;
+            metadata.last_failure_at = null;
+            metadata.retry_after = null;
+          }
+          if (mode === "auto") {
+            if (metadata.retry_after && Date.parse(metadata.retry_after) > currentTime) {
+              add("backoff", null, metadata.retry_after);
+              continue;
+            }
+            if (
+              account.status === "connected" &&
+              Number.isFinite(lastSync) &&
+              currentTime >= lastSync &&
+              currentTime - lastSync < INVENTORY_FRESH_MS
+            ) {
+              add("fresh", null, new Date(lastSync + INVENTORY_FRESH_MS).toISOString());
+              continue;
+            }
+          } else if (metadata.manual_requested_at && metadata.manual_job_id) {
+            const requested = Date.parse(metadata.manual_requested_at);
+            const prior = row(metadata.manual_job_id);
+            if (
+              prior &&
+              currentTime >= requested &&
+              currentTime - requested < MANUAL_REFRESH_THROTTLE_MS
+            ) {
+              add(
+                "throttled",
+                prior,
+                new Date(requested + MANUAL_REFRESH_THROTTLE_MS).toISOString(),
+              );
+              continue;
+            }
+          }
+          const created = enqueueOperation(
+            { kind: "sync-account", accountId, region: account.homeRegion, payload: {} },
+            requestedBy,
+          );
+          db.prepare("UPDATE jobs SET background=? WHERE id=?").run(
+            mode === "auto" ? 1 : 0,
+            created.id,
+          );
+          const job = required(created.id);
+          if (mode === "manual") manual(job);
+          add("queued", job);
+        }
+        return { jobs, accounts };
       })
       .immediate();
   }
@@ -376,7 +573,9 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
           `SELECT * FROM (
             SELECT j.*,j.rowid AS insertion_order,
               ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY
-                CASE WHEN state IN ('queued','running','retrying','cancel_requested','interrupted') THEN 0 ELSE 1 END,
+                CASE WHEN state IN ('queued','running','retrying','cancel_requested') OR
+                  (state='interrupted' AND next_run_at IS NOT NULL AND attempt<max_attempts AND cancel_requested=0)
+                  THEN 0 ELSE 1 END,
                 created_at DESC,j.rowid DESC) AS account_rank
             FROM jobs j WHERE kind='sync-account'
           ) WHERE account_rank=1 ORDER BY created_at DESC,insertion_order DESC`,
@@ -409,6 +608,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
             "warning",
             "Pending execution cancelled. Previously accepted cloud operations may still require reconciliation.",
           );
+          recordSyncOutcome(current, "cancelled");
         }
         return summary(required(id));
       })
@@ -428,7 +628,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
           throw new JobError("The previous worker still owns this task.", "JOB_IS_RUNNING", 409);
         db.prepare(
           `UPDATE jobs SET state='queued',cancel_requested=0,finished_at=NULL,next_run_at=?,last_error=NULL,
-        max_attempts=?,needs_reconcile=? WHERE id=?`,
+        max_attempts=?,needs_reconcile=?,background=0 WHERE id=?`,
         ).run(timestamp(), current.attempt + MAX_ATTEMPTS, current.attempt > 0 ? 1 : 0, id);
         event(
           id,
@@ -463,6 +663,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
           : "Worker lease expired; automatic execution stopped and manual review is required.",
         { attempt: current.attempt },
       );
+      if (!automatic) recordSyncOutcome(current, "failed");
     }
   }
   function claimNext(workerId: string, leaseMs = DEFAULT_LEASE_MS): ClaimedJob | null {
@@ -475,7 +676,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         AND j.next_run_at IS NOT NULL AND j.next_run_at<=? AND j.attempt<j.max_attempts AND j.cancel_requested=0
         AND NOT EXISTS(SELECT 1 FROM job_resources candidate JOIN job_resources occupied ON occupied.resource_key=candidate.resource_key
           JOIN jobs active ON active.id=occupied.job_id WHERE candidate.job_id=j.id AND active.state IN ('running','cancel_requested'))
-        ORDER BY j.next_run_at,j.created_at,j.id LIMIT 1`,
+        ORDER BY j.background,j.next_run_at,j.created_at,j.id LIMIT 1`,
           )
           .get(timestamp()) as JobRow | undefined;
         if (!current) return null;
@@ -536,7 +737,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     error?: string,
   ): void {
     db.transaction(() => {
-      owned(id, workerId);
+      const current = owned(id, workerId);
       db.prepare(
         `UPDATE jobs SET state=?,result_json=?,last_error=?,finished_at=?,next_run_at=NULL,
         lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=0 WHERE id=?`,
@@ -551,6 +752,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
             : "Task failed.",
         error ? { error } : undefined,
       );
+      recordSyncOutcome(current, state, result);
     }).immediate();
   }
   function retryLater(id: string, workerId: string, error: string, delayMs: number): void {
@@ -600,6 +802,8 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         "Worker stopped before confirming the outcome. Recovery will reconcile remote state.",
         { reason },
       );
+      if (current.attempt >= current.max_attempts || current.cancel_requested)
+        recordSyncOutcome(current, current.cancel_requested ? "cancelled" : "failed");
     }).immediate();
   }
   function heartbeat(workerId: string, leaseMs = DEFAULT_LEASE_MS): void {
@@ -638,6 +842,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
   return {
     enqueueOperation,
     enqueueAccountSync,
+    refreshInventory,
     listAccountSyncJobs,
     cancelJob,
     retryJob,
@@ -660,7 +865,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     listJobs(limit = 100): JobSummary[] {
       return (
         db
-          .prepare("SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT ?")
+          .prepare("SELECT * FROM jobs WHERE background=0 ORDER BY created_at DESC,id DESC LIMIT ?")
           .all(
             Math.max(1, Math.min(1000, Math.floor(Number.isFinite(limit) ? limit : 100))),
           ) as JobRow[]

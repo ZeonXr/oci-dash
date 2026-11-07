@@ -63,6 +63,10 @@ const test = base.extend<{ mockApi: MockApi }>({
         if (method === "GET" && url.pathname === "/api/accounts") {
           return json({ accounts: state.accounts, syncJobs: state.syncJobs, demo: false });
         }
+        if (method === "POST" && url.pathname === "/api/inventory/refresh") {
+          expect(request.postDataJSON()).toMatchObject({ mode: "auto" });
+          return json({ jobs: [], accounts: [], demo: false });
+        }
         if (
           (method === "POST" && url.pathname === "/api/accounts") ||
           (method === "PATCH" && url.pathname === `/api/accounts/${sample.id}`)

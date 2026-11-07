@@ -177,11 +177,11 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
     await page.getByLabel("搜索实例名称、地址或 OCID").fill("");
   });
   await test.step("停止状态计数和结果一致", async () => {
-    await page.getByRole("button", { name: /^已停止/ }).click();
+    await page.getByLabel("筛选状态", { exact: true }).selectOption("STOPPED");
     await expect(rows).toHaveCount(
       demo.instances.filter((item) => item.state === "STOPPED").length,
     );
-    await page.getByRole("button", { name: /^全部实例/ }).click();
+    await page.getByLabel("筛选状态", { exact: true }).selectOption("");
   });
   await test.step("账号筛选限定资源范围", async () => {
     const account = demo.instances[0].accountId;

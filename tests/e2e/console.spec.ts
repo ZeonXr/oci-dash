@@ -187,6 +187,11 @@ async function setup(
       });
     if (path === "/api/accounts" && method === "GET")
       return json({ accounts: [], demo: Boolean(options.demo) });
+    if (path === "/api/inventory/refresh" && method === "POST") {
+      expect(options.demo).not.toBe(true);
+      expect(req.postDataJSON()).toMatchObject({ mode: "auto" });
+      return json({ jobs: [], accounts: [], demo: false });
+    }
     if (path === `/api/instances/${instance.id}` && method === "GET")
       return json({ instance, demo: Boolean(options.demo) });
     if (path === `/api/instances/${instance.id}/metrics` && method === "GET")
