@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  ArrowUpRight,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -148,12 +147,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main id="main-content" className="page-content">
           {children}
         </main>
-        <footer className="app-footer">
-          <span>{demo ? "当前为演示数据，所有云操作已禁用" : "OCI Dash · 你的资源，清晰掌握"}</span>
-          <Link href="/settings">
-            设置 <ArrowUpRight size={12} />
-          </Link>
-        </footer>
       </div>
     </div>
   );

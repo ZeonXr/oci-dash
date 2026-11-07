@@ -698,20 +698,6 @@ pre {
   gap: 7px;
   align-items: center;
 }
-.app-footer {
-  margin: 0 32px 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  color: var(--muted);
-  gap: 16px;
-}
-.app-footer a {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2085,13 +2071,6 @@ pre {
   }
   .pagination .select {
     margin-right: auto;
-  }
-  .app-footer {
-    margin: 0 15px 20px;
-    flex-wrap: wrap;
-  }
-  .app-footer span {
-    font-size: 10px;
   }
   .tabs {
     gap: 22px;
