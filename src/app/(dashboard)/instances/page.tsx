@@ -380,7 +380,7 @@ function InstancesContent() {
             description={
               instances.length
                 ? "尝试调整搜索条件或清除筛选。"
-                : "先添加账号并同步资源，也可以创建一个新实例。"
+                : "添加账号后会自动读取实例，也可以创建一个新实例。"
             }
             action={
               <Link href="/accounts" className="button">

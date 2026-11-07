@@ -167,7 +167,7 @@ const statuses: Record<string, [string, string]> = {
   TERMINATING: ["终止中", "warning"],
   AVAILABLE: ["可用", "success"],
   ATTACHED: ["已附加", "success"],
-  unchecked: ["待验证", "neutral"],
+  unchecked: ["待连接", "neutral"],
   connected: ["已连接", "success"],
   error: ["连接异常", "danger"],
   queued: ["等待执行", "neutral"],

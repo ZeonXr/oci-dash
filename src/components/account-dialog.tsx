@@ -2,11 +2,11 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import { Upload } from "lucide-react";
-import type { AccountSummary } from "@/lib/contracts";
+import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { parseOciConfig } from "@/lib/oci-config";
 import { send, useAction } from "./api";
 import { useApp } from "./app-provider";
-import { regionName } from "./format";
+import { regionName, taskHref } from "./format";
 import { Button, ErrorState, Field, Modal } from "./ui";
 
 function suggestedName(file: File | null): string {
@@ -73,7 +73,7 @@ export function AccountDialog({
           privateKey,
         };
       }
-      return send<{ account: AccountSummary }>(
+      return send<{ account: AccountSummary; job?: JobSummary }>(
         account ? `/api/accounts/${encodeURIComponent(account.id)}` : "/api/accounts",
         body,
         account ? "PATCH" : "POST",
@@ -82,7 +82,14 @@ export function AccountDialog({
     if (response) {
       setKeyFile(null);
       setConfigText("");
-      notify(account ? "账号配置已保存。" : "账号已添加，可以验证连接并同步资源。");
+      notify(
+        account
+          ? response.job
+            ? "配置已保存，正在重新连接并同步资源。"
+            : "账号配置已保存。"
+          : "账号已添加，正在连接并同步资源。",
+        response.job ? taskHref(response.job.id) : undefined,
+      );
       onSaved();
       onClose();
     }

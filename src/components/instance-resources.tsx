@@ -34,7 +34,7 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
     <div className="stack">
       {!instance.vnics.length ? (
         <Card>
-          <EmptyState title="没有网卡信息" description="请同步账号以更新网络资源。" />
+          <EmptyState title="没有网卡信息" description="可在账号页刷新资源，重新读取网络信息。" />
         </Card>
       ) : (
         instance.vnics.map((vnic) => (
@@ -337,7 +337,7 @@ export function StoragePanel({ instance }: { instance: InstanceSummary }) {
           <Card>
             <EmptyState
               title="没有已挂载启动卷"
-              description="同步账号后将显示当前实例的启动卷信息。"
+              description="可在账号页刷新资源，重新读取启动卷信息。"
             />
           </Card>
         )}

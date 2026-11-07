@@ -37,6 +37,7 @@ beforeEach(() => {
   process.env.DEMO_MODE = "false";
 });
 function fixture() {
+  const accountState: AccountSummary = { ...account, regions: [...account.regions] };
   const base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
   const directory = mkdtempSync(join(base, "oci-dash-jobs-test-"));
@@ -49,11 +50,16 @@ function fixture() {
     handles.push(db);
     return {
       db,
-      store: createJobStore({ db, getAccount: () => account, now: () => new Date(time) }),
+      store: createJobStore({ db, getAccount: () => accountState, now: () => new Date(time) }),
     };
   };
   const initial = open();
   const adapter = {
+    verify: vi.fn(async () => ({
+      tenancyName: account.name,
+      homeRegion: account.homeRegion,
+      regions: [...account.regions],
+    })),
     execute: vi.fn(async () => ({
       message: "Cloud operation complete",
       details: { publicIp: "203.0.113.2" },
@@ -70,7 +76,14 @@ function fixture() {
       privateKey: "FAKE_PRIVATE_CREDENTIAL_NEVER_PERSIST",
       region: "test-region",
     }),
-    saveInventory: vi.fn(),
+    saveInventory: vi.fn((_accountId: string, result: InventoryResult) => {
+      accountState.status = result.warnings.length ? "error" : "connected";
+      accountState.lastError = result.warnings.length ? result.warnings.join("; ") : null;
+    }),
+    setAccountError: vi.fn((_accountId: string, message: string) => {
+      accountState.status = "error";
+      accountState.lastError = message;
+    }),
     retryDelayMs: () => 100,
   };
   return {
@@ -78,6 +91,7 @@ function fixture() {
     open,
     adapter,
     dependencies,
+    accountState,
     advance: (ms: number) => {
       time += ms;
     },
@@ -98,6 +112,150 @@ afterEach(() => {
 });
 
 describe("worker with an offline OCI adapter", () => {
+  it.each(["initial connection", "post-operation refresh"])(
+    "keeps inventory publication atomic with lease ownership during %s",
+    async (kind) => {
+      const f = fixture();
+      const peer = f.open();
+      peer.db.pragma("busy_timeout=0");
+      const job =
+        kind === "initial connection"
+          ? f.store.enqueueAccountSync(account.id, "admin")
+          : f.store.enqueueOperation(op, "admin");
+      let takeoverError: unknown;
+      const publish = vi.fn(() => {
+        // A competing process tries to take over precisely while cache publication
+        // is in progress, after the lease expires. It must wait for that commit.
+        f.advance(30_001);
+        try {
+          peer.store.claimNext("replacement");
+        } catch (error) {
+          takeoverError = error;
+        }
+      });
+      await f.once({ ...f.dependencies, saveInventory: publish });
+      expect(publish).toHaveBeenCalledOnce();
+      expect(takeoverError).toMatchObject({ code: "SQLITE_BUSY" });
+      expect(peer.store.claimNext("replacement")?.summary.id).toBe(job.id);
+    },
+  );
+
+  it("verifies an account before inventory and marks it connected only after cache persistence", async () => {
+    const f = fixture();
+    f.accountState.status = "unchecked";
+    const order: string[] = [];
+    f.adapter.verify.mockImplementationOnce(async () => {
+      order.push("verify");
+      expect(f.accountState.status).toBe("unchecked");
+      return {
+        tenancyName: account.name,
+        homeRegion: account.homeRegion,
+        regions: account.regions,
+      };
+    });
+    f.adapter.inventory.mockImplementationOnce(async () => {
+      order.push("inventory");
+      expect(f.accountState.status).toBe("unchecked");
+      return emptyInventory;
+    });
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(order).toEqual(["verify", "inventory"]);
+    expect(f.accountState).toMatchObject({ status: "connected", lastError: null });
+    expect(f.store.getJob(job.id)?.state).toBe("succeeded");
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect(f.dependencies.setAccountError).not.toHaveBeenCalled();
+  });
+
+  it("records a redacted verification failure without reading inventory or replacing cached resources", async () => {
+    const f = fixture();
+    f.adapter.verify.mockRejectedValueOnce(
+      new CloudError("Denied FAKE_PRIVATE_CREDENTIAL_NEVER_PERSIST", "NOT_AUTHENTICATED"),
+    );
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.adapter.inventory).not.toHaveBeenCalled();
+    expect(f.dependencies.saveInventory).not.toHaveBeenCalled();
+    expect(f.dependencies.setAccountError).toHaveBeenCalledWith(account.id, "Denied [REDACTED]");
+    expect(f.accountState).toMatchObject({ status: "error", lastError: "Denied [REDACTED]" });
+    expect(f.store.getJob(job.id)).toMatchObject({ state: "failed", attempt: 1 });
+  });
+
+  it("recovers a retryable connection failure using the same durable job and clears the account error on success", async () => {
+    const f = fixture();
+    f.adapter.verify.mockRejectedValueOnce(
+      new CloudError("Temporary OCI outage", "UNAVAILABLE", true),
+    );
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.store.getJob(job.id)).toMatchObject({ state: "retrying", attempt: 1 });
+    expect(f.accountState).toMatchObject({ status: "error", lastError: "Temporary OCI outage" });
+    expect(f.store.enqueueAccountSync(account.id, "admin").id).toBe(job.id);
+    f.advance(101);
+    await f.once();
+    expect(f.adapter.verify).toHaveBeenCalledTimes(2);
+    expect(f.adapter.inventory).toHaveBeenCalledTimes(1);
+    expect(f.store.getJob(job.id)).toMatchObject({ state: "succeeded", attempt: 2 });
+    expect(f.accountState).toMatchObject({ status: "connected", lastError: null });
+  });
+
+  it("records an inventory failure after verification and preserves the previous cache", async () => {
+    const f = fixture();
+    f.adapter.inventory.mockRejectedValueOnce(
+      new CloudError("Region inventory unavailable", "REGION_ERROR"),
+    );
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.adapter.verify).toHaveBeenCalledOnce();
+    expect(f.dependencies.saveInventory).not.toHaveBeenCalled();
+    expect(f.accountState).toMatchObject({
+      status: "error",
+      lastError: "Region inventory unavailable",
+    });
+    expect(f.store.getJob(job.id)?.state).toBe("failed");
+  });
+
+  it.each(["cancel", "shutdown", "lease-loss"] as const)(
+    "does not overwrite account state when verification fails after %s",
+    async (condition) => {
+      const f = fixture();
+      let started!: () => void, rejectVerify!: (error: Error) => void;
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      f.adapter.verify.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectVerify = reject;
+            started();
+          }),
+      );
+      const shutdown = new AbortController();
+      const job = f.store.enqueueAccountSync(account.id, "admin");
+      const worker = runWorker({
+        signal: shutdown.signal,
+        once: true,
+        dependencies: f.dependencies,
+      });
+      await ready;
+      if (condition === "cancel") f.store.cancelJob(job.id);
+      if (condition === "shutdown") shutdown.abort();
+      if (condition === "lease-loss") {
+        f.advance(30_001);
+        expect(f.store.claimNext("replacement")?.summary.id).toBe(job.id);
+      }
+      rejectVerify(new CloudError("Late obsolete verification failure", "NOT_AUTHENTICATED"));
+      await worker;
+      expect(f.dependencies.setAccountError).not.toHaveBeenCalled();
+      expect(f.dependencies.saveInventory).not.toHaveBeenCalled();
+      expect(f.adapter.inventory).not.toHaveBeenCalled();
+      expect(f.accountState).toMatchObject({ status: "connected", lastError: null });
+      expect(f.store.getJob(job.id)?.state).toBe(
+        condition === "cancel" ? "cancelled" : condition === "shutdown" ? "interrupted" : "running",
+      );
+    },
+  );
+
   it("keeps its heartbeat in demo mode without claiming pre-existing real jobs", async () => {
     const f = fixture();
     const job = f.store.enqueueOperation(op, "admin");
@@ -142,16 +300,23 @@ describe("worker with an offline OCI adapter", () => {
     expect(f.store.getWorkerStatus().online).toBe(false);
   });
 
-  it("queues inventory recovery without reporting a completed mutation as failed", async () => {
+  it("queues a post-write refresh instead of reusing an earlier in-flight account read", async () => {
     const f = fixture();
+    const older = f.store.enqueueAccountSync(account.id, "admin");
+    f.store.claimNext("earlier-reader");
+    f.advance(1);
     f.adapter.inventory.mockRejectedValueOnce(new Error("Inventory read temporarily unavailable"));
     const job = f.store.enqueueOperation(op, "admin");
     await f.once();
     const result = f.store.getJob(job.id)!;
     expect(result.state).toBe("succeeded");
     expect(result.result?.synchronization).toMatchObject({ status: "queued" });
-    const sync = f.store.listJobs().find((j) => j.kind === "sync-account")!;
+    const syncId = (result.result?.synchronization as { jobId: string }).jobId;
+    const sync = f.store.getJob(syncId)!;
+    expect(sync.id).not.toBe(older.id);
     expect(sync).toMatchObject({ state: "queued", attempt: 0 });
+    expect(f.store.claimNext("parallel-reader")).toBeNull();
+    f.store.finish(older.id, "earlier-reader", "succeeded");
     await f.once();
     expect(f.store.getJob(sync.id)?.state).toBe("succeeded");
     expect(f.adapter.execute).toHaveBeenCalledTimes(1);

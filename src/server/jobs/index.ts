@@ -9,12 +9,17 @@ export function getJobStore(): JobStore {
   let store = stores.get(database);
   if (!store) {
     store = createJobStore({ db: database, getAccount });
-    stores.set(database, store);
+    // Schema initialization can be part of a caller's transaction. Do not cache
+    // that store before commit: a rollback may also remove its newly created tables.
+    if (!database.inTransaction) stores.set(database, store);
   }
   return store;
 }
 export const enqueueOperation = (operation: OperationRequest, requestedBy: string) =>
   getJobStore().enqueueOperation(operation, requestedBy);
+export const enqueueAccountSync = (accountId: string, requestedBy: string) =>
+  getJobStore().enqueueAccountSync(accountId, requestedBy);
+export const listAccountSyncJobs = () => getJobStore().listAccountSyncJobs();
 export const listJobs = (limit?: number) => getJobStore().listJobs(limit);
 export const getJob = (id: string) => getJobStore().getJob(id);
 export const getJobEvents = (id: string) => getJobStore().getJobEvents(id);

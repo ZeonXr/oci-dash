@@ -12,9 +12,9 @@ All responses are JSON. Errors: `{error, code?}` with an appropriate HTTP status
 
 - `GET /api/auth/me` → `{user, demo}`; `POST /api/auth/login` with `{username,password,code?}`; `POST /api/auth/logout`.
 - `GET /api/dashboard` → `DashboardData`.
-- `GET /api/accounts` → `{accounts,demo}`; `POST /api/accounts` with `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}`; private key may be pasted/read from a chosen local file in the form. Never fetch the key back.
-- `PATCH /api/accounts/:id` accepts name/regions and optional replacement credentials. `DELETE /api/accounts/:id` removes only this application's account configuration, not cloud resources.
-- `POST /api/accounts/:id/verify` verifies OCI credentials; `POST /api/accounts/:id/sync` queues a durable sync job.
+- `GET /api/accounts` → `{accounts,syncJobs,demo}`; `syncJobs` contains each account's active sync task, or latest finished one. `POST /api/accounts` with `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}` atomically saves the account and queues its initial connection task, returning `{account,job}`. The form parses pasted OCI configuration and reads the selected PEM file. Never fetch the key back.
+- `PATCH /api/accounts/:id` accepts name/regions and optional replacement credentials. Credential or actual region changes atomically queue a connection task; a rename does not. `DELETE /api/accounts/:id` removes only this application's account configuration, not cloud resources.
+- `POST /api/accounts/:id/sync` queues a durable connection/resource refresh task, reusing an active task for that account. The worker verifies credentials before reading inventory and reports failures on the account. `POST /api/accounts/:id/verify` remains available for API diagnostics; normal onboarding needs no separate verification request.
 - `GET /api/instances` → `{instances,demo}`; `GET /api/instances/:id` → `{instance,demo}` (IDs URL encoded).
 - `GET /api/instances/:id/metrics?range=1h|24h|7d` → `MetricsResult`.
 - `GET /api/instances/:id/security` → `{groups,demo}`.

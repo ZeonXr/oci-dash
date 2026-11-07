@@ -20,7 +20,7 @@ const account: AccountSummary = {
   lastError: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
-function fixture() {
+function fixture(extraAccounts: AccountSummary[] = []) {
   const base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
   const directory = mkdtempSync(join(base, "oci-dash-jobs-test-"));
@@ -35,7 +35,11 @@ function fixture() {
     handles.push(db);
     return {
       db,
-      store: createJobStore({ db, getAccount: (id) => (id === account.id ? account : null), now }),
+      store: createJobStore({
+        db,
+        getAccount: (id) => [account, ...extraAccounts].find((item) => item.id === id) ?? null,
+        now,
+      }),
     };
   };
   return {
@@ -68,6 +72,120 @@ afterEach(() => {
 });
 
 describe("durable job store", () => {
+  it("reuses an unfinished account sync across connections and retry states", () => {
+    const f = fixture();
+    const other = f.open();
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    expect(other.store.enqueueAccountSync(account.id, "another-admin").id).toBe(job.id);
+    expect(f.store.claimNext("a")?.operation).toEqual({
+      kind: "sync-account",
+      accountId: account.id,
+      region: account.homeRegion,
+      payload: {},
+    });
+    expect(other.store.enqueueAccountSync(account.id, "admin").state).toBe("running");
+    f.store.retryLater(job.id, "a", "Temporary failure", 100);
+    expect(other.store.enqueueAccountSync(account.id, "admin")).toMatchObject({
+      id: job.id,
+      state: "retrying",
+    });
+    f.advance(101);
+    f.store.claimNext("a");
+    f.store.interrupt(job.id, "a", "Restart requested");
+    expect(other.store.enqueueAccountSync(account.id, "admin")).toMatchObject({
+      id: job.id,
+      state: "interrupted",
+    });
+    expect(f.store.listJobs()).toHaveLength(1);
+  });
+
+  it("queues a fresh connection after cancellation is requested without bypassing its resource lock", () => {
+    const regionalAccount = { ...account, id: "multi-region", regions: ["region-a", "region-b"] };
+    const f = fixture([regionalAccount]);
+    const previous = f.store.enqueueOperation(
+      { kind: "sync-account", accountId: regionalAccount.id, region: "region-b", payload: {} },
+      "admin",
+    );
+    f.store.claimNext("a");
+    f.store.cancelJob(previous.id);
+    const fresh = f.store.enqueueAccountSync(regionalAccount.id, "admin");
+    expect(fresh.id).not.toBe(previous.id);
+    expect(fresh.state).toBe("queued");
+    expect(fresh.region).toBe(regionalAccount.homeRegion);
+    expect(f.store.enqueueAccountSync(regionalAccount.id, "admin").id).toBe(fresh.id);
+    expect(f.store.claimNext("b")).toBeNull();
+    f.store.finish(previous.id, "a", "cancelled");
+    expect(f.store.claimNext("b")?.summary.id).toBe(fresh.id);
+  });
+
+  it("lists one sync per account, preferring active work and resolving equal timestamps by insertion order", () => {
+    const secondAccount = { ...account, id: "account-b", name: "Second account" };
+    const f = fixture([secondAccount]);
+    const older = f.store.enqueueAccountSync(account.id, "admin");
+    f.store.cancelJob(older.id);
+    const latest = f.store.enqueueAccountSync(account.id, "admin");
+    f.store.cancelJob(latest.id);
+    const other = f.store.enqueueAccountSync(secondAccount.id, "admin");
+    f.store.enqueueOperation(operation("unrelated-instance"), "admin");
+    expect(f.store.listAccountSyncJobs().map((job) => job.id)).toEqual([other.id, latest.id]);
+    f.store.retryJob(older.id);
+    expect(f.store.listAccountSyncJobs().find((job) => job.accountId === account.id)).toMatchObject(
+      {
+        id: older.id,
+        state: "queued",
+      },
+    );
+    f.store.cancelJob(older.id);
+    expect(f.store.listAccountSyncJobs().find((job) => job.accountId === account.id)?.id).toBe(
+      latest.id,
+    );
+  });
+
+  it("keeps account-sync enqueue and its events inside a caller's outer transaction", () => {
+    const f = fixture();
+    expect(() =>
+      f.db
+        .transaction(() => {
+          f.store.enqueueAccountSync(account.id, "admin");
+          throw new Error("Account creation must roll back");
+        })
+        .immediate(),
+    ).toThrow("must roll back");
+    expect(f.store.listJobs()).toHaveLength(0);
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM job_events").get()).toEqual({ count: 0 });
+    expect(f.db.prepare("SELECT COUNT(*) AS count FROM job_resources").get()).toEqual({ count: 0 });
+  });
+
+  it("backfills account-wide locks onto already-running legacy regional sync jobs", () => {
+    const regionalAccount = { ...account, id: "legacy-account", regions: ["region-a", "region-b"] };
+    const f = fixture([regionalAccount]);
+    const older = f.store.enqueueOperation(
+      { kind: "sync-account", accountId: regionalAccount.id, region: "region-b", payload: {} },
+      "admin",
+    );
+    f.store.claimNext("older-worker");
+    const legacyKey = `${regionalAccount.id}:sync-account:region-b`;
+    f.db.prepare("UPDATE jobs SET resource_lock=? WHERE id=?").run(legacyKey, older.id);
+    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(older.id);
+    f.db
+      .prepare("INSERT INTO job_resources(job_id,resource_key) VALUES(?,?)")
+      .run(older.id, legacyKey);
+    const upgraded = f.open();
+    const refresh = upgraded.store.enqueueOperation(
+      {
+        kind: "sync-account",
+        accountId: regionalAccount.id,
+        region: regionalAccount.homeRegion,
+        payload: {},
+        idempotencyKey: "post-write-refresh",
+      },
+      "admin",
+    );
+    expect(upgraded.store.claimNext("new-worker")).toBeNull();
+    f.store.finish(older.id, "older-worker", "succeeded");
+    expect(upgraded.store.claimNext("new-worker")?.summary.id).toBe(refresh.id);
+  });
+
   it("deduplicates the same request across a database reopen and rejects different payloads", () => {
     const f = fixture();
     const first = f.store.enqueueOperation(

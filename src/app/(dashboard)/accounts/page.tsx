@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { CheckCircle2, KeyRound, Plus, RefreshCw } from "lucide-react";
+import { KeyRound, Plus, RefreshCw } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { api, send, useAction, useResource } from "@/components/api";
 import { AccountDialog } from "@/components/account-dialog";
@@ -21,12 +21,35 @@ import {
 } from "@/components/ui";
 import { formatDate, regionName, shortId, taskHref } from "@/components/format";
 
+const pendingSyncStates = new Set([
+  "queued",
+  "running",
+  "retrying",
+  "cancel_requested",
+  "interrupted",
+]);
+function connectionLabel(account: AccountSummary, job: JobSummary): string {
+  if (job.state === "queued") return account.lastSyncAt ? "等待刷新" : "等待连接";
+  if (job.state === "retrying") return "正在重试";
+  if (job.state === "cancel_requested") return "正在取消";
+  if (job.state === "interrupted") return "等待恢复";
+  return account.lastSyncAt ? "刷新中" : "连接中";
+}
+function connectionAction(account: AccountSummary, job?: JobSummary): string {
+  if (job && pendingSyncStates.has(job.state)) return connectionLabel(account, job);
+  if (account.status === "error" || job?.state === "failed" || job?.state === "cancelled") {
+    return account.lastSyncAt ? "重试刷新" : "重试连接";
+  }
+  return account.status === "unchecked" ? "连接账号" : "刷新资源";
+}
+
 export default function AccountsPage() {
   const { demo, notify, reloadAccounts } = useApp();
-  const resource = useResource<{ accounts: AccountSummary[]; demo: boolean }>(
-    "/api/accounts",
-    30000,
-  );
+  const resource = useResource<{
+    accounts: AccountSummary[];
+    syncJobs?: JobSummary[];
+    demo: boolean;
+  }>("/api/accounts", 3000);
   const action = useAction();
   const [editing, setEditing] = useState<AccountSummary | null | undefined>(undefined);
   const [removing, setRemoving] = useState<AccountSummary | null>(null);
@@ -36,18 +59,6 @@ export default function AccountsPage() {
     resource.reload();
     reloadAccounts();
   };
-  const verify = async (account: AccountSummary) => {
-    if (demo) return;
-    setBusyKey(`${account.id}:verify`);
-    const response = await action.run(() =>
-      send(`/api/accounts/${encodeURIComponent(account.id)}/verify`),
-    );
-    if (response) {
-      notify(`${account.name} 连接验证完成。`);
-      refresh();
-    }
-    setBusyKey("");
-  };
   const sync = async (account: AccountSummary) => {
     if (demo) return;
     setBusyKey(`${account.id}:sync`);
@@ -55,7 +66,18 @@ export default function AccountsPage() {
       send<{ job: JobSummary }>(`/api/accounts/${encodeURIComponent(account.id)}/sync`),
     );
     if (response) {
-      notify(`${account.name} 的资源同步已加入任务。`, taskHref(response.job.id));
+      notify(`${account.name} 正在检查连接并读取资源。`, taskHref(response.job.id));
+      resource.setData((current) =>
+        current
+          ? {
+              ...current,
+              syncJobs: [
+                ...(current.syncJobs ?? []).filter((job) => job.accountId !== account.id),
+                response.job,
+              ],
+            }
+          : current,
+      );
       refresh();
     }
     setBusyKey("");
@@ -71,13 +93,10 @@ export default function AccountsPage() {
       refresh();
     }
   };
+  const syncJobs = new Map((resource.data?.syncJobs ?? []).map((job) => [job.accountId, job]));
   return (
     <>
       <PageHeader title="账号" description="管理 OCI 连接凭据与区域同步范围。">
-        <Button onClick={refresh} loading={resource.refreshing}>
-          <RefreshCw size={15} />
-          刷新
-        </Button>
         <Button variant="primary" disabled={demo} onClick={() => setEditing(null)}>
           <Plus size={16} />
           添加账号
@@ -90,76 +109,78 @@ export default function AccountsPage() {
           <LoadingState />
         ) : resource.data?.accounts.length ? (
           <div className="grid-3">
-            {resource.data.accounts.map((account) => (
-              <Card key={account.id} className="account-card">
-                <div className="account-heading">
-                  <span className="resource-icon">
-                    <KeyRound size={20} />
-                  </span>
-                  <div className="grow">
-                    <h2>{account.name}</h2>
-                    <p className="muted small">{regionName(account.homeRegion)} · 主区域</p>
-                  </div>
-                  <Status value={account.status} />
-                </div>
-                <div className="account-meta">
-                  <div className="row">
-                    <span>租户</span>
-                    <span className="mono" title={account.tenancyId}>
-                      {shortId(account.tenancyId)}
+            {resource.data.accounts.map((account) => {
+              const job = syncJobs.get(account.id);
+              const syncing = Boolean(job && pendingSyncStates.has(job.state));
+              const error = account.lastError || (job?.state === "failed" ? job.lastError : null);
+              const label = connectionAction(account, job);
+              const requesting = busyKey === `${account.id}:sync`;
+              return (
+                <Card key={account.id} className="account-card">
+                  <div className="account-heading">
+                    <span className="resource-icon">
+                      <KeyRound size={20} />
                     </span>
-                    <CopyButton value={account.tenancyId} />
+                    <div className="grow">
+                      <h2>{account.name}</h2>
+                      <p className="muted small">{regionName(account.homeRegion)} · 主区域</p>
+                    </div>
+                    {syncing && job ? (
+                      <Badge tone="info">{connectionLabel(account, job)}</Badge>
+                    ) : (
+                      <Status value={account.status} />
+                    )}
                   </div>
-                  <div className="region-chips">
-                    {account.regions.map((region) => (
-                      <Badge key={region}>{regionName(region)}</Badge>
-                    ))}
+                  <div className="account-meta">
+                    <div className="row">
+                      <span>租户</span>
+                      <span className="mono" title={account.tenancyId}>
+                        {shortId(account.tenancyId)}
+                      </span>
+                      <CopyButton value={account.tenancyId} />
+                    </div>
+                    <div className="region-chips">
+                      {account.regions.map((region) => (
+                        <Badge key={region}>{regionName(region)}</Badge>
+                      ))}
+                    </div>
+                    <span>最近同步 {formatDate(account.lastSyncAt, true)}</span>
                   </div>
-                  <span>最近同步 {formatDate(account.lastSyncAt, true)}</span>
-                </div>
-                {account.lastError && <Alert tone="error">{account.lastError}</Alert>}
-                <div className="account-actions">
-                  <Button
-                    className="button-sm"
-                    disabled={demo || action.pending}
-                    loading={busyKey === `${account.id}:verify`}
-                    onClick={() => verify(account)}
-                  >
-                    <CheckCircle2 size={13} />
-                    验证
-                  </Button>
-                  <Button
-                    className="button-sm"
-                    disabled={demo || action.pending}
-                    loading={busyKey === `${account.id}:sync`}
-                    onClick={() => sync(account)}
-                  >
-                    <RefreshCw size={13} />
-                    同步
-                  </Button>
-                  <Button
-                    className="button-sm"
-                    variant="ghost"
-                    disabled={demo}
-                    onClick={() => setEditing(account)}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    className="button-sm danger-text"
-                    variant="ghost"
-                    disabled={demo}
-                    onClick={() => {
-                      setRemoving(account);
-                      setRemoveName("");
-                      action.clearError();
-                    }}
-                  >
-                    移除
-                  </Button>
-                </div>
-              </Card>
-            ))}
+                  {!syncing && error && <Alert tone="error">{error}</Alert>}
+                  <div className="account-actions">
+                    <Button
+                      className="button-sm"
+                      disabled={demo || action.pending || syncing}
+                      loading={requesting || syncing}
+                      onClick={() => sync(account)}
+                    >
+                      {!requesting && !syncing && <RefreshCw size={13} />}
+                      {label}
+                    </Button>
+                    <Button
+                      className="button-sm"
+                      variant="ghost"
+                      disabled={demo}
+                      onClick={() => setEditing(account)}
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      className="button-sm danger-text"
+                      variant="ghost"
+                      disabled={demo || syncing}
+                      onClick={() => {
+                        setRemoving(account);
+                        setRemoveName("");
+                        action.clearError();
+                      }}
+                    >
+                      移除
+                    </Button>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         ) : (
           <Card>

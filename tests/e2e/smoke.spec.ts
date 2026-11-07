@@ -253,7 +253,7 @@ test("账号列表完成加载且凭据操作只读", async ({ page }, testInfo)
   await page.goto("/accounts");
   await expect(page.locator(".account-card")).toHaveCount(demo.accounts.length);
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
-  for (const name of ["验证", "同步", "编辑", "移除"]) {
+  for (const name of ["刷新资源", "编辑", "移除"]) {
     await test.step(`${name}按钮在演示模式禁用`, async () => {
       for (const button of await page.getByRole("button", { name, exact: true }).all())
         await expect(button).toBeDisabled();

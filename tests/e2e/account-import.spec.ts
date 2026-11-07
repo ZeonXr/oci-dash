@@ -1,11 +1,11 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { expect, test as base, type Locator, type Page, type TestInfo } from "@playwright/test";
-import type { AccountSummary } from "../../src/lib/contracts";
+import type { AccountSummary, JobSummary } from "../../src/lib/contracts";
 
 // All API traffic is mocked before navigation. No credentials, sessions, or cloud
 // writes reach the server; only the local application shell and assets are loaded.
-type Write = { method: string; body: Record<string, unknown> };
-type MockApi = { accounts: AccountSummary[]; writes: Write[] };
+type Write = { method: string; path: string; body: Record<string, unknown> };
+type MockApi = { accounts: AccountSummary[]; syncJobs: JobSummary[]; writes: Write[] };
 const sample: AccountSummary = {
   id: "ui-test-account",
   name: "Test account",
@@ -19,13 +19,30 @@ const sample: AccountSummary = {
   lastError: null,
   createdAt: "2026-11-07T00:00:00Z",
 };
+const queuedSync: JobSummary = {
+  id: "ui-test-sync",
+  kind: "sync-account",
+  accountId: sample.id,
+  accountName: sample.name,
+  region: sample.homeRegion,
+  resourceId: null,
+  state: "queued",
+  attempt: 0,
+  maxAttempts: 3,
+  createdAt: sample.createdAt,
+  startedAt: null,
+  finishedAt: null,
+  nextRunAt: null,
+  lastError: null,
+  result: null,
+};
 const test = base.extend<{ mockApi: MockApi }>({
   mockApi: async ({ context, baseURL }, use) => {
     const origin = new URL(baseURL || "http://localhost:3000").origin;
     if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname)) {
       throw new Error("Account UI tests require a local isolated server.");
     }
-    const state: MockApi = { accounts: [], writes: [] };
+    const state: MockApi = { accounts: [], syncJobs: [], writes: [] };
     const unexpected: string[] = [];
     let pageErrors = 0;
     const trackErrors = (page: Page) => page.on("pageerror", () => pageErrors++);
@@ -44,17 +61,28 @@ const test = base.extend<{ mockApi: MockApi }>({
           });
         }
         if (method === "GET" && url.pathname === "/api/accounts") {
-          return json({ accounts: state.accounts, demo: false });
+          return json({ accounts: state.accounts, syncJobs: state.syncJobs, demo: false });
         }
         if (
           (method === "POST" && url.pathname === "/api/accounts") ||
           (method === "PATCH" && url.pathname === `/api/accounts/${sample.id}`)
         ) {
           const body = request.postDataJSON() as Record<string, unknown>;
-          state.writes.push({ method, body });
+          state.writes.push({ method, path: url.pathname, body });
           const account = { ...sample, name: String(body.name), regions: body.regions as string[] };
           state.accounts = [account];
-          return json({ account }); // Never echo the private key into a response.
+          if (method === "POST") {
+            const syncJob = { ...queuedSync, accountName: account.name };
+            state.syncJobs = [syncJob];
+            return json({ account, job: syncJob });
+          }
+          return json({ account }); // Metadata edits never echo a private key or invent a job.
+        }
+        if (method === "POST" && url.pathname === `/api/accounts/${sample.id}/sync`) {
+          state.writes.push({ method, path: url.pathname, body: request.postDataJSON() });
+          const job = { ...queuedSync, id: "ui-test-sync-retry" };
+          state.syncJobs = [job];
+          return json({ job });
         }
       } else if (url.origin === origin && method === "GET") {
         // Next.js link prefetches are unnecessary for this isolated form test.
@@ -184,7 +212,49 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
     "The uploaded key must be submitted unchanged",
   ).toBe(true);
   expect("key_file" in body || "profileName" in body).toBe(false);
-  await expect(page.locator(".account-card").getByRole("heading")).toHaveText("test-account");
+  const card = page.locator(".account-card");
+  await expect(card.getByRole("heading")).toHaveText("test-account");
+  await expect(card).toContainText("等待连接");
+  await expect(card.getByRole("button", { name: /^(验证|同步)$/ })).toHaveCount(0);
+  mockApi.accounts[0] = {
+    ...mockApi.accounts[0],
+    status: "connected",
+    lastSyncAt: sample.createdAt,
+  };
+  mockApi.syncJobs[0] = {
+    ...mockApi.syncJobs[0],
+    state: "succeeded",
+    finishedAt: sample.createdAt,
+  };
+  // The 3-second account poll must update the card without a manual refresh.
+  await expect(card.getByText("已连接", { exact: true })).toBeVisible({ timeout: 8000 });
+  await expect(card.getByRole("button", { name: "刷新资源", exact: true })).toBeEnabled();
+  expect(mockApi.writes.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "POST /api/accounts",
+  ]);
+});
+
+test("连接失败可重试，排队期间禁用按钮且不重复提交", async ({ page, mockApi }) => {
+  const error = "测试连接失败，请检查账号配置。";
+  mockApi.accounts = [{ ...sample, status: "error", lastError: error }];
+  mockApi.syncJobs = [
+    { ...queuedSync, state: "failed", lastError: error, finishedAt: sample.createdAt },
+  ];
+  await page.goto("/accounts");
+  const card = page.locator(".account-card");
+  await expect(card).toContainText(error);
+  const retry = card.getByRole("button", { name: "重试连接", exact: true });
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  const waiting = card.getByRole("button", { name: "等待连接", exact: true });
+  await expect(waiting).toBeDisabled();
+  await expect(card.getByRole("button", { name: "重试连接", exact: true })).toHaveCount(0);
+  // A native click on a disabled button must not dispatch another request.
+  await waiting.evaluate((element) => (element as HTMLButtonElement).click());
+  await expect(waiting).toBeDisabled();
+  expect(mockApi.writes.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    `POST /api/accounts/${sample.id}/sync`,
+  ]);
 });
 
 test("缺少配置字段与非 PEM 文件均在提交前显示错误", async ({ page, mockApi }) => {
@@ -208,7 +278,7 @@ test("缺少配置字段与非 PEM 文件均在提交前显示错误", async ({ 
   await expect(dialog).toBeVisible();
 });
 
-test("编辑账号只修改名称与区域，不读取或提交现有私钥", async ({ page, mockApi }) => {
+test("编辑名称不读取或提交现有私钥，也不重新连接", async ({ page, mockApi }) => {
   mockApi.accounts = [{ ...sample }];
   await page.goto("/accounts");
   await page.locator(".account-card").getByRole("button", { name: "编辑", exact: true }).click();
@@ -217,7 +287,7 @@ test("编辑账号只修改名称与区域，不读取或提交现有私钥", as
   await expect(dialog.getByLabel(/^OCI 配置文本/)).toHaveCount(0);
   await expect(dialog.locator('input[type="file"]')).toHaveCount(0);
   await dialog.getByLabel(/^账号名称/).fill("Renamed account");
-  await dialog.getByLabel(/^同步区域/).fill("ap-osaka-1, ap-tokyo-1\nap-osaka-1");
+  await dialog.getByLabel(/^同步区域/).fill("ap-tokyo-1\nap-tokyo-1");
   await dialog.getByRole("button", { name: "保存更改", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   expect(mockApi.writes.length).toBe(1);
@@ -225,7 +295,7 @@ test("编辑账号只修改名称与区域，不读取或提交现有私钥", as
   expect(method).toBe("PATCH");
   expect(Object.keys(body).sort()).toEqual(["name", "regions"]);
   expect(body.name).toBe("Renamed account");
-  expect(body.regions).toEqual(["ap-tokyo-1", "ap-osaka-1"]);
+  expect(body.regions).toEqual(["ap-tokyo-1"]);
   await expect(page.locator(".account-card").getByRole("heading")).toHaveText("Renamed account");
 });
 

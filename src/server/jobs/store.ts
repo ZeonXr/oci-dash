@@ -152,9 +152,11 @@ function summary(r: JobRow): JobSummary {
   };
 }
 function resourceKeys(operation: OperationRequest): string[] {
-  const keys = [
-    `${operation.accountId}:${operation.resourceId || `${operation.kind}:${operation.region}`}`,
-  ];
+  const target =
+    operation.kind === "sync-account"
+      ? "sync-account"
+      : operation.resourceId || `${operation.kind}:${operation.region}`;
+  const keys = [`${operation.accountId}:${target}`];
   const fields = operation.kind.startsWith("security-rule-")
     ? ["groupId"]
     : operation.kind === "boot-volume-update"
@@ -183,6 +185,7 @@ export function ensureJobSchema(db: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs(account_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state,next_run_at,created_at);
+    CREATE INDEX IF NOT EXISTS jobs_account_sync ON jobs(account_id,kind,created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_resource ON jobs(resource_lock) WHERE state IN ('running','cancel_requested');
     CREATE TABLE IF NOT EXISTS job_resources (
       job_id TEXT NOT NULL REFERENCES jobs(id), resource_key TEXT NOT NULL, PRIMARY KEY(job_id,resource_key)
@@ -310,7 +313,10 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         }
         const id = randomUUID(),
           created = timestamp();
-        const resource = operation.resourceId || `${operation.kind}:${operation.region}`;
+        const resource =
+          operation.kind === "sync-account"
+            ? "sync-account"
+            : operation.resourceId || `${operation.kind}:${operation.region}`;
         db.prepare(
           `INSERT INTO jobs(id,kind,account_id,account_name,region,resource_id,resource_lock,state,
         max_attempts,created_at,next_run_at,operation_json,requested_by,idempotency_key,payload_hash)
@@ -340,6 +346,43 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         return summary(required(id));
       })
       .immediate();
+  }
+  function enqueueAccountSync(accountId: string, requestedBy: string): JobSummary {
+    return db
+      .transaction(() => {
+        const account = getAccount(accountId);
+        if (!account) throw new JobError("Account not found.", "ACCOUNT_NOT_FOUND", 404);
+        if (!requestedBy || requestedBy.length > 200)
+          throw new JobError("The requesting user is required.", "INVALID_REQUESTER");
+        const existing = db
+          .prepare(
+            `SELECT * FROM jobs WHERE account_id=? AND kind='sync-account'
+              AND state IN ('queued','running','retrying','interrupted') AND cancel_requested=0
+              ORDER BY created_at DESC,rowid DESC LIMIT 1`,
+          )
+          .get(accountId) as JobRow | undefined;
+        if (existing) return summary(existing);
+        return enqueueOperation(
+          { kind: "sync-account", accountId, region: account.homeRegion, payload: {} },
+          requestedBy,
+        );
+      })
+      .immediate();
+  }
+  function listAccountSyncJobs(): JobSummary[] {
+    return (
+      db
+        .prepare(
+          `SELECT * FROM (
+            SELECT j.*,j.rowid AS insertion_order,
+              ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY
+                CASE WHEN state IN ('queued','running','retrying','cancel_requested','interrupted') THEN 0 ELSE 1 END,
+                created_at DESC,j.rowid DESC) AS account_rank
+            FROM jobs j WHERE kind='sync-account'
+          ) WHERE account_rank=1 ORDER BY created_at DESC,insertion_order DESC`,
+        )
+        .all() as JobRow[]
+    ).map(summary);
   }
   function cancelJob(id: string): JobSummary {
     return db
@@ -594,6 +637,8 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
   }
   return {
     enqueueOperation,
+    enqueueAccountSync,
+    listAccountSyncJobs,
     cancelJob,
     retryJob,
     claimNext,
@@ -658,6 +703,16 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     },
     assertLease(id: string, workerId: string) {
       owned(id, workerId);
+    },
+    withActiveLease(id: string, workerId: string, action: () => void): boolean {
+      return db
+        .transaction(() => {
+          const current = owned(id, workerId);
+          if (current.cancel_requested) return false;
+          action();
+          return true;
+        })
+        .immediate();
     },
   };
 }

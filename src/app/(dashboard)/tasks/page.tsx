@@ -158,7 +158,7 @@ export default function TasksPage() {
         ) : (
           <EmptyState
             title={query || account || state ? "没有匹配的任务" : "暂无任务"}
-            description="同步账号、创建实例或提交资源操作后，可以在这里查看执行记录。"
+            description="添加账号、刷新资源或提交实例操作后，可以在这里查看执行记录。"
           />
         )}
       </section>

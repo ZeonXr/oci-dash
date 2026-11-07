@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { DashboardData, OperationRequest } from "@/lib/contracts";
 import {
@@ -18,15 +17,14 @@ import { AppError, safeMessage } from "./errors";
 import { json, readJson, errorResponse } from "./http";
 import { accountSchema, accountPatchSchema, regionSchema, validateOperation } from "./validation";
 import {
-  createAccount,
   deleteAccount,
   getAccount,
   getCredentials,
   getCredentialSnapshot,
   listAccounts,
   setAccountStatus,
-  updateAccount,
 } from "./accounts";
+import { createAccountConnection, updateAccountConnection } from "./account-connection";
 import { getInstance, listInstances, recentActivity } from "./inventory";
 import {
   demoAccounts,
@@ -45,6 +43,8 @@ import {
   cancelJob,
   retryJob,
   getWorkerStatus,
+  enqueueAccountSync,
+  listAccountSyncJobs,
 } from "./jobs";
 import { ociAdapter } from "./oci/adapter";
 
@@ -111,11 +111,18 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       return json(data);
     }
     if (path === "accounts") {
-      if (method === "GET") return json({ accounts: demo ? demoAccounts() : listAccounts(), demo });
+      if (method === "GET")
+        return json({
+          accounts: demo ? demoAccounts() : listAccounts(),
+          syncJobs: demo
+            ? demoJobs().filter((job) => job.kind === "sync-account")
+            : listAccountSyncJobs(),
+          demo,
+        });
       if (method === "POST") {
         liveOnly();
         return json(
-          { account: createAccount(accountSchema.parse(await readJson(request)), user.username) },
+          createAccountConnection(accountSchema.parse(await readJson(request)), user.username),
           201,
         );
       }
@@ -124,13 +131,13 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       const id = segments[1];
       if (segments.length === 2 && method === "PATCH") {
         liveOnly();
-        return json({
-          account: updateAccount(
+        return json(
+          updateAccountConnection(
             id,
             accountPatchSchema.parse(await readJson(request)),
             user.username,
           ),
-        });
+        );
       }
       if (segments.length === 2 && method === "DELETE") {
         liveOnly();
@@ -158,17 +165,8 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         liveOnly();
         const account = getAccount(id);
         if (!account) throw new AppError("账号不存在", 404);
-        const job = enqueueOperation(
-          {
-            kind: "sync-account",
-            accountId: id,
-            region: account.homeRegion,
-            payload: {},
-            idempotencyKey: request.headers.get("idempotency-key") ?? randomUUID(),
-          },
-          user.username,
-        );
-        audit(user.username, "inventory.sync", account.name, "资源同步已排队");
+        const job = enqueueAccountSync(id, user.username);
+        audit(user.username, "inventory.sync", account.name, "连接检查与资源刷新已排队");
         return json({ job }, 202);
       }
       if (segments.length === 3 && method === "GET" && segments[2] === "create-options") {

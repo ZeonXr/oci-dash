@@ -18,9 +18,10 @@ import {
 
 export interface WorkerDependencies {
   store: JobStore;
-  adapter: Pick<OciAdapter, "inventory" | "execute">;
+  adapter: Pick<OciAdapter, "verify" | "inventory" | "execute">;
   getCredentials(accountId: string, region: string): OciCredentials;
   saveInventory(accountId: string, result: InventoryResult): void;
+  setAccountError(accountId: string, message: string): void;
   retryDelayMs?: (attempt: number) => number;
 }
 export interface RunWorkerOptions {
@@ -44,14 +45,33 @@ const defaultRetryDelay = (attempt: number) =>
   Math.min(60_000, 2_000 * 2 ** Math.max(0, attempt - 1)) + Math.floor(Math.random() * 1000);
 
 async function defaultDependencies(): Promise<WorkerDependencies> {
-  const [{ getJobStore }, { getCredentials }, { saveInventory }, { ociAdapter }] =
-    await Promise.all([
-      import("./index"),
-      import("@/server/accounts"),
-      import("@/server/inventory"),
-      import("@/server/oci/adapter"),
-    ]);
-  return { store: getJobStore(), adapter: ociAdapter, getCredentials, saveInventory };
+  const [
+    { getJobStore },
+    { getCredentialSnapshot, setAccountStatus },
+    { saveInventory },
+    { ociAdapter },
+  ] = await Promise.all([
+    import("./index"),
+    import("@/server/accounts"),
+    import("@/server/inventory"),
+    import("@/server/oci/adapter"),
+  ]);
+  const revisions = new Map<string, number>();
+  return {
+    store: getJobStore(),
+    adapter: ociAdapter,
+    getCredentials(accountId, region) {
+      revisions.delete(accountId);
+      const snapshot = getCredentialSnapshot(accountId, region);
+      revisions.set(accountId, snapshot.revision);
+      return snapshot.credentials;
+    },
+    saveInventory,
+    setAccountError(accountId, message) {
+      const revision = revisions.get(accountId);
+      if (revision !== undefined) setAccountStatus(accountId, "error", message, revision);
+    },
+  };
 }
 
 async function executeClaimed(
@@ -62,7 +82,7 @@ async function executeClaimed(
   leaseMs: number,
   heartbeatIntervalMs: number,
 ): Promise<void> {
-  const { store, adapter, getCredentials, saveInventory } = dependencies;
+  const { store, adapter, getCredentials, saveInventory, setAccountError } = dependencies;
   const id = job.summary.id;
   const controller = new AbortController();
   const onShutdown = () => controller.abort(signal.reason || new Error("Worker is shutting down."));
@@ -120,9 +140,15 @@ async function executeClaimed(
     credentials = getCredentials(account.id, job.operation.region);
     const regions = account.regions.length ? account.regions : [account.homeRegion];
     if (job.operation.kind === "sync-account") {
+      await context.progress("正在验证 OCI 账号连接。");
+      await adapter.verify(credentials);
+      check();
+      await context.progress("账号连接验证成功，正在读取云资源。");
       const result = await adapter.inventory(credentials, account, regions, context);
       check();
-      saveInventory(account.id, result);
+      if (!store.withActiveLease(id, workerId, () => saveInventory(account.id, result))) {
+        throw new CancellationError();
+      }
       store.finish(id, workerId, "succeeded", {
         message: "Inventory synchronized.",
         instances: result.instances.length,
@@ -149,8 +175,9 @@ async function executeClaimed(
     try {
       check();
       const inventory = await adapter.inventory(credentials, account, regions, context);
-      store.assertLease(id, workerId);
-      saveInventory(account.id, inventory);
+      if (!store.withActiveLease(id, workerId, () => saveInventory(account.id, inventory))) {
+        throw new CancellationError();
+      }
       if (inventory.warnings.length)
         synchronization = { status: "completed-with-warnings", warnings: inventory.warnings };
     } catch (error) {
@@ -158,6 +185,8 @@ async function executeClaimed(
         throw error;
       store.assertLease(id, workerId);
       const message = safeErrorMessage(error, [credentials.privateKey]);
+      // A post-write refresh must run after the write. Reusing an earlier in-flight
+      // account read could otherwise publish a snapshot taken before this operation.
       const sync = store.enqueueOperation(
         {
           kind: "sync-account",
@@ -199,6 +228,12 @@ async function executeClaimed(
       if (store.cancellationRequested(id)) {
         store.finish(id, workerId, "cancelled", undefined, message);
         return;
+      }
+      if (job.operation.kind === "sync-account") {
+        store.withActiveLease(id, workerId, () => {
+          if (!signal.aborted && !controller.signal.aborted)
+            setAccountError(job.operation.accountId, message);
+        });
       }
       const retryable = Boolean(
         error && typeof error === "object" && "retryable" in error && error.retryable === true,

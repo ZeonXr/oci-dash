@@ -188,7 +188,7 @@ export default function OverviewPage() {
               ) : (
                 <EmptyState
                   title="暂无实例资源"
-                  description="在账号页面同步资源，或创建一个新实例。"
+                  description="添加账号后会自动加载资源，也可以创建一个新实例。"
                 />
               )}
             </Card>
@@ -228,7 +228,7 @@ export default function OverviewPage() {
                   title="尚未同步实例"
                   action={
                     <Link href="/accounts" className="text-link">
-                      前往账号同步
+                      前往账号
                     </Link>
                   }
                 />

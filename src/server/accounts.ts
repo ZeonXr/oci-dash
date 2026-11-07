@@ -99,7 +99,7 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
       createdAt,
     })
     .run();
-  audit(actor, "account.create", input.name, "账号已添加，待连接验证");
+  audit(actor, "account.create", input.name, "账号配置已保存");
   return getAccount(id)!;
 }
 export function updateAccount(
