@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useState, type SubmitEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Check, KeyRound, LockKeyhole, Moon, ShieldCheck, Sun } from "lucide-react";
 import { useApp } from "@/components/app-provider";
@@ -59,7 +59,7 @@ export default function SettingsPage() {
     close();
     setModal(value);
   };
-  const changePassword = async (event: FormEvent) => {
+  const changePassword = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo || newPassword !== repeat) return;
     const result = await action.run(() =>
@@ -75,7 +75,7 @@ export default function SettingsPage() {
       router.refresh();
     }
   };
-  const prepareMfa = async (event: FormEvent) => {
+  const prepareMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo) return;
     const result = await action.run(() => send<MfaSetup>("/api/settings/mfa/setup", { password }));
@@ -84,7 +84,7 @@ export default function SettingsPage() {
       setPassword("");
     }
   };
-  const confirmMfa = async (event: FormEvent) => {
+  const confirmMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo) return;
     const result = await action.run(() =>
@@ -100,7 +100,7 @@ export default function SettingsPage() {
       notify("双重验证已开启，请保存恢复码。");
     }
   };
-  const disableMfa = async (event: FormEvent) => {
+  const disableMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo) return;
     const result = await action.run(() =>

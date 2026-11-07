@@ -168,6 +168,7 @@ test("总览展示资源指标与动态监控", async ({ page }, testInfo) => {
 
 test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
   await page.goto("/instances");
+  await page.getByRole("button", { name: "表格视图", exact: true }).click();
   const rows = page.locator(".resource-table tbody tr");
   await expect(rows.first()).toBeVisible();
   await test.step("名称搜索返回正确实例", async () => {
@@ -344,6 +345,7 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
       "true",
     );
     await page.locator(".sidebar nav").getByRole("link", { name: "实例", exact: true }).click();
+    await page.getByRole("button", { name: "表格视图", exact: true }).click();
     await expect(page.locator(".resource-table tbody tr").first()).toBeVisible();
     await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
   });

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type SubmitEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -58,7 +58,7 @@ function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClos
   const [name, setName] = useState(instance.displayName);
   const action = useAction();
   const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const submit = async (e: FormEvent) => {
+  const submit = async (e: SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (demo || !name.trim()) return;
     const response = await action.run(() =>

@@ -33,6 +33,9 @@ import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
 import { RegionLabel } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
+import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
+import { publicIpRotation, rotationNeedsRefresh } from "@/components/public-ip-rotation";
+import { useInstanceJobs } from "@/components/use-instance-jobs";
 
 type InstanceView = "table" | "cards";
 const viewPreference = "oci-dash:instances:view";
@@ -51,8 +54,10 @@ function InstancesContent() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [sort, setSort] = useState<"ascending" | "descending">("ascending");
-  const [view, setView] = useState<InstanceView>("table");
+  const [view, setView] = useState<InstanceView>("cards");
   const [creating, setCreating] = useState(false);
+  const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
+  const instanceJobs = useInstanceJobs(resource.reload);
   useEffect(() => {
     try {
       const saved = localStorage.getItem(viewPreference);
@@ -167,6 +172,14 @@ function InstancesContent() {
           <ErrorState message={sync.error || resource.error!} retry={sync.refresh} />
         </div>
       )}
+      {instanceJobs.error && (
+        <div style={{ marginBottom: 18 }}>
+          <ErrorState
+            message={`任务状态读取失败：${instanceJobs.error}`}
+            retry={instanceJobs.reload}
+          />
+        </div>
+      )}
       <div className="filters instance-filters">
         <div className="search-field">
           <Search size={16} />
@@ -254,9 +267,50 @@ function InstancesContent() {
           {filtered.length ? (
             <>
               <div className="instance-cards">
-                {visible.map((instance) => (
-                  <InstanceCard key={instance.id} instance={instance} />
-                ))}
+                {visible.map((instance) => {
+                  const rotation = instanceJobs.jobs.find(
+                    (job) =>
+                      job.kind === "public-ip-rotate" &&
+                      job.accountId === instance.accountId &&
+                      job.resourceId === instance.id,
+                  );
+                  const synchronization = rotation?.result?.synchronization as
+                    { status?: string; jobId?: string } | undefined;
+                  const syncJob =
+                    rotation?.state === "succeeded" && synchronization?.status === "queued"
+                      ? instanceJobs.jobs.find((job) => job.id === synchronization.jobId)
+                      : undefined;
+                  const needsRefresh = rotationNeedsRefresh(instance, rotation, syncJob);
+                  return (
+                    <InstanceCard
+                      key={instance.id}
+                      instance={instance}
+                      rotationDisabled={
+                        instanceJobs.loading ||
+                        Boolean(resource.error) ||
+                        needsRefresh ||
+                        Boolean(instanceJobs.error) ||
+                        instanceJobs.busyInstanceIds.has(instance.id)
+                      }
+                      rotationJob={syncJob || rotation}
+                      rotationWarning={needsRefresh}
+                      onRotate={(vnic, binding) => {
+                        if (
+                          demo ||
+                          resource.error ||
+                          needsRefresh ||
+                          instanceJobs.loading ||
+                          instanceJobs.error ||
+                          instanceJobs.busyInstanceIds.has(instance.id) ||
+                          !["RUNNING", "STOPPED"].includes(instance.state)
+                        )
+                          return;
+                        const next = publicIpRotation(instance, vnic, binding);
+                        if (next) setOperation({ ...next, onSuccess: instanceJobs.track });
+                      }}
+                    />
+                  );
+                })}
               </div>
               <div className="instance-cards-pagination">{pagination}</div>
             </>
@@ -338,6 +392,7 @@ function InstancesContent() {
         </TablePanel>
       )}
       {creating && <CreateInstanceDialog onClose={() => setCreating(false)} />}
+      {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
     </>
   );
 }

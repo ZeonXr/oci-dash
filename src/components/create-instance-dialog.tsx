@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type SubmitEvent } from "react";
 import { Upload } from "lucide-react";
 import type { CreateOptions, JobSummary } from "@/lib/contracts";
 import { useApp } from "./app-provider";
@@ -61,7 +61,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
     setRegion(accounts.find((a) => a.id === id)?.homeRegion || "");
     setCompartment("");
   };
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo || !acknowledged || !options.data) return;
     const response = await action.run(() =>

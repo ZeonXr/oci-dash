@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type SubmitEvent } from "react";
 import { Upload } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { parseOciConfig } from "@/lib/oci-config";
@@ -41,7 +41,7 @@ export function AccountDialog({
     }
   }, [configText]);
 
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo) return;
     const response = await action.run(async () => {

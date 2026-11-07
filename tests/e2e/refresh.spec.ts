@@ -267,6 +267,7 @@ const rows = (page: Page) => page.locator(".resource-table tbody tr");
 const cards = (page: Page) => page.locator("article.instance-card");
 async function openInstances(page: Page) {
   await page.goto("/instances");
+  await page.getByRole("button", { name: "表格视图", exact: true }).click();
   await expect(rows(page)).toHaveCount(10);
   await expect(refreshButton(page)).toBeEnabled();
 }
@@ -401,10 +402,17 @@ test("慢 GET 不被五秒轮询反复取消，完成后继续正常轮询", asy
   }
 });
 
-test("实例视图共享排序且记住偏好，列表不再提供多选或批量操作", async ({ page, refreshApi }) => {
-  await openInstances(page);
+test("空偏好默认卡片，显式视图选择持久化且两种视图共享排序", async ({ page, refreshApi }) => {
+  await page.goto("/instances");
   const tableView = page.getByRole("button", { name: "表格视图", exact: true });
   const cardView = page.getByRole("button", { name: "卡片视图", exact: true });
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(tableView).toHaveAttribute("aria-pressed", "false");
+  await expect(cards(page)).toHaveCount(10);
+  expect(await page.evaluate(() => localStorage.getItem("oci-dash:instances:view"))).toBeNull();
+  await tableView.click();
+  await expect(rows(page)).toHaveCount(10);
+  await expect(refreshButton(page)).toBeEnabled();
   await expect(tableView).toHaveAttribute("aria-pressed", "true");
   await expect(cardView).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("checkbox")).toHaveCount(0);
@@ -477,6 +485,35 @@ test("实例视图共享排序且记住偏好，列表不再提供多选或批�
   await expect(tableView).toHaveAttribute("aria-pressed", "true");
   await expect(rows(page)).toHaveCount(10);
   await expect(cards(page)).toHaveCount(0);
+});
+
+test("视图偏好存储不可用时默认卡片，本次访问仍可切换", async ({ page, context, refreshApi }) => {
+  await context.addInitScript(() => {
+    const getItem = Storage.prototype.getItem;
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.getItem = function (key) {
+      if (key === "oci-dash:instances:view")
+        throw new DOMException("Fixture storage unavailable", "SecurityError");
+      return getItem.call(this, key);
+    };
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "oci-dash:instances:view")
+        throw new DOMException("Fixture storage unavailable", "SecurityError");
+      return setItem.call(this, key, value);
+    };
+  });
+  await page.goto("/instances");
+  const tableView = page.getByRole("button", { name: "表格视图", exact: true });
+  const cardView = page.getByRole("button", { name: "卡片视图", exact: true });
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(cards(page)).toHaveCount(10);
+  await tableView.click();
+  await expect(rows(page)).toHaveCount(10);
+  await expect(tableView).toHaveAttribute("aria-pressed", "true");
+  await page.reload();
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(cards(page)).toHaveCount(10);
+  expect(refreshApi.manualRequests()).toEqual([]);
 });
 
 test("已知区域使用本地旗帜，未知区域在表格和卡片中保留名称而不虚构旗帜", async ({

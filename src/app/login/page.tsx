@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type SubmitEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Layers3, LockKeyhole, Server, ShieldCheck } from "lucide-react";
 import type { SessionUser } from "@/lib/contracts";
@@ -23,7 +23,7 @@ export default function LoginPage() {
       .catch(() => {});
     return () => controller.abort();
   }, [router]);
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (pending) return;
     setPending(true);

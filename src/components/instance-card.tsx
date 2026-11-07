@@ -2,15 +2,60 @@
 
 import { useId } from "react";
 import Link from "next/link";
-import { Server } from "lucide-react";
-import type { InstanceSummary } from "@/lib/contracts";
-import { CopyButton, Status } from "./ui";
-import { formatDate, instanceHref, number, primaryAddress } from "./format";
+import { Lock, Server } from "lucide-react";
+import type { InstanceSummary, JobSummary, PublicIpBinding, VnicSummary } from "@/lib/contracts";
+import { Button, CopyButton, Status } from "./ui";
+import {
+  activeJobStates,
+  formatDate,
+  instanceHref,
+  number,
+  primaryAddress,
+  taskHref,
+} from "./format";
 import { RegionLabel } from "./region-label";
+import { useApp } from "./app-provider";
+import { canRotatePublicIp } from "./public-ip-rotation";
 
-export function InstanceCard({ instance }: { instance: InstanceSummary }) {
+export function InstanceCard({
+  instance,
+  onRotate,
+  rotationDisabled,
+  rotationJob,
+  rotationWarning = false,
+}: {
+  instance: InstanceSummary;
+  onRotate: (vnic: VnicSummary, binding: PublicIpBinding) => void;
+  rotationDisabled: boolean;
+  rotationJob?: JobSummary;
+  rotationWarning?: boolean;
+}) {
+  const { demo } = useApp();
   const titleId = useId();
   const address = primaryAddress(instance);
+  const addresses = instance.vnics.flatMap((vnic) =>
+    vnic.privateIps
+      .filter((binding) => Boolean(binding.publicIp))
+      .map((binding) => ({ vnic, binding })),
+  );
+  const pending =
+    rotationJob &&
+    (activeJobStates.has(rotationJob.state) ||
+      (rotationJob.state === "interrupted" &&
+        Boolean(rotationJob.nextRunAt) &&
+        rotationJob.attempt < rotationJob.maxAttempts));
+  const failed =
+    rotationJob && ["failed", "cancelled", "interrupted"].includes(rotationJob.state) && !pending;
+  const syncing = rotationJob?.kind === "sync-account";
+  const disabledReason = demo
+    ? "演示模式仅供查看"
+    : rotationWarning
+      ? "地址同步不完整，请先刷新资源"
+      : rotationDisabled
+        ? "正在读取或处理此实例的任务"
+        : !["RUNNING", "STOPPED"].includes(instance.state)
+          ? "当前实例状态不可更换 IP"
+          : undefined;
   return (
     <article className="card instance-card" aria-labelledby={titleId}>
       <div className="instance-card-heading">
@@ -46,13 +91,69 @@ export function InstanceCard({ instance }: { instance: InstanceSummary }) {
         </div>
       </dl>
       <div className="instance-card-address">
-        <span className="muted small">主要地址</span>
-        <div className="table-address mono">
-          <span>{address}</span>
-          {address !== "—" && (
-            <CopyButton value={address} label={`复制 ${instance.displayName} 地址`} />
+        {addresses.length ? (
+          addresses.map(({ vnic, binding }) => {
+            const fixed = binding.protected || binding.lifetime === "RESERVED";
+            return (
+              <div className="instance-ip-row" key={binding.privateIpId}>
+                <span className="instance-ip-label muted small">
+                  {fixed && <Lock size={11} aria-hidden="true" />}
+                  {fixed ? "固定 IP" : binding.lifetime === "EPHEMERAL" ? "临时 IP" : "公网 IP"}
+                </span>
+                <div className="instance-ip-actions">
+                  <span className="mono">{binding.publicIp}</span>
+                  <CopyButton value={binding.publicIp!} label={`复制 ${binding.publicIp}`} />
+                  {canRotatePublicIp(binding) &&
+                    ["RUNNING", "STOPPED"].includes(instance.state) && (
+                      <Button
+                        variant="ghost"
+                        className="button-sm"
+                        aria-label={`更换 IP ${binding.publicIp}`}
+                        disabled={Boolean(disabledReason)}
+                        title={disabledReason || "更换此临时公网 IP"}
+                        onClick={() => onRotate(vnic, binding)}
+                      >
+                        更换
+                      </Button>
+                    )}
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="instance-ip-row">
+            <span className="muted small">私网 IP</span>
+            <div className="table-address mono">
+              <span>{address}</span>
+              {address !== "—" && (
+                <CopyButton value={address} label={`复制 ${instance.displayName} 地址`} />
+              )}
+            </div>
+          </div>
+        )}
+        {rotationJob &&
+          (pending ||
+            failed ||
+            rotationWarning ||
+            (rotationDisabled && rotationJob.state === "succeeded")) && (
+            <Link
+              href={taskHref(rotationJob.id)}
+              className="instance-ip-task text-link"
+              title={rotationJob.lastError || undefined}
+            >
+              {rotationWarning
+                ? "地址同步不完整 · 查看任务"
+                : pending
+                  ? syncing
+                    ? "正在更新地址 · 查看任务"
+                    : "正在更换 IP · 查看任务"
+                  : failed
+                    ? syncing
+                      ? "地址更新失败 · 查看任务"
+                      : "更换未完成 · 查看任务"
+                    : "正在更新地址 · 查看任务"}
+            </Link>
           )}
-        </div>
       </div>
       <footer className="instance-card-footer">
         <span className="muted small">{formatDate(instance.createdAt)} 创建</span>

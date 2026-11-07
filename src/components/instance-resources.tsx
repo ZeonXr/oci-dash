@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useState, type SubmitEvent } from "react";
 import { HardDrive, Lock, Network, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import type {
   BootVolumeSummary,
@@ -27,6 +27,7 @@ import {
 } from "./ui";
 import { OperationDialog, type OperationDialogProps } from "./operation-dialog";
 import { TablePanel } from "./table";
+import { canRotatePublicIp, publicIpRotation } from "./public-ip-rotation";
 
 export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
   const { demo } = useApp();
@@ -109,12 +110,7 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                         <Button
                           variant="ghost"
                           className="button-sm"
-                          disabled={
-                            demo ||
-                            binding.protected ||
-                            binding.lifetime === "RESERVED" ||
-                            !binding.publicIpId
-                          }
+                          disabled={demo || !canRotatePublicIp(binding)}
                           title={
                             binding.protected || binding.lifetime === "RESERVED"
                               ? "保留或受保护地址不可轮换"
@@ -122,31 +118,7 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                                 ? "演示模式仅供查看"
                                 : undefined
                           }
-                          onClick={() =>
-                            setOperation({
-                              title: "更换公网 IP",
-                              description:
-                                "将替换此私网地址绑定的临时公网 IP。旧地址释放后无法保证找回。",
-                              summary: [
-                                ["实例", instance.displayName],
-                                ["网卡", vnic.name],
-                                ["私网地址", binding.privateIp],
-                                ["当前公网地址", binding.publicIp || "—"],
-                              ],
-                              operation: {
-                                kind: "public-ip-rotate",
-                                accountId: instance.accountId,
-                                region: instance.region,
-                                resourceId: instance.id,
-                                payload: {
-                                  vnicId: vnic.id,
-                                  privateIpId: binding.privateIpId,
-                                  expectedPublicIpId: binding.publicIpId,
-                                  expectedPublicIp: binding.publicIp,
-                                },
-                              },
-                            })
-                          }
+                          onClick={() => setOperation(publicIpRotation(instance, vnic, binding))}
                         >
                           <RefreshCw size={13} />
                           更换 IP
@@ -219,7 +191,7 @@ function VolumeDialog({
   const [vpu, setVpu] = useState(volume.vpusPerGb);
   const [ack, setAck] = useState(false);
   const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo || !ack) return;
     const result = await action.run(() =>
@@ -381,7 +353,7 @@ function RuleDialog({
     icmpType: "",
     icmpCode: "",
   });
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (demo) return;
     const rule = {

@@ -1316,16 +1316,43 @@ pre {
   color: var(--muted);
 }
 .instance-card-address {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px 12px;
+  display: grid;
+  gap: 8px;
   padding-block: 13px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   margin-top: auto;
   font-size: 12px;
+}
+.instance-ip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.instance-ip-label,
+.instance-ip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.instance-ip-actions {
+  min-width: 0;
+  max-width: 100%;
+}
+.instance-ip-actions > .mono {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.instance-ip-actions .button-sm {
+  padding-inline: 6px;
+  min-height: 28px;
+  color: var(--primary);
+}
+.instance-ip-task {
+  justify-self: end;
+  font-size: 11px;
 }
 .instance-card-address .table-address {
   min-width: 0;
