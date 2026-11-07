@@ -91,7 +91,7 @@ test.beforeAll(async ({ browser, baseURL }) => {
     } catch {
       throw new Error("Could not fill the local administrator login fields.");
     }
-    await page.getByRole("button", { name: "登录工作区", exact: true }).click();
+    await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.waitForURL("**/overview");
     await requireDemo(context, origin);
     const response = await context.request.get(`${origin}/api/dashboard`);

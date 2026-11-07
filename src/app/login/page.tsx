@@ -88,7 +88,7 @@ export default function LoginPage() {
       <section className="login-panel">
         <form className="login-form" onSubmit={submit}>
           <h2>欢迎回来</h2>
-          <p>登录你的 OCI Dash 工作区。</p>
+          <p>登录 OCI Dash 管理面板。</p>
           <Field label="用户名" required>
             <input
               autoFocus
@@ -138,10 +138,10 @@ export default function LoginPage() {
             </div>
           )}
           <Button type="submit" variant="primary" loading={pending}>
-            {mfa ? "验证并登录" : "登录工作区"}
+            {mfa ? "验证并登录" : "登录"}
           </Button>
           <div className="login-note">
-            <LockKeyhole size={12} /> 仅供此工作区的授权管理员访问
+            <LockKeyhole size={12} /> 仅供授权管理员访问
           </div>
         </form>
       </section>

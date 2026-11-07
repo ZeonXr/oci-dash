@@ -101,7 +101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             </Link>
           </div>
         ) : (
-          <LoadingState label="正在打开工作区…" />
+          <LoadingState label="正在加载…" />
         )}
       </main>
     );

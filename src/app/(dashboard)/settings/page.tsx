@@ -119,7 +119,7 @@ export default function SettingsPage() {
     return <ErrorState message={resource.error || "无法加载设置。"} retry={resource.reload} />;
   return (
     <>
-      <PageHeader title="设置" description="管理工作区外观、登录安全与运行状态。" />
+      <PageHeader title="设置" description="管理外观、登录安全与运行状态。" />
       <div className="stack">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
         <div className="settings-section">
@@ -153,7 +153,7 @@ export default function SettingsPage() {
         <div className="settings-section">
           <div className="settings-copy">
             <h2>登录安全</h2>
-            <p>保护管理员账号和工作区内的云连接。</p>
+            <p>保护管理员账号和 OCI 账号凭据。</p>
           </div>
           <Card>
             <div className="inline-resource">

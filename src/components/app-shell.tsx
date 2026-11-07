@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowUpRight,
-  ChevronRight,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -15,7 +14,6 @@ import {
   Server,
   Settings2,
   Sun,
-  X,
 } from "lucide-react";
 import { useApp } from "./app-provider";
 import { Badge, IconButton } from "./ui";
@@ -27,14 +25,13 @@ const navigation = [
   { href: "/settings", label: "设置", icon: Settings2 },
 ];
 export function AppShell({ children }: { children: ReactNode }) {
-  const { user, demo, accounts, theme, setTheme, logout } = useApp();
+  const { user, demo, theme, setTheme, logout } = useApp();
   const pathname = usePathname();
   const router = useRouter();
   const search = useRef<HTMLInputElement>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [query, setQuery] = useState("");
-  const active = navigation.find((item) => pathname.startsWith(item.href));
   useEffect(() => {
     const query = window.matchMedia("(max-width:900px)");
     const update = () => setIsMobile(query.matches);
@@ -70,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
       <aside
         className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}
-        id="workspace-navigation"
+        id="primary-navigation"
         aria-label="主导航"
         inert={isMobile && !mobileOpen}
       >
@@ -80,14 +77,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
           <span>OCI Dash</span>
         </Link>
-        <div className="workspace">
-          <div>
-            <strong>个人工作区</strong>
-            <span>{accounts.length} 个 OCI 账号</span>
-          </div>
-          <KeyRound size={16} />
-        </div>
-        <div className="nav-label">工作空间</div>
         <nav aria-label="主导航">
           {navigation.map((item) => (
             <Link
@@ -102,10 +91,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-note">
-            <span className={`status-dot ${demo ? "demo-dot" : ""}`} />
-            {demo ? "演示工作区" : "私有云管理工作区"}
-          </div>
           <div className="profile">
             <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
             <div>
@@ -122,24 +107,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="topbar">
           <IconButton
             label="展开导航"
-            aria-controls="workspace-navigation"
+            aria-controls="primary-navigation"
             aria-expanded={mobileOpen}
             className="mobile-menu"
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={20} />
           </IconButton>
-          <div className="breadcrumb">
-            <span>工作空间</span>
-            <ChevronRight size={12} />
-            <span>{active?.label || "实例"}</span>
-            {pathname.split("/").filter(Boolean).length > 1 && (
-              <>
-                <ChevronRight size={12} />
-                <span>详情</span>
-              </>
-            )}
-          </div>
           <div className="topbar-actions">
             <form
               className="global-search"
@@ -177,7 +151,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <footer className="app-footer">
           <span>{demo ? "当前为演示数据，所有云操作已禁用" : "OCI Dash · 你的资源，清晰掌握"}</span>
           <Link href="/settings">
-            工作区设置 <ArrowUpRight size={12} />
+            设置 <ArrowUpRight size={12} />
           </Link>
         </footer>
       </div>

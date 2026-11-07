@@ -266,7 +266,7 @@ export default function OverviewPage() {
                     <div>
                       <p>{event.action}</p>
                       <small>
-                        {event.resource || "工作区"} · {formatDate(event.createdAt)}
+                        {event.resource || "系统"} · {formatDate(event.createdAt)}
                       </small>
                     </div>
                   </div>
