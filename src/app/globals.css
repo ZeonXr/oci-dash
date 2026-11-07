@@ -19,6 +19,10 @@
   --danger-bg: #fff1f0;
   --shadow: 0 1px 3px rgb(16 24 40 / 3%);
   --radius: 12px;
+  --focus-border: color-mix(in srgb, var(--primary) 82%, var(--border));
+  --focus-ring: color-mix(in srgb, var(--primary) 13%, transparent);
+  --menu-shadow: 0 12px 32px rgb(16 24 40 / 12%), 0 2px 6px rgb(16 24 40 / 5%);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%23667085' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -39,6 +43,8 @@
   --danger: #ffa19a;
   --danger-bg: #452527;
   --shadow: 0 1px 4px rgb(0 0 0 / 12%);
+  --menu-shadow: 0 12px 32px rgb(0 0 0 / 32%), 0 2px 6px rgb(0 0 0 / 18%);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%2398a8bf' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   color-scheme: dark;
 }
 * {
@@ -83,10 +89,10 @@ a {
 }
 button:focus-visible,
 a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--primary), transparent 66%);
+input[type="checkbox"]:focus-visible,
+input[type="file"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus-border);
   outline-offset: 2px;
 }
 h1,
@@ -137,7 +143,7 @@ th button {
   color: inherit;
   padding: 0;
 }
-input:not([type="checkbox"]):not([type="file"]),
+input:where(:not([type="checkbox"]):not([type="file"])),
 select,
 textarea {
   width: 100%;
@@ -147,7 +153,22 @@ textarea {
   color: var(--ink);
   padding: 9px 11px;
   min-height: 39px;
-  transition: border-color 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    background-color 0.15s;
+}
+input:where(:not([type="checkbox"]):not([type="file"])):focus,
+textarea:focus,
+select.select:focus-visible {
+  outline: none;
+  border-color: var(--focus-border);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+input[aria-invalid="true"],
+textarea[aria-invalid="true"],
+select.select[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 input::placeholder,
 textarea::placeholder {
@@ -173,8 +194,162 @@ textarea:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
-select {
-  appearance: auto;
+select.select {
+  --select-inset: 12px;
+  position: relative;
+  appearance: none;
+  padding-inline: var(--select-inset) calc(var(--select-inset) + 24px);
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--select-inset) center;
+  background-size: 16px 16px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+select.select:hover:not(:disabled):not(:focus) {
+  border-color: color-mix(in srgb, var(--border), var(--muted) 35%);
+  background-color: var(--surface-hover);
+}
+select.select:disabled {
+  cursor: not-allowed;
+}
+.select-value {
+  display: none;
+}
+@supports (appearance: base-select) and selector(select::picker(select)) {
+  select.select-enhanced,
+  select.select-enhanced::picker(select) {
+    appearance: base-select;
+  }
+  select.select-enhanced {
+    display: flex;
+    column-gap: 8px;
+    background-image: none;
+    padding-inline-end: var(--select-inset);
+    align-items: center;
+    overflow: hidden;
+  }
+  select.select-enhanced > .select-value {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    text-align: start;
+    line-height: inherit;
+  }
+  .select-value selectedcontent {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  select.select-enhanced:open {
+    outline: none;
+    border-color: var(--focus-border);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+  select.select-enhanced::picker-icon {
+    content: "";
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    background-color: var(--muted);
+    mask: var(--select-chevron) center / 16px 16px no-repeat;
+    transition:
+      rotate 0.15s ease,
+      background-color 0.15s;
+  }
+  select.select-enhanced:open::picker-icon {
+    rotate: 180deg;
+    background-color: var(--primary);
+  }
+  select.select-enhanced::picker(select) {
+    min-width: anchor-size(width);
+    max-width: min(480px, calc(100vw - 24px));
+    max-height: min(320px, calc(100dvh - 32px));
+    margin-block: 6px;
+    padding: 5px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--menu-shadow);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  select.select-enhanced option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 34px;
+    margin: 1px 0;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    line-height: 20px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  select.select-enhanced option:checked {
+    color: var(--primary);
+    background: var(--soft);
+    font-weight: 500;
+  }
+  select.select-enhanced option:hover:not(:disabled),
+  select.select-enhanced option:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--soft) 70%, var(--surface-hover));
+  }
+  select.select-enhanced option::checkmark {
+    order: 1;
+    margin-inline-start: auto;
+    color: var(--primary);
+    font-size: 14px;
+  }
+  select.select-enhanced option:disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  select.select::picker-icon {
+    transition: none;
+  }
+}
+@media (forced-colors: active) {
+  input:focus,
+  textarea:focus,
+  select.select:focus-visible,
+  .search-field:focus-within,
+  .global-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  select.select {
+    appearance: auto;
+    background-image: none;
+  }
+  select.select::picker(select) {
+    appearance: auto;
+  }
+  select.select::picker-icon {
+    display: none;
+  }
+  select.select > .select-value {
+    display: none;
+  }
 }
 code,
 .mono {
@@ -456,6 +631,9 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 10px;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 .global-search input {
   border: 0 !important;
@@ -557,7 +735,8 @@ pre {
   max-width: 240px;
   min-height: 32px;
   font-size: 12px;
-  padding: 5px 9px;
+  --select-inset: 10px;
+  padding-block: 5px;
 }
 .metrics-grid {
   display: grid;
@@ -844,6 +1023,8 @@ pre {
   min-width: 145px;
   max-width: 220px;
   font-size: 13px;
+  min-height: 42px;
+  padding-block: 10px;
 }
 .search-field {
   display: flex;
@@ -856,6 +1037,9 @@ pre {
   flex: 1;
   min-width: 220px;
   max-width: 360px;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 .search-field svg {
   color: var(--muted);
@@ -863,6 +1047,24 @@ pre {
 .search-field input {
   border: 0 !important;
   padding-left: 0 !important;
+  min-height: 40px;
+  font-size: 13px;
+  line-height: 20px;
+  background: transparent;
+}
+.search-field:focus-within,
+.global-search:focus-within {
+  border-color: var(--focus-border);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.search-field input:focus,
+.global-search input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.search-field:focus-within > svg,
+.global-search:focus-within > svg {
+  color: var(--primary);
 }
 .table-card {
   padding: 0;
@@ -952,7 +1154,8 @@ pre {
 .pagination .select {
   width: 110px;
   font-size: 12px;
-  padding: 4px 8px;
+  --select-inset: 10px;
+  padding-block: 4px;
   min-height: 30px;
 }
 .field {
@@ -2022,7 +2225,8 @@ pre {
 .overview-chart-controls .select {
   font-size: 12px;
   min-height: 33px;
-  padding: 5px 8px;
+  --select-inset: 10px;
+  padding-block: 5px;
   width: 125px;
 }
 .overview-chart-controls .select:first-child {

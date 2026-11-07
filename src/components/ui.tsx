@@ -1,5 +1,6 @@
 "use client";
 import {
+  createElement,
   useEffect,
   useId,
   useRef,
@@ -137,8 +138,25 @@ export function Field({
     </label>
   );
 }
-export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...props} className={clsx("select", className)} />;
+export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  const [customizable, setCustomizable] = useState(false);
+  useEffect(() => {
+    setCustomizable(
+      CSS.supports("appearance", "base-select") && CSS.supports("selector(select::picker(select))"),
+    );
+  }, []);
+  const enhanced = customizable && !props.multiple && (props.size ?? 1) <= 1;
+  return (
+    <select {...props} className={clsx("select", enhanced && "select-enhanced", className)}>
+      {enhanced && (
+        <button type="button" className="select-value" tabIndex={-1}>
+          {/* The browser keeps this label in sync with the selected option. */}
+          {createElement("selectedcontent")}
+        </button>
+      )}
+      {children}
+    </select>
+  );
 }
 export function Alert({
   children,
