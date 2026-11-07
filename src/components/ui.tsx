@@ -326,13 +326,26 @@ export function Modal({
   wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Capture the trigger before a newly mounted child's autoFocus runs.
+  const returnFocus = useRef<HTMLElement | null>(
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
   const titleId = useId();
   const descriptionId = useId();
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
-    if (open && !d.open) d.showModal();
-    else if (!open && d.open) d.close();
+    if (open && !d.open) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !d.contains(active)) returnFocus.current = active;
+      d.showModal();
+    } else if (!open && d.open) d.close();
+    return () => {
+      if (d.open) d.close();
+      if (returnFocus.current?.isConnected) returnFocus.current.focus({ preventScroll: true });
+    };
   }, [open]);
   return (
     <dialog

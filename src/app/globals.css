@@ -1008,10 +1008,16 @@ pre {
   font-size: 12px;
 }
 .file-upload input {
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
   font-size: 12px;
 }
 .modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 0;
@@ -1020,7 +1026,14 @@ pre {
   box-shadow: 0 24px 70px rgb(0 0 0 / 22%);
   width: min(520px, calc(100vw - 32px));
   max-height: calc(100dvh - 64px);
-  overflow: auto;
+  overflow: hidden;
+}
+.modal[open] {
+  display: flex;
+  flex-direction: column;
+}
+.modal:not([open]) {
+  display: none;
 }
 .modal-wide {
   width: min(760px, calc(100vw - 32px));
@@ -1030,6 +1043,7 @@ pre {
   backdrop-filter: blur(2px);
 }
 .modal-heading {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   gap: 14px;
@@ -1048,8 +1062,13 @@ pre {
 }
 .modal-body {
   padding: 22px 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .modal-footer {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1140,16 +1159,19 @@ pre {
 .dropdown-menu button.danger-text {
   color: var(--danger);
 }
-.config-import {
+.account-options {
   border: 1px solid var(--border);
   padding: 12px 14px;
   border-radius: 8px;
   background: var(--canvas);
   font-size: 12px;
 }
-.config-import > summary {
+.account-options > summary {
   cursor: pointer;
   color: var(--primary);
+}
+.account-options > div {
+  margin-top: 16px;
 }
 .details-list {
   display: grid;
