@@ -32,10 +32,10 @@ import {
   formatDate,
   instanceHref,
   operationLabels,
-  regionName,
   shortId,
   taskHref,
 } from "@/components/format";
+import { RegionLabel } from "@/components/region-label";
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -86,7 +86,12 @@ export default function TaskDetailPage() {
             <Status value={job.state} />
           </>
         }
-        description={`${job.accountName} · ${regionName(job.region)} · ${formatDate(job.createdAt, true)}`}
+        description={
+          <>
+            {job.accountName} · <RegionLabel region={job.region} /> ·{" "}
+            {formatDate(job.createdAt, true)}
+          </>
+        }
       >
         <Button onClick={resource.reload} loading={resource.refreshing}>
           <RefreshCw size={15} />

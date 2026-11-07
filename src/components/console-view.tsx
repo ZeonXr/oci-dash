@@ -9,7 +9,8 @@ import type { ConsoleSessionSummary, ConsoleSocketTicket } from "@/lib/console-c
 import { api, errorMessage, useResource } from "./api";
 import { useApp } from "./app-provider";
 import { Badge, Button, ErrorState, LoadingState, PageHeader, Status } from "./ui";
-import { formatDate, regionName } from "./format";
+import { formatDate } from "./format";
+import { RegionLabel } from "./region-label";
 
 type SessionResponse = {
   session: ConsoleSessionSummary | null;
@@ -390,7 +391,11 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             <Status value={instance.state} />
           </>
         }
-        description={`${regionName(instance.region)} · ${instance.accountName} · VNC 控制台`}
+        description={
+          <>
+            <RegionLabel region={instance.region} /> · {instance.accountName} · VNC 控制台
+          </>
+        }
       >
         <Link href={`/instances/${encodeURIComponent(instanceId)}`} className="button">
           返回实例

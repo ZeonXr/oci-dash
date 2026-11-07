@@ -15,7 +15,8 @@ import {
   Select,
   Status,
 } from "@/components/ui";
-import { formatDate, operationLabels, regionName, shortId, taskHref } from "@/components/format";
+import { formatDate, operationLabels, shortId, taskHref } from "@/components/format";
+import { RegionLabel } from "@/components/region-label";
 export default function TasksPage() {
   const { accounts } = useApp();
   const resource = useResource<{ jobs: JobSummary[]; demo: boolean }>("/api/jobs", 5000);
@@ -168,7 +169,9 @@ export default function TasksPage() {
                 </td>
                 <td>
                   {job.accountName}
-                  <span className="cell-secondary">{regionName(job.region)}</span>
+                  <span className="cell-secondary">
+                    <RegionLabel region={job.region} />
+                  </span>
                 </td>
                 <td>
                   <Status value={job.state} />

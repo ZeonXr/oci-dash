@@ -36,6 +36,7 @@ import {
   regionName,
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
+import { RegionLabel } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 export default function OverviewPage() {
   const resource = useResource<DashboardData>("/api/dashboard", 30000);
@@ -175,7 +176,7 @@ export default function OverviewPage() {
                   {regions.map(([region, count]) => (
                     <Link key={region} href={`/instances?region=${encodeURIComponent(region)}`}>
                       <div className="distribution-label">
-                        <span>{regionName(region)}</span>
+                        <RegionLabel region={region} />
                         <span>{count} 个</span>
                       </div>
                       <div className="distribution-track">
@@ -218,7 +219,7 @@ export default function OverviewPage() {
                     <div className="resource-label grow">
                       <strong>{instance.displayName}</strong>
                       <span>
-                        {regionName(instance.region)} · {instance.accountName}
+                        <RegionLabel region={instance.region} /> · {instance.accountName}
                       </span>
                     </div>
                     <Status value={instance.state} />

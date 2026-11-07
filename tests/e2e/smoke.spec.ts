@@ -195,6 +195,37 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
     await expect(page.getByRole("button", { name: "创建实例", exact: true })).toBeDisabled();
   });
   await capture(page, testInfo, "instances-desktop");
+  await test.step("卡片视图展示同一批实例且没有多选控件", async () => {
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^(启动|停止|取消选择)$/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "卡片视图", exact: true }).click();
+    await expect(page.getByRole("button", { name: "卡片视图", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const cards = page.locator("article.instance-card");
+    await expect(cards).toHaveCount(Math.min(10, demo.instances.length));
+    await expect(cards.first().locator(".name-link")).toHaveCount(1);
+    await expect(page.locator(".resource-table")).toHaveCount(0);
+    expect(
+      await page
+        .locator(".instance-cards")
+        .evaluate((element) => getComputedStyle(element).display),
+    ).toBe("grid");
+    const flags = cards.locator('img[src^="/flags/"]');
+    await expect(flags).toHaveCount(Math.min(10, demo.instances.length));
+    await expect
+      .poll(() =>
+        flags.evaluateAll((images) =>
+          images.every(
+            (image) =>
+              (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0,
+          ),
+        ),
+      )
+      .toBe(true);
+  });
+  await capture(page, testInfo, "instances-cards-desktop");
 });
 
 test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
@@ -293,7 +324,7 @@ test("主题切换持久化且安全设置只读", async ({ page }, testInfo) =>
   await expect(page.getByRole("button", { name: "修改密码", exact: true })).toBeDisabled();
 });
 
-test("390px 小屏导航与已加载的实例表格不撑宽页面", async ({ page }, testInfo) => {
+test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/overview");
   await expect(page.locator(".metric-card")).toHaveCount(4);
@@ -328,6 +359,28 @@ test("390px 小屏导航与已加载的实例表格不撑宽页面", async ({ pa
     }));
     expect(table.content).toBeGreaterThan(table.visible);
     await capture(page, testInfo, "instances-mobile");
+  });
+  await test.step("卡片在小屏使用网格布局且不横向溢出", async () => {
+    await page.getByRole("button", { name: "卡片视图", exact: true }).click();
+    await expect(page.locator("article.instance-card")).toHaveCount(
+      Math.min(10, demo.instances.length),
+    );
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    const dimensions = await page.evaluate(() => ({
+      viewport: innerWidth,
+      document: document.documentElement.scrollWidth,
+      cardWidths: [...document.querySelectorAll("article.instance-card")].map(
+        (element) => element.getBoundingClientRect().width,
+      ),
+    }));
+    expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport + 1);
+    expect(dimensions.cardWidths.every((width) => width <= dimensions.viewport)).toBe(true);
+    expect(
+      await page
+        .locator(".instance-cards")
+        .evaluate((element) => getComputedStyle(element).display),
+    ).toBe("grid");
+    await capture(page, testInfo, "instances-cards-mobile");
   });
 });
 

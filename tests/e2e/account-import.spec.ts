@@ -94,6 +94,7 @@ const test = base.extend<{ mockApi: MockApi }>({
         if (
           (request.resourceType() === "document" && url.pathname === "/accounts") ||
           url.pathname.startsWith("/_next/") ||
+          /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname) ||
           url.pathname === "/favicon.ico" ||
           url.pathname === "/icon.svg"
         ) {

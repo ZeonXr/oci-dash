@@ -20,6 +20,7 @@ import { useApp } from "@/components/app-provider";
 import { send, useAction, useResource } from "@/components/api";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
+import { RegionLabel } from "@/components/region-label";
 import {
   Badge,
   Button,
@@ -367,7 +368,11 @@ export default function InstanceDetailPage() {
             <Status value={instance.state} />
           </>
         }
-        description={`${regionName(instance.region)} · ${instance.region} · ${instance.accountName}`}
+        description={
+          <>
+            <RegionLabel region={instance.region} /> · {instance.region} · {instance.accountName}
+          </>
+        }
       >
         <UpdatedAt value={instance.syncedAt} title="此实例最近一次从 OCI 同步资源快照的时间" />
         <Button

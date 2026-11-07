@@ -91,6 +91,7 @@ async function setup(
     holdCreate?: Promise<void>;
   } = {},
 ) {
+  const origin = new URL(test.info().project.use.baseURL || "http://localhost:3000").origin;
   const fixture = {
     session: options.existing || (null as ConsoleSessionSummary | null),
     writes: [] as string[],
@@ -168,6 +169,16 @@ async function setup(
       fixture.unexpected.push(`${req.method()} ${url.origin}${url.pathname}`);
       await route.abort();
       return;
+    }
+    if (url.pathname.startsWith("/flags/")) {
+      if (
+        url.origin === origin &&
+        req.method() === "GET" &&
+        /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname)
+      )
+        return route.continue();
+      fixture.unexpected.push(`${req.method()} ${url.origin}${url.pathname}`);
+      return route.abort();
     }
     if (!url.pathname.startsWith("/api/")) {
       if (req.method() !== "GET") {

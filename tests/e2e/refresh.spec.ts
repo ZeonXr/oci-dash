@@ -169,6 +169,11 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         state.unexpected.push(method + " " + url.origin + path);
         return route.abort();
       }
+      if (path.startsWith("/flags/")) {
+        if (method === "GET" && /^\/flags\/[a-z]{2}\.svg$/.test(path)) return route.continue();
+        state.unexpected.push(method + " " + path);
+        return route.abort();
+      }
       if (!path.startsWith("/api/")) {
         if (method === "GET") return route.continue();
         state.unexpected.push(method + " " + path);
@@ -259,6 +264,7 @@ test.use({ trace: "off", video: "off", screenshot: "off", serviceWorkers: "block
 const refreshButton = (page: Page) =>
   page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true });
 const rows = (page: Page) => page.locator(".resource-table tbody tr");
+const cards = (page: Page) => page.locator("article.instance-card");
 async function openInstances(page: Page) {
   await page.goto("/instances");
   await expect(rows(page)).toHaveCount(10);
@@ -307,7 +313,7 @@ test("同步失败显示可重试错误，保留先前快照和表格", async ({
   await expect(refreshButton(page)).toBeEnabled();
 });
 
-test("刷新保留筛选和当前页，进入详情与总览后读取更新后的快照", async ({ page, refreshApi }) => {
+test("卡片切换与刷新保留筛选和当前页，详情与总览读取更新后的快照", async ({ page, refreshApi }) => {
   await openInstances(page);
   await page.getByLabel("搜索实例名称、地址或 OCID").fill("Fixture");
   await page.getByLabel("筛选账号", { exact: true }).selectOption(account.id);
@@ -317,6 +323,17 @@ test("刷新保留筛选和当前页，进入详情与总览后读取更新后�
   const pagination = page.getByRole("navigation", { name: "表格分页" });
   await expect(pagination).toContainText("2 / 3");
   await expect(refreshButton(page)).toBeEnabled();
+  const namesBefore = (await rows(page).locator(".name-link").allTextContents()).map((name) =>
+    name.trim(),
+  );
+  const syncsBefore = refreshApi.count("/api/inventory/refresh", "POST");
+  await page.getByRole("button", { name: "卡片视图", exact: true }).click();
+  await expect(cards(page)).toHaveCount(10);
+  await expect(pagination).toContainText("2 / 3");
+  expect(
+    (await cards(page).locator(".name-link").allTextContents()).map((name) => name.trim()),
+  ).toEqual(namesBefore);
+  expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(syncsBefore);
   await refreshButton(page).click();
   await expect.poll(() => refreshApi.manualRequests().length).toBe(1);
   refreshApi.finish("succeeded", (items) => {
@@ -382,4 +399,141 @@ test("慢 GET 不被五秒轮询反复取消，完成后继续正常轮询", asy
     release();
     refreshApi.jobsGate = undefined;
   }
+});
+
+test("实例视图共享排序且记住偏好，列表不再提供多选或批量操作", async ({ page, refreshApi }) => {
+  await openInstances(page);
+  const tableView = page.getByRole("button", { name: "表格视图", exact: true });
+  const cardView = page.getByRole("button", { name: "卡片视图", exact: true });
+  await expect(tableView).toHaveAttribute("aria-pressed", "true");
+  await expect(cardView).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^(启动|停止|取消选择)$/ })).toHaveCount(0);
+  const tableNames = (await rows(page).locator(".name-link").allTextContents()).map((name) =>
+    name.trim(),
+  );
+  const writesBefore = refreshApi.count("/api/inventory/refresh", "POST");
+
+  await cardView.click();
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(tableView).toHaveAttribute("aria-pressed", "false");
+  await expect(cards(page)).toHaveCount(10);
+  await expect(rows(page)).toHaveCount(0);
+  expect(
+    await page.locator(".instance-cards").evaluate((element) => getComputedStyle(element).display),
+  ).toBe("grid");
+  expect(
+    (await cards(page).locator(".name-link").allTextContents()).map((name) => name.trim()),
+  ).toEqual(tableNames);
+  for (const card of await cards(page).all()) {
+    await expect(card.locator(".name-link")).toHaveCount(1);
+    const href = await card.locator(".name-link").getAttribute("href");
+    expect(href).toMatch(/^\/instances\/refresh-instance-\d+$/);
+    expect(
+      await card
+        .locator("a")
+        .evaluateAll(
+          (links, target) => links.filter((link) => link.getAttribute("href") === target).length,
+          href,
+        ),
+    ).toBeGreaterThanOrEqual(2);
+  }
+  await page.getByRole("button", { name: "按实例名称排序", exact: true }).click();
+  await expect(cards(page).first().locator(".name-link")).toHaveText("Fixture-22");
+  const descendingNames = (await cards(page).locator(".name-link").allTextContents()).map((name) =>
+    name.trim(),
+  );
+  await tableView.click();
+  await expect(rows(page).first().locator(".name-link")).toHaveText("Fixture-22");
+  await expect(page.getByRole("columnheader", { name: "实例名称", exact: true })).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+  expect(
+    (await rows(page).locator(".name-link").allTextContents()).map((name) => name.trim()),
+  ).toEqual(descendingNames);
+  await cardView.click();
+  await expect(cards(page)).toHaveCount(10);
+  expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(writesBefore);
+  expect(refreshApi.manualRequests()).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("oci-dash:instances:view")))
+    .toBe("cards");
+
+  await cards(page).first().locator(".name-link").click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Fixture-22");
+  await page.goBack();
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(cards(page)).toHaveCount(10);
+  await page.reload();
+  await expect(cardView).toHaveAttribute("aria-pressed", "true");
+  await expect(cards(page)).toHaveCount(10);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await tableView.click();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("oci-dash:instances:view")))
+    .toBe("table");
+  await page.reload();
+  await expect(tableView).toHaveAttribute("aria-pressed", "true");
+  await expect(rows(page)).toHaveCount(10);
+  await expect(cards(page)).toHaveCount(0);
+});
+
+test("已知区域使用本地旗帜，未知区域在表格和卡片中保留名称而不虚构旗帜", async ({
+  page,
+  refreshApi,
+}) => {
+  refreshApi.rows[0].region = "unknown-test-1";
+  await openInstances(page);
+  const unknownRow = rows(page).filter({
+    has: page.getByRole("link", { name: "Fixture-01", exact: true }),
+  });
+  const knownRow = rows(page).filter({
+    has: page.getByRole("link", { name: "Fixture-02", exact: true }),
+  });
+  await expect(unknownRow).toContainText("unknown-test-1");
+  await expect(unknownRow.locator('img[src^="/flags/"]')).toHaveCount(0);
+  const tableFlag = knownRow.locator('img[src^="/flags/"]');
+  await expect(tableFlag).toHaveCount(1);
+  await expect(tableFlag).toHaveAttribute("src", /^\/flags\/[a-z]{2}\.svg$/);
+  await expect
+    .poll(() =>
+      tableFlag.evaluate(
+        (element) =>
+          (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+
+  const writesBefore = refreshApi.count("/api/inventory/refresh", "POST");
+  await page.getByRole("button", { name: "卡片视图", exact: true }).click();
+  await expect(cards(page)).toHaveCount(10);
+  const unknownCard = cards(page).filter({
+    has: page.getByRole("link", { name: "Fixture-01", exact: true }),
+  });
+  const knownCard = cards(page).filter({
+    has: page.getByRole("link", { name: "Fixture-02", exact: true }),
+  });
+  await expect(unknownCard).toContainText("unknown-test-1");
+  await expect(unknownCard.locator('img[src^="/flags/"]')).toHaveCount(0);
+  const cardFlag = knownCard.locator('img[src^="/flags/"]');
+  await expect(cardFlag).toHaveCount(1);
+  await expect
+    .poll(() =>
+      cardFlag.evaluate(
+        (element) =>
+          (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.locator(".instance-cards img").evaluateAll((images) =>
+      images.every((image) => {
+        const url = new URL((image as HTMLImageElement).src);
+        return url.origin === location.origin && /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname);
+      }),
+    ),
+  ).toBe(true);
+  expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(writesBefore);
+  expect(refreshApi.manualRequests()).toEqual([]);
 });

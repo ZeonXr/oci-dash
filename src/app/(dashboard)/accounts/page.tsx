@@ -20,7 +20,8 @@ import {
   PageHeader,
   Status,
 } from "@/components/ui";
-import { regionName, shortId, taskHref } from "@/components/format";
+import { shortId, taskHref } from "@/components/format";
+import { RegionLabel } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 
 const pendingSyncStates = new Set([
@@ -140,7 +141,9 @@ export default function AccountsPage() {
                     </span>
                     <div className="grow">
                       <h2>{account.name}</h2>
-                      <p className="muted small">{regionName(account.homeRegion)} · 主区域</p>
+                      <p className="muted small">
+                        <RegionLabel region={account.homeRegion} /> · 主区域
+                      </p>
                     </div>
                     {syncing && job ? (
                       <Badge tone="info">{connectionLabel(account, job)}</Badge>
@@ -158,7 +161,9 @@ export default function AccountsPage() {
                     </div>
                     <div className="region-chips">
                       {account.regions.map((region) => (
-                        <Badge key={region}>{regionName(region)}</Badge>
+                        <Badge key={region}>
+                          <RegionLabel region={region} />
+                        </Badge>
                       ))}
                     </div>
                     <UpdatedAt

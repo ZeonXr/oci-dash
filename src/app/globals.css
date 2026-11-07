@@ -767,7 +767,7 @@ pre {
   font-size: 13px;
   margin-bottom: 7px;
 }
-.distribution-label span:last-child {
+.distribution-label > span:last-child {
   font-size: 12px;
   color: var(--muted);
 }
@@ -1221,13 +1221,147 @@ pre {
   padding-top: 8px;
   padding-bottom: 8px;
 }
-.table-card tr.is-selected {
+.instance-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.view-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.view-switch button:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.view-switch button[aria-pressed="true"] {
+  color: var(--primary);
   background: var(--soft);
 }
-.resource-table th:first-child,
-.resource-table td:first-child {
-  width: 40px;
-  padding-right: 0;
+.instance-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 18px;
+}
+.instance-card {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+.instance-card-heading,
+.instance-card-meta,
+.instance-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.instance-card h2 {
+  margin: 14px 0 0;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.instance-card-account {
+  margin: 3px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.instance-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.instance-card-shape {
+  overflow-wrap: anywhere;
+}
+.instance-card-specs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 18px 0;
+}
+.instance-card-specs dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.instance-card-specs dd {
+  margin: 3px 0 0;
+  font-size: 20px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.instance-card-specs dd span {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.instance-card-address {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding-block: 13px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-top: auto;
+  font-size: 12px;
+}
+.instance-card-address .table-address {
+  min-width: 0;
+  max-width: 100%;
+}
+.instance-card-address .table-address > span:first-child {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.instance-card-footer {
+  flex-wrap: wrap;
+  padding-top: 14px;
+  font-size: 12px;
+}
+.instance-cards-pagination {
+  margin-top: 18px;
+}
+.instance-cards-pagination .pagination {
+  border-top: 0;
+  padding-inline: 0;
+}
+.region-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+  max-width: 100%;
+}
+.region-label img {
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 7%);
 }
 .name-link {
   color: var(--ink);

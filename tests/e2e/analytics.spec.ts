@@ -294,6 +294,7 @@ const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
         if (
           method === "GET" &&
           (url.pathname.startsWith("/_next/") ||
+            /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname) ||
             ["/traffic", "/costs", "/favicon.ico", "/icon.svg"].includes(url.pathname))
         )
           return route.continue();

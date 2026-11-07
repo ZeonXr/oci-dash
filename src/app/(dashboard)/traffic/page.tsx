@@ -26,6 +26,7 @@ import {
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
 import { instanceHref, regionName, shortId } from "@/components/format";
+import { RegionLabel } from "@/components/region-label";
 
 const gib = (value: number | null | undefined) => (value == null ? null : value / 1024 ** 3);
 const totalBytes = (received: number | null, sent: number | null) =>
@@ -335,7 +336,9 @@ export default function TrafficPage() {
                     </td>
                     <td>
                       {row.accountName}
-                      <span className="cell-secondary">{regionName(row.region)}</span>
+                      <span className="cell-secondary">
+                        <RegionLabel region={row.region} />
+                      </span>
                     </td>
                     <td className="tabular">{analyticsNumber(gib(row.receivedBytes))}</td>
                     <td className="tabular">{analyticsNumber(gib(row.sentBytes))}</td>
