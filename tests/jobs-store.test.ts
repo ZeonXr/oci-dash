@@ -216,7 +216,7 @@ describe("durable job store", () => {
     ).toThrow("different request");
   });
 
-  it("atomically excludes another worker from the same resource but permits other resources", () => {
+  it("serializes writes globally across connections even for independent resources", () => {
     const f = fixture(),
       other = f.open();
     const first = f.store.enqueueOperation(operation(), "admin");
@@ -225,11 +225,13 @@ describe("durable job store", () => {
     f.advance(1);
     const independent = f.store.enqueueOperation(operation("instance-2"), "admin");
     expect(f.store.claimNext("worker-a")?.summary.id).toBe(first.id);
-    expect(other.store.claimNext("worker-b")?.summary.id).toBe(independent.id);
+    expect(other.store.claimNext("worker-b")).toBeNull();
     expect(other.store.claimNext("worker-c")).toBeNull();
     expect(f.store.getJob(blocked.id)?.attempt).toBe(0);
     f.store.finish(first.id, "worker-a", "succeeded", { message: "renamed" });
     expect(other.store.claimNext("worker-c")?.summary.id).toBe(blocked.id);
+    other.store.finish(blocked.id, "worker-c", "succeeded");
+    expect(other.store.claimNext("worker-b")?.summary.id).toBe(independent.id);
   });
 
   it("serializes shared security groups even when the operations name different instances", () => {
@@ -348,5 +350,141 @@ describe("durable job store", () => {
     });
     f.advance(30_001);
     expect(f.store.getWorkerStatus().online).toBe(false);
+  });
+});
+
+describe("pending completion recovery", () => {
+  it("resumes an accepted last-budget attempt and persists its deadline through lease recovery", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.db.prepare("UPDATE jobs SET max_attempts=1 WHERE id=?").run(job.id);
+    const first = f.store.claimNext("first")!;
+    f.store.waitForCompletion(job.id, "first", "OCI processing");
+    f.advance(5000);
+    const waiting = f.store.claimNext("crashed", 100)!;
+    expect(waiting.summary).toMatchObject({
+      attempt: 1,
+      maxAttempts: 1,
+      waitingForCompletion: true,
+      completionDeadlineAt: first.summary.completionDeadlineAt,
+    });
+    f.advance(101);
+    const recovered = f.open().store.claimNext("replacement")!;
+    expect(recovered.summary).toMatchObject({
+      id: job.id,
+      attempt: 1,
+      waitingForCompletion: true,
+      completionDeadlineAt: first.summary.completionDeadlineAt,
+    });
+    f.store.retryLater(job.id, "replacement", "A genuine transport error", 100);
+    expect(f.store.getJob(job.id)?.state).toBe("failed");
+  });
+
+  it("allows explicitly cancelling an exhausted interrupted task", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.store.claimNext("crashed", 100);
+    f.db.prepare("UPDATE jobs SET attempt=max_attempts WHERE id=?").run(job.id);
+    f.advance(101);
+    expect(f.store.claimNext("replacement")).toBeNull();
+    expect(f.store.getJob(job.id)).toMatchObject({ state: "interrupted", nextRunAt: null });
+    expect(f.store.cancelJob(job.id).state).toBe("cancelled");
+    expect(f.store.claimNext("replacement")).toBeNull();
+  });
+
+  it("adds completion fields to an existing queue without dropping history or checkpoints", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.store.claimNext("old-worker");
+    f.store.checkpoint(job.id, "old-worker", "accepted", { id: "cloud-resource" });
+    f.store.interrupt(job.id, "old-worker", "Upgrade");
+    f.db.exec(
+      "ALTER TABLE jobs DROP COLUMN waiting_for_completion; ALTER TABLE jobs DROP COLUMN completion_deadline_at",
+    );
+    f.db.close();
+    const migrated = f.open().store;
+    expect(migrated.getJob(job.id)).toMatchObject({
+      state: "interrupted",
+      waitingForCompletion: false,
+      completionDeadlineAt: null,
+    });
+    expect(migrated.claimNext("new-worker")?.checkpoints.accepted).toEqual({
+      id: "cloud-resource",
+    });
+    expect(migrated.getJobEvents(job.id).length).toBeGreaterThan(2);
+  });
+});
+
+describe("global scheduling bounds across SQLite connections", () => {
+  const extra = (id: string) => ({ ...account, id, name: id });
+  const sync = (accountId: string): OperationRequest => ({
+    kind: "sync-account",
+    accountId,
+    region: "region-a",
+    payload: {},
+  });
+  const write = (accountId: string): OperationRequest => ({
+    ...operation(accountId + "-instance"),
+    accountId,
+  });
+
+  it("admits two different-account reads and one unrelated write, but never a third read or second write", () => {
+    const f = fixture([extra("b"), extra("c"), extra("d"), extra("e")]);
+    const peer = f.open().store;
+    const a = f.store.enqueueOperation(sync(account.id), "admin");
+    f.advance(1);
+    const b = f.store.enqueueOperation(sync("b"), "admin");
+    f.advance(1);
+    const c = f.store.enqueueOperation(sync("c"), "admin");
+    f.advance(1);
+    const d = f.store.enqueueOperation(write("d"), "admin");
+    f.advance(1);
+    const e = f.store.enqueueOperation(write("e"), "admin");
+    expect(f.store.claimNext("read-a")?.summary.id).toBe(a.id);
+    expect(peer.claimNext("read-b")?.summary.id).toBe(b.id);
+    expect(peer.claimNext("write-d")?.summary.id).toBe(d.id);
+    expect(f.store.claimNext("extra")).toBeNull();
+    expect(f.store.getJob(c.id)?.attempt).toBe(0);
+    expect(f.store.getJob(e.id)?.attempt).toBe(0);
+    f.store.finish(a.id, "read-a", "succeeded");
+    expect(peer.claimNext("read-c")?.summary.id).toBe(c.id);
+    peer.finish(d.id, "write-d", "succeeded");
+    expect(f.store.claimNext("write-e")?.summary.id).toBe(e.id);
+  });
+
+  it("blocks same-account reads behind a write and same-account writes behind a read", () => {
+    const f = fixture([extra("b")]);
+    const peer = f.open().store;
+    const a = f.store.enqueueOperation(write(account.id), "admin");
+    expect(f.store.claimNext("writer")?.summary.id).toBe(a.id);
+    f.advance(1);
+    const sameRead = f.store.enqueueOperation(sync(account.id), "admin");
+    f.advance(1);
+    const otherRead = f.store.enqueueOperation(sync("b"), "admin");
+    expect(peer.claimNext("reader-b")?.summary.id).toBe(otherRead.id);
+    expect(peer.claimNext("reader-a")).toBeNull();
+    f.store.finish(a.id, "writer", "succeeded");
+    expect(peer.claimNext("reader-a")?.summary.id).toBe(sameRead.id);
+    const sameWrite = f.store.enqueueOperation(write(account.id), "admin");
+    expect(f.store.claimNext("writer-again")).toBeNull();
+    peer.finish(sameRead.id, "reader-a", "succeeded");
+    expect(f.store.claimNext("writer-again")?.summary.id).toBe(sameWrite.id);
+  });
+
+  it("holds cancellation slots until acknowledged and gives explicit work priority over background reads", () => {
+    const f = fixture([extra("b"), extra("c")]);
+    const background = f.store.refreshInventory([account.id, "b"], "auto", "admin").jobs;
+    f.advance(1);
+    const manual = f.store.enqueueOperation(write("c"), "admin");
+    expect(f.store.claimNext("writer")?.summary.id).toBe(manual.id);
+    const first = f.store.claimNext("first-reader")!;
+    const second = f.open().store.claimNext("second-reader")!;
+    expect(background.map((job) => job.id)).toContain(first.summary.id);
+    expect(background.map((job) => job.id)).toContain(second.summary.id);
+    f.store.cancelJob(first.summary.id);
+    const replacement = f.store.enqueueOperation(sync(first.operation.accountId), "admin");
+    expect(f.store.claimNext("replacement")).toBeNull();
+    f.store.finish(first.summary.id, "first-reader", "cancelled");
+    expect(f.store.claimNext("replacement")?.summary.id).toBe(replacement.id);
   });
 });

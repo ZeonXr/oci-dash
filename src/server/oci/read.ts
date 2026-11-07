@@ -2,6 +2,7 @@ import type {
   AccountSummary,
   CreateOptions,
   InstanceSummary,
+  InventoryDetailCoverage,
   InventoryResult,
   MetricPoint,
   MetricsResult,
@@ -9,6 +10,7 @@ import type {
   VnicSummary,
 } from "@/lib/contracts";
 import { CloudError, type ExecutionContext, type OciCredentials } from "./types";
+import { mapInventory, type InventoryImageReader } from "./inventory-performance";
 import {
   allPages,
   cloudError,
@@ -96,14 +98,17 @@ export async function inventoryRegion(
   account: AccountSummary,
   region: string,
   context?: ExecutionContext,
+  imageReader?: InventoryImageReader,
 ): Promise<InventoryResult & { successfulLists: number }> {
   const accessible = await compartments(clients, credentials, context);
   const instances: InstanceSummary[] = [],
     warnings: string[] = [];
+  const completedScopes: NonNullable<InventoryResult["completedScopes"]> = [];
+  const details: NonNullable<InventoryResult["details"]> = {};
   let successfulLists = 0;
-  const warn = (subject: string, error: unknown) => {
+  const warning = (subject: string, error: unknown) => {
     if (error instanceof CloudError && error.code === "CANCELLED") throw error;
-    warnings.push(`${region} / ${subject}：${cloudError(error).message}`);
+    return `${region} / ${subject}：${cloudError(error).message}`;
   };
   for (const compartment of accessible) {
     let rawInstances: CloudDocument[];
@@ -114,150 +119,250 @@ export async function inventoryRegion(
         { compartmentId: compartment.id },
         context,
       );
+      for (const instance of rawInstances) {
+        ocid(instance.id, "instance");
+        if (instance.compartmentId !== compartment.id)
+          throw new CloudError("实例清单包含其他区间的资源", "RESOURCE_MISMATCH");
+      }
       successfulLists++;
+      completedScopes.push({ region, compartmentId: compartment.id });
     } catch (error) {
       if (error instanceof CloudError && error.code === "CANCELLED") throw error;
-      warn(compartment.name, error);
+      warnings.push(warning(compartment.name, error));
       continue;
     }
-    for (const raw of rawInstances.filter((i) => i.lifecycleState !== "TERMINATED")) {
-      const row: InstanceSummary = {
-        id: raw.id,
-        accountId: account.id,
-        accountName: account.name,
-        displayName: raw.displayName ?? raw.id,
-        region,
-        availabilityDomain: raw.availabilityDomain,
-        compartmentId: raw.compartmentId,
-        state: raw.lifecycleState,
-        shape: raw.shape,
-        ocpus: Number(raw.shapeConfig?.ocpus ?? 0),
-        memoryGb: Number(raw.shapeConfig?.memoryInGBs ?? 0),
-        os: "未知",
-        createdAt: iso(raw.timeCreated),
-        vnics: [],
-        bootVolumes: [],
-        tags: Object.fromEntries(
-          Object.entries(raw.freeformTags ?? {}).filter(
-            ([key, value]) =>
-              typeof value === "string" &&
-              !/password|secret|token|credential|private.?key|api.?key/i.test(key),
-          ),
-        ) as Record<string, string>,
-        syncedAt: new Date().toISOString(),
-        metrics: { cpuPercent: null, memoryPercent: null, receivedMbps: null, sentMbps: null },
-      };
-      instances.push(row);
-      try {
-        const vnics = await attachedVnics(clients, raw, context);
-        for (const vnic of vnics) {
-          const summary: VnicSummary = {
-            id: vnic.id,
-            name: vnic.displayName ?? vnic.id,
-            primary: Boolean(vnic.isPrimary),
-            subnetId: vnic.subnetId,
-            nsgIds: vnic.nsgIds ?? [],
-            privateIps: [],
-            ipv6: [],
-          };
-          row.vnics.push(summary);
-          try {
-            const privateIps = await allPages(
-              clients.network,
-              "listPrivateIps",
-              { vnicId: vnic.id },
-              context,
-            );
-            for (const ip of privateIps) {
-              let publicIp: CloudDocument | null = null;
+    const found = await mapInventory(
+      rawInstances.filter((i) => i.lifecycleState !== "TERMINATED"),
+      2,
+      async (raw) => {
+        const row: InstanceSummary = {
+          id: raw.id,
+          accountId: account.id,
+          accountName: account.name,
+          displayName: raw.displayName ?? raw.id,
+          region,
+          availabilityDomain: raw.availabilityDomain,
+          compartmentId: raw.compartmentId,
+          state: raw.lifecycleState,
+          shape: raw.shape,
+          ocpus: Number(raw.shapeConfig?.ocpus ?? 0),
+          memoryGb: Number(raw.shapeConfig?.memoryInGBs ?? 0),
+          os: "未知",
+          createdAt: iso(raw.timeCreated),
+          vnics: [],
+          bootVolumes: [],
+          tags: Object.fromEntries(
+            Object.entries(raw.freeformTags ?? {}).filter(
+              ([key, value]) =>
+                typeof value === "string" &&
+                !/password|secret|token|credential|private.?key|api.?key/i.test(key),
+            ),
+          ) as Record<string, string>,
+          syncedAt: new Date().toISOString(),
+          metrics: { cpuPercent: null, memoryPercent: null, receivedMbps: null, sentMbps: null },
+        };
+        const coverage: InventoryDetailCoverage = {
+          vnics: false,
+          bootVolumes: false,
+          os: !raw.imageId,
+          vnicDetails: {},
+        };
+        const detailWarnings: string[][] = [[], [], []];
+        const warn = (part: number, subject: string, error: unknown) =>
+          detailWarnings[part].push(warning(subject, error));
+        await mapInventory(
+          [
+            async () => {
               try {
-                publicIp = await getPublicBinding(clients, ip.id, context);
+                const vnics = await attachedVnics(clients, raw, context);
+                coverage.vnics = true;
+                for (const vnic of vnics) {
+                  const summary: VnicSummary = {
+                    id: vnic.id,
+                    name: vnic.displayName ?? vnic.id,
+                    primary: Boolean(vnic.isPrimary),
+                    subnetId: vnic.subnetId,
+                    nsgIds: vnic.nsgIds ?? [],
+                    privateIps: [],
+                    ipv6: [],
+                  };
+                  row.vnics.push(summary);
+                  const vnicCoverage: InventoryDetailCoverage["vnicDetails"][string] = {
+                    privateIps: false,
+                    ipv6: false,
+                    publicBindings: [],
+                  };
+                  coverage.vnicDetails[vnic.id] = vnicCoverage;
+                  const ipWarnings: string[] = [],
+                    ipv6Warnings: string[] = [];
+                  await mapInventory(
+                    [
+                      async () => {
+                        try {
+                          const privateIps = await allPages(
+                            clients.network,
+                            "listPrivateIps",
+                            { vnicId: vnic.id },
+                            context,
+                          );
+                          const bindings = await mapInventory(
+                            privateIps,
+                            2,
+                            async (ip) => {
+                              let publicIp: CloudDocument | null = null;
+                              let read = false,
+                                errorMessage: string | undefined;
+                              try {
+                                publicIp = await getPublicBinding(clients, ip.id, context);
+                                read = true;
+                              } catch (error) {
+                                errorMessage = warning(`${row.displayName} 公网 IP`, error);
+                              }
+                              return {
+                                read,
+                                errorMessage,
+                                binding: {
+                                  privateIpId: ip.id,
+                                  privateIp: ip.ipAddress,
+                                  isPrimary: Boolean(ip.isPrimary),
+                                  vnicId: vnic.id,
+                                  ...(publicIp
+                                    ? {
+                                        publicIpId: publicIp.id,
+                                        publicIp: publicIp.ipAddress,
+                                        lifetime: publicIp.lifetime,
+                                      }
+                                    : {}),
+                                  protected: publicIp ? protectedPublicIp(publicIp) : true,
+                                },
+                              };
+                            },
+                            context?.signal,
+                          );
+                          summary.privateIps = bindings.map((item) => item.binding);
+                          for (const item of bindings) {
+                            if (item.read)
+                              vnicCoverage.publicBindings.push(item.binding.privateIpId);
+                            if (item.errorMessage) ipWarnings.push(item.errorMessage);
+                          }
+                          vnicCoverage.privateIps = true;
+                        } catch (error) {
+                          ipWarnings.push(warning(`${row.displayName} 私网 IP`, error));
+                        }
+                      },
+                      async () => {
+                        try {
+                          summary.ipv6 = (
+                            await allPages(
+                              clients.network,
+                              "listIpv6s",
+                              { vnicId: vnic.id },
+                              context,
+                            )
+                          ).map((ip) => ip.ipAddress);
+                          vnicCoverage.ipv6 = true;
+                        } catch (error) {
+                          ipv6Warnings.push(warning(`${row.displayName} IPv6`, error));
+                        }
+                      },
+                    ],
+                    2,
+                    (read) => read(),
+                    context?.signal,
+                  );
+                  detailWarnings[0].push(...ipWarnings, ...ipv6Warnings);
+                }
               } catch (error) {
-                warn(`${row.displayName} 公网 IP`, error);
+                warn(0, `${row.displayName} 网卡`, error);
               }
-              summary.privateIps.push({
-                privateIpId: ip.id,
-                privateIp: ip.ipAddress,
-                isPrimary: Boolean(ip.isPrimary),
-                vnicId: vnic.id,
-                ...(publicIp
-                  ? {
-                      publicIpId: publicIp.id,
-                      publicIp: publicIp.ipAddress,
-                      lifetime: publicIp.lifetime,
-                    }
-                  : {}),
-                protected: publicIp ? protectedPublicIp(publicIp) : true,
-              });
-            }
-          } catch (error) {
-            warn(`${row.displayName} 私网 IP`, error);
-          }
-          try {
-            summary.ipv6 = (
-              await allPages(clients.network, "listIpv6s", { vnicId: vnic.id }, context)
-            ).map((ip) => ip.ipAddress);
-          } catch (error) {
-            warn(`${row.displayName} IPv6`, error);
-          }
-        }
-      } catch (error) {
-        warn(`${row.displayName} 网卡`, error);
-      }
-      try {
-        const attachments = await allPages(
-          clients.compute,
-          "listBootVolumeAttachments",
-          {
-            compartmentId: raw.compartmentId,
-            availabilityDomain: raw.availabilityDomain,
-            instanceId: raw.id,
-          },
-          context,
+            },
+            async () => {
+              try {
+                const attachments = await allPages(
+                  clients.compute,
+                  "listBootVolumeAttachments",
+                  {
+                    compartmentId: raw.compartmentId,
+                    availabilityDomain: raw.availabilityDomain,
+                    instanceId: raw.id,
+                  },
+                  context,
+                );
+                for (const attachment of attachments.filter(
+                  (a) => a.lifecycleState === "ATTACHED",
+                )) {
+                  const { bootVolume } = await invoke(
+                    clients.storage,
+                    "getBootVolume",
+                    { bootVolumeId: attachment.bootVolumeId },
+                    context,
+                  );
+                  row.bootVolumes.push({
+                    id: bootVolume.id,
+                    accountId: account.id,
+                    region,
+                    name: bootVolume.displayName ?? bootVolume.id,
+                    state: bootVolume.lifecycleState,
+                    sizeGb: Number(bootVolume.sizeInGBs),
+                    vpusPerGb: Number(bootVolume.vpusPerGB),
+                    attachmentId: attachment.id,
+                  });
+                }
+                coverage.bootVolumes = true;
+              } catch (error) {
+                warn(1, `${row.displayName} 启动卷`, error);
+              }
+            },
+            async () => {
+              if (raw.imageId) {
+                try {
+                  if (imageReader) row.os = await imageReader(raw.imageId);
+                  else {
+                    const { image } = await invoke(
+                      clients.compute,
+                      "getImage",
+                      { imageId: raw.imageId },
+                      context,
+                    );
+                    row.os =
+                      [image.operatingSystem, image.operatingSystemVersion]
+                        .filter(Boolean)
+                        .join(" ") ||
+                      image.displayName ||
+                      "未知";
+                  }
+                  coverage.os = true;
+                } catch (error) {
+                  warn(2, `${row.displayName} 系统镜像`, error);
+                }
+              }
+            },
+          ],
+          3,
+          (read) => read(),
+          context?.signal,
         );
-        for (const attachment of attachments.filter((a) => a.lifecycleState === "ATTACHED")) {
-          const { bootVolume } = await invoke(
-            clients.storage,
-            "getBootVolume",
-            { bootVolumeId: attachment.bootVolumeId },
-            context,
-          );
-          row.bootVolumes.push({
-            id: bootVolume.id,
-            accountId: account.id,
-            region,
-            name: bootVolume.displayName ?? bootVolume.id,
-            state: bootVolume.lifecycleState,
-            sizeGb: Number(bootVolume.sizeInGBs),
-            vpusPerGb: Number(bootVolume.vpusPerGB),
-            attachmentId: attachment.id,
-          });
-        }
-      } catch (error) {
-        warn(`${row.displayName} 启动卷`, error);
-      }
-      if (raw.imageId) {
-        try {
-          const { image } = await invoke(
-            clients.compute,
-            "getImage",
-            { imageId: raw.imageId },
-            context,
-          );
-          row.os =
-            [image.operatingSystem, image.operatingSystemVersion].filter(Boolean).join(" ") ||
-            image.displayName ||
-            "未知";
-        } catch (error) {
-          warn(`${row.displayName} 系统镜像`, error);
-        }
-      }
+        return { row, coverage, warnings: detailWarnings.flat() };
+      },
+      context?.signal,
+    );
+    for (const item of found) {
+      instances.push(item.row);
+      details[item.row.id] = item.coverage;
+      warnings.push(...item.warnings);
     }
     await context?.progress(`已同步 ${region} / ${compartment.name}`, {
       instances: instances.length,
     });
   }
-  return { instances, warnings, regions: [region], successfulLists };
+  return {
+    instances,
+    warnings,
+    regions: [region],
+    successfulLists,
+    completedScopes,
+    details,
+  };
 }
 
 export async function getCreateOptions(

@@ -66,6 +66,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
   const [refreshing, setRefreshing] = useState(false);
   const lastUrl = useRef(url);
   const loader = useRef<() => Promise<void>>(async () => {});
+  const poller = useRef<() => Promise<void>>(async () => {});
   const reload = useCallback(() => loader.current(), []);
   useEffect(() => {
     let disposed = false;
@@ -81,6 +82,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
       setLoading(false);
       setRefreshing(false);
       loader.current = async () => {};
+      poller.current = async () => {};
       return;
     }
     const run = (): Promise<void> => {
@@ -121,28 +123,33 @@ export function useResource<T>(url: string | null, pollMs = 0) {
       return current ? current.catch(() => undefined).then(run) : run();
     };
     loader.current = refresh;
+    poller.current = run;
     const visible = () => document.visibilityState === "visible";
     const resume = () => {
       if (visible() && Date.now() - lastStarted >= 1000) void run();
     };
     if (visible()) void run();
-    const timer = pollMs
-      ? window.setInterval(() => {
-          if (visible()) void run();
-        }, pollMs)
-      : undefined;
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("focus", resume);
     window.addEventListener("online", resume);
     return () => {
       disposed = true;
-      if (timer) window.clearInterval(timer);
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("focus", resume);
       window.removeEventListener("online", resume);
       if (loader.current === refresh) loader.current = async () => {};
+      if (poller.current === run) poller.current = async () => {};
     };
-  }, [url, pollMs, reload]);
+  }, [url]);
+  // Changing the polling cadence must not dispose the URL loader, reset its
+  // in-flight guard, or issue a new GET (especially when a task just completed).
+  useEffect(() => {
+    if (!url || !pollMs) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void poller.current();
+    }, pollMs);
+    return () => window.clearInterval(timer);
+  }, [url, pollMs]);
   const currentData = lastUrl.current === url ? data : undefined;
   return {
     data: currentData,

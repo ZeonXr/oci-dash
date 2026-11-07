@@ -418,7 +418,7 @@ describe("transactional page-triggered inventory refresh", () => {
       setAccountError: vi.fn(),
     };
     await runWorker({ dependencies, once: true, signal: new AbortController().signal });
-    expect(adapter.verify).toHaveBeenCalledTimes(1);
+    expect(adapter.verify).not.toHaveBeenCalled();
     expect(adapter.inventory).toHaveBeenCalledTimes(1);
     expect(adapter.execute).not.toHaveBeenCalled();
     expect(f.store.getJob(queued.id)?.state).toBe("succeeded");

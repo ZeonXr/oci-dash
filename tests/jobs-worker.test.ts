@@ -55,16 +55,16 @@ function fixture() {
   };
   const initial = open();
   const adapter = {
-    verify: vi.fn(async () => ({
+    verify: vi.fn<WorkerDependencies["adapter"]["verify"]>(async () => ({
       tenancyName: account.name,
       homeRegion: account.homeRegion,
       regions: [...account.regions],
     })),
-    execute: vi.fn(async () => ({
+    execute: vi.fn<WorkerDependencies["adapter"]["execute"]>(async () => ({
       message: "Cloud operation complete",
       details: { publicIp: "203.0.113.2" },
     })),
-    inventory: vi.fn(async () => emptyInventory),
+    inventory: vi.fn<WorkerDependencies["adapter"]["inventory"]>(async () => emptyInventory),
   };
   const dependencies: WorkerDependencies = {
     store: initial.store,
@@ -300,13 +300,18 @@ describe("worker with an offline OCI adapter", () => {
     expect(f.store.getWorkerStatus().online).toBe(false);
   });
 
-  it("queues a post-write refresh instead of reusing an earlier in-flight account read", async () => {
+  it("waits for an earlier account read before writing, then queues a distinct post-write refresh", async () => {
     const f = fixture();
     const older = f.store.enqueueAccountSync(account.id, "admin");
     f.store.claimNext("earlier-reader");
     f.advance(1);
     f.adapter.inventory.mockRejectedValueOnce(new Error("Inventory read temporarily unavailable"));
     const job = f.store.enqueueOperation(op, "admin");
+    await f.once();
+    expect(f.store.getJob(job.id)?.state).toBe("queued");
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect(f.store.claimNext("parallel-reader")).toBeNull();
+    f.store.finish(older.id, "earlier-reader", "succeeded");
     await f.once();
     const result = f.store.getJob(job.id)!;
     expect(result.state).toBe("succeeded");
@@ -315,8 +320,6 @@ describe("worker with an offline OCI adapter", () => {
     const sync = f.store.getJob(syncId)!;
     expect(sync.id).not.toBe(older.id);
     expect(sync).toMatchObject({ state: "queued", attempt: 0 });
-    expect(f.store.claimNext("parallel-reader")).toBeNull();
-    f.store.finish(older.id, "earlier-reader", "succeeded");
     await f.once();
     expect(f.store.getJob(sync.id)?.state).toBe("succeeded");
     expect(f.adapter.execute).toHaveBeenCalledTimes(1);
@@ -468,5 +471,386 @@ describe("worker with an offline OCI adapter", () => {
       attempt: 2,
       result: { message: "Already rotated" },
     });
+  });
+});
+
+describe("accepted OCI operation completion windows", () => {
+  it("reconciles more than four pending observations across a restart without repeating a write", async () => {
+    const f = fixture();
+    let writes = 0,
+      reads = 0;
+    const execute = vi.fn(
+      async (_credentials: unknown, _operation: unknown, context: ExecutionContext) => {
+        if (!context.checkpoints.accepted) {
+          writes++;
+          await context.checkpoint("accepted", { resourceId: "created-instance" });
+        }
+        if (++reads <= 6) throw new CloudError("Still provisioning", "RESOURCE_PENDING", true);
+        return { message: "Provisioning completed", details: { instanceId: "created-instance" } };
+      },
+    );
+    let dependencies = { ...f.dependencies, adapter: { ...f.adapter, execute } };
+    const job = f.store.enqueueOperation({ ...op, kind: "instance-create" }, "admin");
+    let deadline: string | null | undefined;
+    for (let observation = 0; observation < 6; observation++) {
+      await f.once(dependencies);
+      const waiting = dependencies.store.getJob(job.id)!;
+      expect(waiting).toMatchObject({
+        state: "retrying",
+        attempt: 1,
+        maxAttempts: 4,
+        waitingForCompletion: true,
+        lastError: null,
+      });
+      deadline ??= waiting.completionDeadlineAt;
+      expect(waiting.completionDeadlineAt).toBe(deadline);
+      if (observation === 2) {
+        f.db.close();
+        dependencies = { ...dependencies, store: f.open().store };
+      }
+      f.advance(5000);
+    }
+    await f.once(dependencies);
+    expect(dependencies.store.getJob(job.id)).toMatchObject({
+      state: "succeeded",
+      attempt: 1,
+      waitingForCompletion: false,
+    });
+    expect(writes).toBe(1);
+    expect(f.dependencies.saveInventory).toHaveBeenCalledOnce();
+  });
+
+  it("spends the normal error budget when status reads fail after acceptance", async () => {
+    const f = fixture();
+    f.adapter.execute.mockRejectedValueOnce(new CloudError("Processing", "RESOURCE_PENDING", true));
+    f.adapter.execute.mockRejectedValue(new CloudError("Unavailable", "SERVICE_UNAVAILABLE", true));
+    const job = f.store.enqueueOperation(op, "admin");
+    await f.once();
+    f.advance(5000);
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await f.once();
+      expect(f.store.getJob(job.id)?.attempt).toBe(attempt);
+      expect(f.store.getJob(job.id)?.waitingForCompletion).toBe(false);
+      f.advance(100);
+    }
+    expect(f.store.getJob(job.id)?.state).toBe("failed");
+    expect(f.store.claimNext("extra-worker")).toBeNull();
+  });
+
+  it.each(["database restart", "expired lease"])(
+    "stops at the persisted deadline after %s and retains checkpoints",
+    async (recovery) => {
+      const f = fixture();
+      const execute = vi.fn(
+        async (_credentials: unknown, _operation: unknown, context: ExecutionContext) => {
+          await context.checkpoint("accepted", { resourceId: "cloud-resource" });
+          throw new CloudError("Processing", "RESOURCE_PENDING", true);
+        },
+      );
+      const dependencies = { ...f.dependencies, adapter: { ...f.adapter, execute } };
+      const job = f.store.enqueueOperation(op, "admin");
+      await f.once(dependencies);
+      const deadline = f.store.getJob(job.id)!.completionDeadlineAt;
+      expect(deadline).toBe("2026-01-01T00:30:00.000Z");
+      f.advance(5000);
+      if (recovery === "expired lease") {
+        const claimed = f.store.claimNext("lost-worker", 1000)!;
+        expect(claimed.summary.attempt).toBe(1);
+        expect(claimed.summary.completionDeadlineAt).toBe(deadline);
+      }
+      f.db.close();
+      f.advance(30 * 60_000);
+      const reopened = f.open();
+      await f.once({ ...dependencies, store: reopened.store });
+      expect(execute).toHaveBeenCalledOnce();
+      const failed = reopened.store.getJob(job.id)!;
+      expect(failed).toMatchObject({
+        state: "failed",
+        waitingForCompletion: false,
+        nextRunAt: null,
+        completionDeadlineAt: deadline,
+      });
+      expect(failed.lastError).toContain("云端操作可能仍在继续");
+      expect(reopened.store.claimNext("another-worker")).toBeNull();
+      reopened.store.retryJob(job.id);
+      const manual = reopened.store.claimNext("manual-worker")!;
+      expect(manual.checkpoints.accepted).toEqual({ resourceId: "cloud-resource" });
+      expect(Date.parse(manual.summary.completionDeadlineAt!)).toBeGreaterThan(
+        Date.parse(deadline!),
+      );
+      reopened.store.finish(job.id, "manual-worker", "succeeded");
+    },
+  );
+
+  it("does not submit a cloud request when a waiting task was cancelled", async () => {
+    const f = fixture();
+    f.adapter.execute.mockRejectedValue(new CloudError("Processing", "RESOURCE_PENDING", true));
+    const job = f.store.enqueueOperation(op, "admin");
+    await f.once();
+    f.store.cancelJob(job.id);
+    f.advance(5000);
+    await f.once();
+    expect(f.adapter.execute).toHaveBeenCalledOnce();
+    expect(f.store.getJob(job.id)?.state).toBe("cancelled");
+  });
+});
+
+describe("verification during inventory refresh", () => {
+  it.each([
+    { status: "connected" as const, lastSyncAt: "2026-01-01T00:00:00Z", checks: 0 },
+    { status: "connected" as const, lastSyncAt: null, checks: 1 },
+    { status: "unchecked" as const, lastSyncAt: "2026-01-01T00:00:00Z", checks: 1 },
+    { status: "error" as const, lastSyncAt: "2026-01-01T00:00:00Z", checks: 1 },
+  ])(
+    "verifies $checks times for $status with lastSyncAt=$lastSyncAt",
+    async ({ status, lastSyncAt, checks }) => {
+      const f = fixture();
+      Object.assign(f.accountState, { status, lastSyncAt });
+      const job = f.store.enqueueAccountSync(account.id, "admin");
+      await f.once();
+      expect(f.adapter.verify).toHaveBeenCalledTimes(checks);
+      expect(f.adapter.inventory).toHaveBeenCalledOnce();
+      expect(f.store.getJob(job.id)?.state).toBe("succeeded");
+    },
+  );
+  it("rechecks a previously connected account after its inventory request fails", async () => {
+    const f = fixture();
+    f.accountState.lastSyncAt = "2026-01-01T00:00:00Z";
+    f.adapter.inventory.mockRejectedValueOnce(
+      new CloudError("Unavailable", "OCI_UNAVAILABLE", true),
+    );
+    const job = f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.adapter.verify).not.toHaveBeenCalled();
+    expect(f.accountState.status).toBe("error");
+    f.advance(100);
+    await f.once();
+    expect(f.adapter.verify).toHaveBeenCalledOnce();
+    expect(f.store.getJob(job.id)?.state).toBe("succeeded");
+  });
+});
+
+function schedulerFixture() {
+  const f = fixture();
+  const accounts = ["a", "b", "c", "d"].map((id) => ({
+    ...account,
+    id,
+    name: id,
+    lastSyncAt: account.createdAt,
+  }));
+  const store = createJobStore({
+    db: f.db,
+    getAccount: (id) => accounts.find((account) => account.id === id) ?? null,
+  });
+  const dependencies: WorkerDependencies = {
+    ...f.dependencies,
+    store,
+    saveInventory: vi.fn(),
+    setAccountError: vi.fn(),
+  };
+  const sync = (id: string) => store.enqueueAccountSync(id, "admin");
+  const write = (id: string) =>
+    store.enqueueOperation({ ...op, accountId: id, resourceId: id + "-instance" }, "admin");
+  return { ...f, store, dependencies, sync, write };
+}
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("single-process bounded worker scheduling", () => {
+  it("executes two account reads concurrently and promptly fills their freed slot", async () => {
+    const f = schedulerFixture();
+    const gates = new Map(["a", "b", "c"].map((id) => [id, gate()]));
+    const seen: string[] = [];
+    let active = 0,
+      peak = 0;
+    f.adapter.inventory.mockImplementation(async (_credentials, account) => {
+      active++;
+      peak = Math.max(peak, active);
+      seen.push(account.id);
+      try {
+        await gates.get(account.id)!.promise;
+        return emptyInventory;
+      } finally {
+        active--;
+      }
+    });
+    const jobs = [f.sync("a"), f.sync("b"), f.sync("c")];
+    const shutdown = new AbortController();
+    const worker = runWorker({
+      signal: shutdown.signal,
+      dependencies: f.dependencies,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(() => expect(seen).toHaveLength(2));
+      expect(peak).toBe(2);
+      gates.get(seen[0])!.resolve();
+      await vi.waitFor(() => expect(seen).toHaveLength(3));
+      expect(peak).toBe(2);
+      for (const value of gates.values()) value.resolve();
+      await vi.waitFor(() =>
+        expect(jobs.every((job) => f.store.getJob(job.id)?.state === "succeeded")).toBe(true),
+      );
+      expect(f.adapter.verify).not.toHaveBeenCalled();
+    } finally {
+      shutdown.abort();
+      for (const value of gates.values()) value.resolve();
+      await worker;
+    }
+  });
+
+  it("runs an unrelated write alongside two reads without starting a second write", async () => {
+    const f = schedulerFixture();
+    const reading = gate(),
+      writing = gate();
+    const readIds: string[] = [],
+      writeIds: string[] = [];
+    f.adapter.inventory.mockImplementation(async (_credentials, account) => {
+      if (["a", "b"].includes(account.id)) {
+        readIds.push(account.id);
+        await reading.promise;
+      }
+      return emptyInventory;
+    });
+    f.adapter.execute.mockImplementation(async (_credentials, operation) => {
+      writeIds.push(operation.accountId);
+      await writing.promise;
+      return { message: "Done", details: {} };
+    });
+    f.sync("a");
+    f.sync("b");
+    const writes = [f.write("c"), f.write("d")];
+    const shutdown = new AbortController();
+    const worker = runWorker({
+      signal: shutdown.signal,
+      dependencies: f.dependencies,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(readIds).toHaveLength(2);
+        expect(writeIds).toHaveLength(1);
+      });
+      // Jobs created in the same millisecond may tie-break by UUID. Either
+      // account may win, but exactly one write must remain queued.
+      expect(writes.map((job) => f.store.getJob(job.id)?.state).sort()).toEqual([
+        "queued",
+        "running",
+      ]);
+      writing.resolve();
+      await vi.waitFor(() => expect(writeIds).toHaveLength(2));
+      expect(readIds).toHaveLength(2);
+    } finally {
+      shutdown.abort();
+      writing.resolve();
+      reading.resolve();
+      await worker;
+    }
+  });
+
+  it("cancels one concurrent read without interrupting the other", async () => {
+    const f = schedulerFixture();
+    const a = gate(),
+      b = gate();
+    const signals = new Map<string, AbortSignal>();
+    f.adapter.inventory.mockImplementation(async (_credentials, account, _regions, context) => {
+      signals.set(account.id, context!.signal);
+      await (account.id === "a" ? a : b).promise;
+      return emptyInventory;
+    });
+    const first = f.sync("a"),
+      second = f.sync("b");
+    const shutdown = new AbortController();
+    const worker = runWorker({
+      signal: shutdown.signal,
+      dependencies: f.dependencies,
+      pollIntervalMs: 10,
+    });
+    try {
+      await vi.waitFor(() => expect(signals.size).toBe(2));
+      f.store.cancelJob(first.id);
+      a.resolve();
+      await vi.waitFor(() => expect(f.store.getJob(first.id)?.state).toBe("cancelled"));
+      expect(signals.get("b")!.aborted).toBe(false);
+      b.resolve();
+      await vi.waitFor(() => expect(f.store.getJob(second.id)?.state).toBe("succeeded"));
+      expect(f.dependencies.saveInventory).toHaveBeenCalledTimes(1);
+      expect(f.dependencies.saveInventory).toHaveBeenCalledWith("b", emptyInventory);
+    } finally {
+      shutdown.abort();
+      a.resolve();
+      b.resolve();
+      await worker;
+    }
+  });
+
+  it("waits for every in-flight read on shutdown, renews leases while draining, and claims no queued work", async () => {
+    const f = schedulerFixture();
+    const gates = new Map(["a", "b", "c"].map((id) => [id, gate()]));
+    const seen: string[] = [];
+    f.adapter.inventory.mockImplementation(async (_credentials, account) => {
+      seen.push(account.id);
+      await gates.get(account.id)!.promise;
+      return emptyInventory;
+    });
+    const jobs = [f.sync("a"), f.sync("b"), f.sync("c")];
+    const shutdown = new AbortController();
+    let stopped = false;
+    const worker = runWorker({
+      signal: shutdown.signal,
+      dependencies: f.dependencies,
+      pollIntervalMs: 10,
+      leaseMs: 100,
+      heartbeatIntervalMs: 10,
+    }).then(() => {
+      stopped = true;
+    });
+    try {
+      await vi.waitFor(() => expect(seen).toHaveLength(2));
+      shutdown.abort();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(stopped).toBe(false);
+      expect(f.store.getWorkerStatus().online).toBe(true);
+      const active = f.db
+        .prepare("SELECT lease_expires_at FROM jobs WHERE state='running'")
+        .all() as { lease_expires_at: string }[];
+      expect(active).toHaveLength(2);
+      expect(active.every((row) => Date.parse(row.lease_expires_at) > Date.now())).toBe(true);
+      gates.get(seen[0])!.resolve();
+      await vi.waitFor(() =>
+        expect(f.store.getJob(jobs.find((job) => job.accountId === seen[0])!.id)?.state).toBe(
+          "interrupted",
+        ),
+      );
+      expect(stopped).toBe(false);
+      gates.get(seen[1])!.resolve();
+      await worker;
+      expect(seen).toHaveLength(2);
+      expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "queued")).toHaveLength(1);
+      expect(f.dependencies.saveInventory).not.toHaveBeenCalled();
+      expect(f.store.getWorkerStatus().online).toBe(false);
+    } finally {
+      shutdown.abort();
+      for (const value of gates.values()) value.resolve();
+      await worker;
+    }
+  });
+
+  it("keeps once mode to exactly one claimed and completed task", async () => {
+    const f = schedulerFixture();
+    const jobs = [f.sync("a"), f.sync("b")];
+    await runWorker({
+      signal: new AbortController().signal,
+      dependencies: f.dependencies,
+      once: true,
+    });
+    expect(f.adapter.inventory).toHaveBeenCalledOnce();
+    expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "succeeded")).toHaveLength(1);
+    expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "queued")).toHaveLength(1);
   });
 });

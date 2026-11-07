@@ -107,21 +107,34 @@ function targets(instances: InstanceSummary[], warnings: Set<string>): Target[] 
 /** Cap every cloud RPC at two concurrent calls, including concurrent read() invocations. */
 function limitCloudCalls() {
   let active = 0;
-  const queue: (() => void)[] = [];
-  return async <T>(action: () => Promise<T>): Promise<T> => {
-    await new Promise<void>((resolve) => {
-      const take = () => {
-        active += 1;
-        resolve();
+  const queue: { take: () => void; abort: () => void }[] = [];
+  return async <T>(action: () => Promise<T>, signal: AbortSignal): Promise<T> => {
+    await new Promise<void>((resolve, reject) => {
+      if (signal.aborted) return reject(new CloudError("流量查询已取消", "TRAFFIC_TIMEOUT", true));
+      const entry = {
+        take() {
+          signal.removeEventListener("abort", entry.abort);
+          active += 1;
+          resolve();
+        },
+        abort() {
+          signal.removeEventListener("abort", entry.abort);
+          const index = queue.indexOf(entry);
+          if (index >= 0) queue.splice(index, 1);
+          reject(new CloudError("流量查询已取消", "TRAFFIC_TIMEOUT", true));
+        },
       };
-      if (active < 2) take();
-      else queue.push(take);
+      if (active < 2) entry.take();
+      else {
+        queue.push(entry);
+        signal.addEventListener("abort", entry.abort, { once: true });
+      }
     });
     try {
       return await action();
     } finally {
       active -= 1;
-      queue.shift()?.();
+      queue.shift()?.take();
     }
   };
 }
@@ -291,6 +304,7 @@ export function createTrafficReader(options: TrafficReaderOptions = {}) {
       credentials: OciCredentials,
       instances: InstanceSummary[],
       range: AnalyticsRange,
+      signal?: AbortSignal,
     ): Promise<TrafficAccountData> {
       const now = clock();
       const { start, end, through, hours } = bounds(range, now);
@@ -302,14 +316,23 @@ export function createTrafficReader(options: TrafficReaderOptions = {}) {
       let expired = false,
         finished = false;
       let deadlineTimer!: ReturnType<typeof setTimeout>;
+      const budget = new AbortController();
+      const cancel = () => budget.abort();
+      signal?.addEventListener("abort", cancel, { once: true });
       const timedOut = () => new CloudError("流量查询已达到整体时间限制", "TRAFFIC_TIMEOUT", true);
       const deadline = new Promise<never>((_resolve, reject) => {
-        deadlineTimer = setTimeout(() => {
-          expired = true;
-          warnings.add("流量查询达到整体时间限制，已停止后续请求并保留已取得的数据。");
-          reject(timedOut());
-        }, timeoutMs);
+        budget.signal.addEventListener(
+          "abort",
+          () => {
+            expired = true;
+            warnings.add("流量查询达到整体时间限制，已停止后续请求并保留已取得的数据。");
+            reject(timedOut());
+          },
+          { once: true },
+        );
+        deadlineTimer = setTimeout(cancel, timeoutMs);
       });
+      if (signal?.aborted) cancel();
       deadlineTimer.unref();
       void deadline.catch(() => undefined);
       const checkBudget = () => {
@@ -323,7 +346,7 @@ export function createTrafficReader(options: TrafficReaderOptions = {}) {
           limited(async () => {
             checkBudget();
             return action();
-          }),
+          }, budget.signal),
           deadline,
         ]);
       };
@@ -427,6 +450,7 @@ export function createTrafficReader(options: TrafficReaderOptions = {}) {
       } finally {
         finished = true;
         clearTimeout(deadlineTimer);
+        signal?.removeEventListener("abort", cancel);
         // Do not await pending client construction after the budget. Its late
         // completion path closes that client itself without starting a cloud RPC.
         await Promise.all([...opened].map((regional) => closeClients(regional)));

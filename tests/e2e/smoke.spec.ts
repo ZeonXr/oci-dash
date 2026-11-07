@@ -148,20 +148,31 @@ test.afterEach(async ({ context }) => {
   expect(guard?.errors, "The page should not raise uncaught JavaScript errors").toEqual([]);
 });
 
-test("总览展示资源指标与动态监控", async ({ page }, testInfo) => {
+test("数据总览展示用量摘要与四个统计面板", async ({ page }, testInfo) => {
   await page.goto("/overview");
-  await test.step("总览和四项指标加载完成", async () => {
-    await expect(page.getByRole("heading", { name: "资源总览" })).toBeVisible();
-    await expect(page.locator(".metric-card")).toHaveCount(4);
-    await expect(page.locator(".metric-card").first()).toContainText(String(demo.totals.instances));
+  await test.step("用量摘要和统计面板加载完成", async () => {
+    await expect(page.getByRole("heading", { name: "数据总览" })).toBeVisible();
+    await expect(page.locator(".overview-summary")).toHaveCount(3);
+    await expect(page.locator('.overview-summary-value[aria-busy="false"]')).toHaveCount(3);
+    for (const name of ["发送流量", "接收流量", "平均 CPU"]) {
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
+    await expect(page.locator(".overview-panel")).toHaveCount(4);
+    for (const name of ["收发流量趋势", "实例流量排行", "实例负载", "费用走势"]) {
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("img", { name: "每日发送与接收流量，单位 GiB" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "实例流量排行" })).toBeVisible();
+    await expect(page.getByRole("grid", { name: "最近 24 小时 CPU 热力图" })).toBeVisible();
+    await expect(page.getByRole("img", { name: /^每日服务费用，币种 / })).toBeVisible();
     await expect(page.getByText("演示环境 · 只读", { exact: true })).toBeVisible();
   });
-  await test.step("监控时间范围可以切换", async () => {
-    await page.getByLabel("监控时间范围").selectOption("7d");
-    await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toBeVisible();
-    await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toContainText(
-      /\d{2}\/\d{2}/,
-    );
+  await test.step("总览时间范围可以切换", async () => {
+    const range = page.locator(".data-overview .page-heading p");
+    const previous = await range.innerText();
+    await page.getByLabel("总览时间范围", { exact: true }).selectOption("30d");
+    await expect(range).not.toHaveText(previous);
+    await expect(page.getByRole("img", { name: "每日发送与接收流量，单位 GiB" })).toBeVisible();
   });
   await capture(page, testInfo, "overview-desktop");
 });
@@ -260,18 +271,8 @@ test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
   await capture(page, testInfo, "instance-overview");
 });
 
-test("连接对话框与公网地址保护", async ({ page }, testInfo) => {
+test("公网地址保护", async ({ page }, testInfo) => {
   await instancePage(page);
-  await test.step("连接对话框保留焦点并支持 Escape", async () => {
-    await page.getByRole("button", { name: "SSH 连接信息", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "SSH 连接信息" })).toBeVisible();
-    await page.keyboard.press("Tab");
-    expect(await page.evaluate(() => Boolean(document.activeElement?.closest("dialog")))).toBe(
-      true,
-    );
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "SSH 连接信息" })).not.toBeVisible();
-  });
   await test.step("网络详情展示完整绑定与保护标记", async () => {
     await page.getByRole("tab", { name: "网络", exact: true }).click();
     await expect(page.getByText("保留公网 IP", { exact: true })).toBeVisible();
@@ -288,7 +289,7 @@ test("连接对话框与公网地址保护", async ({ page }, testInfo) => {
 });
 
 test("账号列表完成加载且凭据操作只读", async ({ page }, testInfo) => {
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   await expect(page.locator(".account-card")).toHaveCount(demo.accounts.length);
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
   for (const name of ["刷新资源", "编辑", "移除"]) {
@@ -310,7 +311,7 @@ test("任务详情展示状态与事件历史", async ({ page }, testInfo) => {
 });
 
 test("主题切换持久化且安全设置只读", async ({ page }, testInfo) => {
-  await page.goto("/settings");
+  await page.goto("/settings/general");
   await test.step("启用深色主题", async () => {
     await page.getByRole("button", { name: "深色", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -322,13 +323,21 @@ test("主题切换持久化且安全设置只读", async ({ page }, testInfo) =>
     await page.getByRole("button", { name: "浅色", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
+  await page
+    .getByRole("navigation", { name: "设置分区" })
+    .getByRole("link", { name: "登录安全", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/settings\/security$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("设置");
   await expect(page.getByRole("button", { name: "修改密码", exact: true })).toBeDisabled();
+  await capture(page, testInfo, "settings-security");
 });
 
 test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/overview");
-  await expect(page.locator(".metric-card")).toHaveCount(4);
+  await expect(page.getByRole("heading", { name: "数据总览" })).toBeVisible();
+  await expect(page.locator(".overview-summary")).toHaveCount(3);
   await test.step("侧栏默认隐藏且不接受焦点", async () => {
     await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
     const width = await page.evaluate(() => ({
@@ -389,7 +398,7 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
 // Last in the serial suite: this invalidates the in-memory shared test session.
 test("退出后受保护页面和 API 要求重新登录", async ({ page }) => {
   await page.goto("/overview");
-  await expect(page.getByRole("heading", { name: "资源总览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "数据总览" })).toBeVisible();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await page.waitForURL("**/login");
   await page.goto("/instances");

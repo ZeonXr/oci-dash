@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { canResumeJob, isJobCancellable, isJobRetryable } from "@/lib/job-state";
 import type {
   AccountSummary,
   JobEvent,
@@ -24,12 +25,15 @@ const kinds = new Set<OperationKind>([
   "security-rule-delete",
   "ipv6-assign",
 ]);
-const terminal = new Set<JobState>(["succeeded", "failed", "cancelled"]);
 const MAX_ATTEMPTS = 4;
 const INVENTORY_FRESH_MS = 60_000;
 const MANUAL_REFRESH_THROTTLE_MS = 2_000;
 const AUTO_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
 export const DEFAULT_LEASE_MS = 30_000;
+export const MAX_CONCURRENT_ACCOUNT_SYNCS = 2;
+export const DEFAULT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+export const COMPLETION_TIMEOUT_MESSAGE =
+  "等待 OCI 完成已超过本轮执行期限。云端操作可能仍在继续，请核对资源后重试；重试会保留检查点。";
 const PRIVATE_KEY = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g;
 const secretField =
   /(?:private[_-]?key|password|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|^secret$|^credentials?$|^cookies?$)/i;
@@ -117,6 +121,8 @@ interface JobRow {
   cancel_requested: number;
   needs_reconcile: number;
   background: number;
+  waiting_for_completion: number;
+  completion_deadline_at: string | null;
 }
 interface InventoryRefreshRow {
   account_id: string;
@@ -144,6 +150,7 @@ export interface JobStoreOptions {
   db: Database.Database;
   getAccount(id: string): AccountSummary | null;
   now?: () => Date;
+  completionTimeoutMs?: number;
 }
 function summary(r: JobRow): JobSummary {
   return {
@@ -156,6 +163,8 @@ function summary(r: JobRow): JobSummary {
     state: r.state,
     attempt: r.attempt,
     maxAttempts: r.max_attempts,
+    waitingForCompletion: Boolean(r.waiting_for_completion),
+    completionDeadlineAt: r.completion_deadline_at,
     createdAt: r.created_at,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
@@ -201,6 +210,7 @@ export function ensureJobSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state,next_run_at,created_at);
     CREATE INDEX IF NOT EXISTS jobs_account_sync ON jobs(account_id,kind,created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_resource ON jobs(resource_lock) WHERE state IN ('running','cancel_requested');
+    CREATE INDEX IF NOT EXISTS jobs_active_kind_account ON jobs(kind,account_id) WHERE state IN ('running','cancel_requested');
     CREATE TABLE IF NOT EXISTS job_resources (
       job_id TEXT NOT NULL REFERENCES jobs(id), resource_key TEXT NOT NULL, PRIMARY KEY(job_id,resource_key)
     );
@@ -230,6 +240,10 @@ export function ensureJobSchema(db: Database.Database): void {
       db.exec(
         "ALTER TABLE jobs ADD COLUMN background INTEGER NOT NULL DEFAULT 0 CHECK(background IN (0,1))",
       );
+    if (!columns.some((column) => column.name === "waiting_for_completion"))
+      db.exec("ALTER TABLE jobs ADD COLUMN waiting_for_completion INTEGER NOT NULL DEFAULT 0");
+    if (!columns.some((column) => column.name === "completion_deadline_at"))
+      db.exec("ALTER TABLE jobs ADD COLUMN completion_deadline_at TEXT");
     db.exec(
       "CREATE INDEX IF NOT EXISTS jobs_background_history ON jobs(account_id,background,finished_at)",
     );
@@ -246,7 +260,14 @@ export function ensureJobSchema(db: Database.Database): void {
   }).immediate();
 }
 
-export function createJobStore({ db, getAccount, now = () => new Date() }: JobStoreOptions) {
+export function createJobStore({
+  db,
+  getAccount,
+  now = () => new Date(),
+  completionTimeoutMs = DEFAULT_COMPLETION_TIMEOUT_MS,
+}: JobStoreOptions) {
+  if (!Number.isFinite(completionTimeoutMs) || completionTimeoutMs <= 0)
+    throw new JobError("The completion timeout must be finite and positive.", "INVALID_TIMEOUT");
   ensureJobSchema(db);
   const timestamp = () => now().toISOString();
   const row = (id: string) =>
@@ -288,7 +309,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
       .prepare(
         `SELECT * FROM jobs WHERE account_id=? AND kind='sync-account' AND cancel_requested=0
         AND (state IN ('queued','running','retrying') OR
-          (state='interrupted' AND next_run_at IS NOT NULL AND attempt<max_attempts))
+          (state='interrupted' AND next_run_at IS NOT NULL AND (attempt<max_attempts OR waiting_for_completion=1)))
         ORDER BY created_at DESC,rowid DESC LIMIT 1`,
       )
       .get(accountId) as JobRow | undefined;
@@ -574,7 +595,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
             SELECT j.*,j.rowid AS insertion_order,
               ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY
                 CASE WHEN state IN ('queued','running','retrying','cancel_requested') OR
-                  (state='interrupted' AND next_run_at IS NOT NULL AND attempt<max_attempts AND cancel_requested=0)
+                  (state='interrupted' AND next_run_at IS NOT NULL AND (attempt<max_attempts OR waiting_for_completion=1) AND cancel_requested=0)
                   THEN 0 ELSE 1 END,
                 created_at DESC,j.rowid DESC) AS account_rank
             FROM jobs j WHERE kind='sync-account'
@@ -587,7 +608,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     return db
       .transaction(() => {
         const current = required(id);
-        if (terminal.has(current.state)) return summary(current);
+        if (!isJobCancellable(summary(current))) return summary(current);
         if (current.state === "running" || current.state === "cancel_requested") {
           if (!current.cancel_requested) {
             db.prepare(
@@ -601,7 +622,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
           }
         } else {
           db.prepare(
-            "UPDATE jobs SET state='cancelled',cancel_requested=1,finished_at=?,next_run_at=NULL WHERE id=?",
+            "UPDATE jobs SET state='cancelled',cancel_requested=1,finished_at=?,next_run_at=NULL,waiting_for_completion=0 WHERE id=?",
           ).run(timestamp(), id);
           event(
             id,
@@ -618,7 +639,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     return db
       .transaction(() => {
         const current = required(id);
-        if (!["failed", "cancelled", "interrupted"].includes(current.state))
+        if (!isJobRetryable(summary(current)))
           throw new JobError(
             "Only failed, cancelled or interrupted tasks can be retried.",
             "JOB_NOT_RETRYABLE",
@@ -628,7 +649,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
           throw new JobError("The previous worker still owns this task.", "JOB_IS_RUNNING", 409);
         db.prepare(
           `UPDATE jobs SET state='queued',cancel_requested=0,finished_at=NULL,next_run_at=?,last_error=NULL,
-        max_attempts=?,needs_reconcile=?,background=0 WHERE id=?`,
+        max_attempts=?,needs_reconcile=?,background=0,waiting_for_completion=0,completion_deadline_at=NULL WHERE id=?`,
         ).run(timestamp(), current.attempt + MAX_ATTEMPTS, current.attempt > 0 ? 1 : 0, id);
         event(
           id,
@@ -646,7 +667,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
       )
       .all(timestamp()) as JobRow[];
     for (const current of expired) {
-      const automatic = !current.cancel_requested && current.attempt < current.max_attempts;
+      const automatic = !current.cancel_requested && canResumeJob(summary(current));
       db.prepare(
         `UPDATE jobs SET state='interrupted',lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=1,
         next_run_at=?,last_error=? WHERE id=?`,
@@ -670,27 +691,44 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     return db
       .transaction(() => {
         reclaimExpired();
+        // All schedulers share these bounds, not just one process's promise pool:
+        // two account reads, one write, and no read/write overlap within an account.
         const current = db
           .prepare(
             `SELECT j.* FROM jobs j WHERE j.state IN ('queued','retrying','interrupted')
-        AND j.next_run_at IS NOT NULL AND j.next_run_at<=? AND j.attempt<j.max_attempts AND j.cancel_requested=0
+        AND j.next_run_at IS NOT NULL AND j.next_run_at<=? AND (j.attempt<j.max_attempts OR j.waiting_for_completion=1) AND j.cancel_requested=0
         AND NOT EXISTS(SELECT 1 FROM job_resources candidate JOIN job_resources occupied ON occupied.resource_key=candidate.resource_key
           JOIN jobs active ON active.id=occupied.job_id WHERE candidate.job_id=j.id AND active.state IN ('running','cancel_requested'))
+        AND NOT EXISTS(SELECT 1 FROM jobs active WHERE active.state IN ('running','cancel_requested') AND (
+          (j.kind<>'sync-account' AND active.kind<>'sync-account') OR
+          (active.account_id=j.account_id AND (j.kind='sync-account' OR active.kind='sync-account'))
+        ))
+        AND (j.kind<>'sync-account' OR (SELECT COUNT(*) FROM jobs active
+          WHERE active.kind='sync-account' AND active.state IN ('running','cancel_requested')) < ?)
         ORDER BY j.background,j.next_run_at,j.created_at,j.id LIMIT 1`,
           )
-          .get(timestamp()) as JobRow | undefined;
+          .get(timestamp(), MAX_CONCURRENT_ACCOUNT_SYNCS) as JobRow | undefined;
         if (!current) return null;
         db.prepare(
-          `UPDATE jobs SET state='running',attempt=attempt+1,started_at=COALESCE(started_at,?),
-        finished_at=NULL,next_run_at=NULL,lease_owner=?,lease_expires_at=? WHERE id=?`,
-        ).run(timestamp(), workerId, new Date(now().getTime() + leaseMs).toISOString(), current.id);
+          `UPDATE jobs SET state='running',attempt=attempt+CASE WHEN waiting_for_completion=1 THEN 0 ELSE 1 END,started_at=COALESCE(started_at,?),
+        finished_at=NULL,next_run_at=NULL,lease_owner=?,lease_expires_at=?,
+        completion_deadline_at=COALESCE(completion_deadline_at,?) WHERE id=?`,
+        ).run(
+          timestamp(),
+          workerId,
+          new Date(now().getTime() + leaseMs).toISOString(),
+          current.kind === "sync-account"
+            ? null
+            : new Date(now().getTime() + completionTimeoutMs).toISOString(),
+          current.id,
+        );
         event(
           current.id,
           "info",
           current.needs_reconcile
             ? "Recovery started; reconciling saved checkpoints with OCI."
             : "Execution started.",
-          { attempt: current.attempt + 1, workerId },
+          { attempt: current.attempt + (current.waiting_for_completion ? 0 : 1), workerId },
         );
         const claimed = required(current.id);
         return {
@@ -740,7 +778,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
       const current = owned(id, workerId);
       db.prepare(
         `UPDATE jobs SET state=?,result_json=?,last_error=?,finished_at=?,next_run_at=NULL,
-        lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=0 WHERE id=?`,
+        lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=0,waiting_for_completion=0 WHERE id=?`,
       ).run(state, result ? encode(result, true) : null, error || null, timestamp(), id);
       event(
         id,
@@ -775,7 +813,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
       const due = new Date(now().getTime() + Math.max(0, delayMs)).toISOString();
       db.prepare(
         `UPDATE jobs SET state='retrying',last_error=?,next_run_at=?,needs_reconcile=1,
-        lease_owner=NULL,lease_expires_at=NULL WHERE id=?`,
+        lease_owner=NULL,lease_expires_at=NULL,waiting_for_completion=0 WHERE id=?`,
       ).run(error, due, id);
       event(
         id,
@@ -783,6 +821,45 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         "A retryable error occurred. The next attempt will first reconcile remote state.",
         { error, nextRunAt: due, attempt: current.attempt },
       );
+    }).immediate();
+  }
+  function assertCompletionWindow(id: string, workerId: string): void {
+    const current = owned(id, workerId);
+    if (current.completion_deadline_at && current.completion_deadline_at <= timestamp())
+      throw new JobError(COMPLETION_TIMEOUT_MESSAGE, "COMPLETION_TIMEOUT");
+  }
+  function waitForCompletion(id: string, workerId: string, message: string): void {
+    db.transaction(() => {
+      const current = owned(id, workerId);
+      if (current.cancel_requested) {
+        finish(
+          id,
+          workerId,
+          "cancelled",
+          undefined,
+          "Cancellation requested while OCI was processing the operation.",
+        );
+        return;
+      }
+      // The deadline was persisted on the first claim. Reopening the database,
+      // recovering a lease, or repeating a successful status read never extends it.
+      const deadline =
+        current.completion_deadline_at ??
+        new Date(now().getTime() + completionTimeoutMs).toISOString();
+      if (deadline <= timestamp()) {
+        finish(id, workerId, "failed", undefined, COMPLETION_TIMEOUT_MESSAGE);
+        return;
+      }
+      const due = new Date(Math.min(now().getTime() + 5000, Date.parse(deadline))).toISOString();
+      db.prepare(
+        `UPDATE jobs SET state='retrying',last_error=NULL,next_run_at=?,needs_reconcile=1,
+        waiting_for_completion=1,completion_deadline_at=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=?`,
+      ).run(due, deadline, id);
+      event(id, "info", message, {
+        waitingForCompletion: true,
+        nextRunAt: due,
+        completionDeadlineAt: deadline,
+      });
     }).immediate();
   }
   function interrupt(id: string, workerId: string, reason: string): void {
@@ -793,7 +870,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         lease_owner=NULL,lease_expires_at=NULL WHERE id=?`,
       ).run(
         reason,
-        current.attempt < current.max_attempts && !current.cancel_requested ? timestamp() : null,
+        canResumeJob(summary(current)) && !current.cancel_requested ? timestamp() : null,
         id,
       );
       event(
@@ -802,7 +879,7 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
         "Worker stopped before confirming the outcome. Recovery will reconcile remote state.",
         { reason },
       );
-      if (current.attempt >= current.max_attempts || current.cancel_requested)
+      if (!canResumeJob(summary(current)) || current.cancel_requested)
         recordSyncOutcome(current, current.cancel_requested ? "cancelled" : "failed");
     }).immediate();
   }
@@ -851,6 +928,8 @@ export function createJobStore({ db, getAccount, now = () => new Date() }: JobSt
     checkpoint,
     finish,
     retryLater,
+    waitForCompletion,
+    assertCompletionWindow,
     interrupt,
     heartbeat,
     getWorkerStatus,

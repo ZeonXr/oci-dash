@@ -17,6 +17,7 @@ import {
   verifyAccount,
 } from "./read";
 import { executeOperation } from "./operations";
+import { createInventoryReader, mapInventory } from "./inventory-performance";
 
 export interface OciAdapterOptions {
   clientFactory?: OciClientFactory;
@@ -27,6 +28,7 @@ export interface OciAdapterOptions {
 export function createOciAdapter(options: OciAdapterOptions = {}): OciAdapter {
   const factory = options.clientFactory ?? sdkClientFactory;
   const now = options.now ?? Date.now;
+  const inventoryReader = createInventoryReader(factory, now);
   const scoped = async <T>(
     credentials: OciCredentials,
     region: string,
@@ -53,20 +55,54 @@ export function createOciAdapter(options: OciAdapterOptions = {}): OciAdapter {
         throw new CloudError("账号与解密后的 OCI 身份不一致", "RESOURCE_MISMATCH");
       const selected = [...new Set(regions)];
       if (!selected.length) throw new CloudError("请至少选择一个区域", "VALIDATION_ERROR");
-      const result: InventoryResult = { instances: [], warnings: [], regions: selected };
+      const result: InventoryResult = {
+        instances: [],
+        warnings: [],
+        regions: selected,
+        completedScopes: [],
+        details: {},
+      };
+      const foundRegions = await mapInventory(
+        selected,
+        2,
+        async (region) => {
+          checkCancelled(context);
+          try {
+            regionName(region);
+            ocid(credentials.tenancyId, "tenancy");
+            ocid(credentials.userId, "user");
+            const found = await inventoryReader.region(
+              credentials,
+              region,
+              context,
+              (clients, image) =>
+                inventoryRegion(
+                  clients,
+                  { ...credentials, region },
+                  account,
+                  region,
+                  context,
+                  image,
+                ),
+            );
+            return { found };
+          } catch (error) {
+            if (error instanceof CloudError && error.code === "CANCELLED") throw error;
+            return { warning: `${region}：${cloudError(error).message}` };
+          }
+        },
+        context?.signal,
+      );
       let successfulLists = 0;
-      for (const region of selected) {
-        checkCancelled(context);
-        try {
-          const found = await scoped(credentials, region, (clients) =>
-            inventoryRegion(clients, { ...credentials, region }, account, region, context),
-          );
-          result.instances.push(...found.instances);
-          result.warnings.push(...found.warnings);
-          successfulLists += found.successfulLists;
-        } catch (error) {
-          if (error instanceof CloudError && error.code === "CANCELLED") throw error;
-          result.warnings.push(`${region}：${cloudError(error).message}`);
+      for (const item of foundRegions) {
+        if (item.found) {
+          result.instances.push(...item.found.instances);
+          result.warnings.push(...item.found.warnings);
+          result.completedScopes!.push(...(item.found.completedScopes ?? []));
+          Object.assign(result.details!, item.found.details);
+          successfulLists += item.found.successfulLists;
+        } else if (item.warning) {
+          result.warnings.push(item.warning);
         }
       }
       if (!successfulLists)

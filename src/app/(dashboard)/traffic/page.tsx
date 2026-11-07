@@ -197,7 +197,7 @@ export default function TrafficPage() {
             title="先添加 OCI 账号"
             description="添加账号并同步实例后，可查询网卡流量。"
             action={
-              <Link className="button" href="/accounts">
+              <Link className="button" href="/settings/accounts">
                 管理账号
               </Link>
             }

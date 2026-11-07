@@ -69,14 +69,27 @@ type RequestRecord = {
 };
 interface RefreshFixture {
   now: number;
+  accounts: AccountSummary[];
   rows: InstanceSummary[];
   syncJob: JobSummary | null;
+  syncJobs: JobSummary[];
   taskRows: JobSummary[];
   requests: RequestRecord[];
   failedRequests: string[];
   unexpected: string[];
   jobsGate?: Promise<void>;
+  refreshGate?: Promise<void>;
+  instancesGate?: Promise<void>;
+  jobGates: Map<string, Promise<void>>;
+  failedSnapshots: number;
+  activeInstanceReads: number;
+  peakInstanceReads: number;
   finish(state: "succeeded" | "failed", update?: (rows: InstanceSummary[]) => void): void;
+  finishAccount(
+    id: string,
+    state: "succeeded" | "failed",
+    update?: (rows: InstanceSummary[]) => void,
+  ): void;
   count(path: string, method?: string): number;
   manualRequests(): RequestRecord[];
 }
@@ -88,8 +101,20 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
     const errors: string[] = [];
     const state: RefreshFixture = {
       now: Date.now(),
+      accounts: [{ ...account }],
       rows: instances(),
-      syncJob: null,
+      syncJobs: [],
+      get syncJob() {
+        return state.syncJobs.find((job) => job.accountId === account.id) ?? null;
+      },
+      set syncJob(value) {
+        state.syncJobs = state.syncJobs.filter((job) => job.accountId !== account.id);
+        if (value) state.syncJobs.push(value);
+      },
+      jobGates: new Map(),
+      failedSnapshots: 0,
+      activeInstanceReads: 0,
+      peakInstanceReads: 0,
       taskRows: [
         {
           ...job("refresh-fixture-task"),
@@ -103,20 +128,30 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
       failedRequests: [],
       unexpected: [],
       finish(status, update) {
-        if (!state.syncJob) throw new Error("No fixture synchronization was requested.");
+        state.finishAccount(account.id, status, update);
+      },
+      finishAccount(id, status, update) {
+        const job = state.syncJobs.find((item) => item.accountId === id);
+        const selected = state.accounts.find((item) => item.id === id);
+        if (!job || !selected) throw new Error("No fixture synchronization was requested.");
         update?.(state.rows);
         const timestamp = new Date(state.now + 1000).toISOString();
-        state.syncJob = {
-          ...state.syncJob,
+        Object.assign(job, {
           state: status,
           attempt: 1,
           finishedAt: timestamp,
           lastError: status === "failed" ? "模拟 OCI 读取失败" : null,
-        };
-        if (status === "succeeded")
-          state.rows.forEach((row) => {
-            row.syncedAt = timestamp;
-          });
+        });
+        selected.status = status === "succeeded" ? "connected" : "error";
+        selected.lastError = job.lastError;
+        if (status === "succeeded") {
+          selected.lastSyncAt = timestamp;
+          state.rows
+            .filter((row) => row.accountId === id)
+            .forEach((row) => {
+              row.syncedAt = timestamp;
+            });
+        }
       },
       count(path, method = "GET") {
         return state.requests.filter(
@@ -190,21 +225,34 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         });
       if (method === "GET" && path === "/api/accounts")
         return json({
-          accounts: [{ ...account, lastSyncAt: state.rows[0]?.syncedAt ?? account.lastSyncAt }],
-          syncJobs: state.syncJob ? [state.syncJob] : [],
+          accounts: state.accounts,
+          syncJobs: state.syncJobs,
           demo: false,
         });
-      if (method === "GET" && path === "/api/instances")
-        return json({ instances: state.rows, demo: false });
+      if (method === "GET" && path === "/api/instances") {
+        const snapshot = structuredClone(state.rows);
+        state.activeInstanceReads++;
+        state.peakInstanceReads = Math.max(state.peakInstanceReads, state.activeInstanceReads);
+        try {
+          if (state.instancesGate) await state.instancesGate;
+          if (state.failedSnapshots > 0) {
+            state.failedSnapshots--;
+            return await json({ error: "模拟快照读取失败" }, 503);
+          }
+          return await json({ instances: snapshot, demo: false });
+        } finally {
+          state.activeInstanceReads--;
+        }
+      }
       if (method === "GET" && path === "/api/dashboard") {
         const body: DashboardData = {
-          accounts: [account],
+          accounts: state.accounts,
           instances: state.rows,
           jobs: state.taskRows,
           activity: [],
           demo: false,
           totals: {
-            accounts: 1,
+            accounts: state.accounts.length,
             instances: state.rows.length,
             running: state.rows.filter((row) => row.state === "RUNNING").length,
             stopped: state.rows.filter((row) => row.state === "STOPPED").length,
@@ -224,33 +272,81 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
       }
       if (method === "POST" && path === "/api/inventory/refresh") {
         expect(["auto", "manual"]).toContain(entry.body?.mode);
-        if (entry.body?.accountIds) expect(entry.body.accountIds).toEqual([account.id]);
-        if (entry.body?.mode === "manual") state.syncJob = job();
-        const active =
-          state.syncJob && !["succeeded", "failed"].includes(state.syncJob.state)
-            ? state.syncJob
-            : null;
+        if (state.refreshGate) await state.refreshGate;
+        const selected = state.accounts.filter(
+          (item) => !entry.body?.accountIds || entry.body.accountIds.includes(item.id),
+        );
+        if (entry.body?.accountIds)
+          expect(selected.map((item) => item.id).sort()).toEqual([...entry.body.accountIds].sort());
+        const pending = (item: JobSummary) =>
+          !["succeeded", "failed", "cancelled"].includes(item.state);
+        if (entry.body?.mode === "manual") {
+          const sequence = state.manualRequests().length;
+          for (const item of selected) {
+            if (state.syncJobs.some((current) => current.accountId === item.id && pending(current)))
+              continue;
+            const id =
+              "refresh-fixture-sync" +
+              (item.id === account.id ? "" : `-${item.id}`) +
+              (sequence > 1 ? `-${sequence}` : "");
+            state.syncJobs = [
+              ...state.syncJobs.filter((current) => current.accountId !== item.id),
+              {
+                ...job(id),
+                accountId: item.id,
+                accountName: item.name,
+                region: item.homeRegion,
+              },
+            ];
+          }
+        }
+        const active = state.syncJobs.filter(
+          (item) => selected.some((a) => a.id === item.accountId) && pending(item),
+        );
         const body: InventoryRefreshResult = {
-          jobs: active ? [active] : [],
-          accounts: [
-            {
-              accountId: account.id,
-              status: active ? (entry.body?.mode === "manual" ? "queued" : "active") : "fresh",
-              jobId: active?.id ?? null,
-              lastSyncedAt: state.rows[0]?.syncedAt ?? null,
+          jobs: active,
+          accounts: selected.map((item) => {
+            const job = active.find((current) => current.accountId === item.id);
+            return {
+              accountId: item.id,
+              status: job ? (entry.body?.mode === "manual" ? "queued" : "active") : "fresh",
+              jobId: job?.id ?? null,
+              lastSyncedAt: item.lastSyncAt,
               nextRefreshAt: new Date(state.now + 60_000).toISOString(),
-            },
-          ],
+            };
+          }),
           demo: false,
         };
-        return json(body, active ? 202 : 200);
+        return json(body, active.length ? 202 : 200);
       }
       if (method === "GET" && path === "/api/jobs") {
         if (state.jobsGate) await state.jobsGate;
         return json({ jobs: state.taskRows, demo: false });
       }
-      if (method === "GET" && path === "/api/jobs/" + state.syncJob?.id)
-        return json({ job: state.syncJob, events: [], demo: false });
+      const sync = state.syncJobs.find((item) => path === `/api/jobs/${item.id}`);
+      if (method === "GET" && sync) {
+        const gate = state.jobGates.get(sync.id);
+        if (gate) await gate;
+        return json({
+          job: state.syncJobs.find((item) => item.id === sync.id),
+          events: [],
+          demo: false,
+        });
+      }
+      const task = state.taskRows.find(
+        (row) => path === `/api/jobs/${row.id}` || path === `/api/jobs/${row.id}/cancel`,
+      );
+      if (task && method === "GET" && path === `/api/jobs/${task.id}`)
+        return json({ job: task, events: [], demo: false });
+      if (task && method === "POST" && path === `/api/jobs/${task.id}/cancel`) {
+        Object.assign(task, {
+          state: "cancelled",
+          nextRunAt: null,
+          waitingForCompletion: false,
+          finishedAt: new Date(state.now).toISOString(),
+        });
+        return json({ job: task });
+      }
       state.unexpected.push(method + " " + path);
       return json({ error: "Unmocked API blocked by refresh fixture" }, 501);
     });
@@ -284,6 +380,37 @@ async function pauseClock(page: Page, fixture: RefreshFixture) {
   await page.clock.pauseAt(new Date(fixture.now));
 }
 
+function twoAccounts(fixture: RefreshFixture) {
+  const slow: AccountSummary = {
+    ...account,
+    id: "refresh-slow-account",
+    name: "Slow fixture",
+    tenancyId: "ocid1.tenancy.oc1..slowfixture",
+  };
+  fixture.accounts.push(slow);
+  fixture.rows = [
+    fixture.rows[0],
+    {
+      ...fixture.rows[1],
+      id: "refresh-slow-instance",
+      displayName: "Slow-01",
+      accountId: slow.id,
+      accountName: slow.name,
+    },
+  ];
+  return slow;
+}
+async function openTwoAccounts(page: Page) {
+  await page.goto("/instances");
+  await page.getByRole("button", { name: "表格视图", exact: true }).click();
+  await expect(rows(page)).toHaveCount(2);
+  await expect(refreshButton(page)).toBeEnabled();
+}
+async function advance(page: Page, fixture: RefreshFixture, milliseconds = 1100) {
+  fixture.now += milliseconds;
+  await page.clock.runFor(milliseconds);
+}
+
 test("手动刷新提交 OCI 同步任务，终态后重新读取快照，等待期间保留原行", async ({
   page,
   refreshApi,
@@ -314,7 +441,11 @@ test("同步失败显示可重试错误，保留先前快照和表格", async ({
   await expect(refreshButton(page)).toBeEnabled();
 });
 
-test("卡片切换与刷新保留筛选和当前页，详情与总览读取更新后的快照", async ({ page, refreshApi }) => {
+test("卡片切换与刷新保留筛选和当前页，详情读取新快照且离页停止库存轮询", async ({
+  page,
+  refreshApi,
+}) => {
+  await pauseClock(page, refreshApi);
   await openInstances(page);
   await page.getByLabel("搜索实例名称、地址或 OCID").fill("Fixture");
   await page.getByLabel("筛选账号", { exact: true }).selectOption(account.id);
@@ -340,6 +471,8 @@ test("卡片切换与刷新保留筛选和当前页，详情与总览读取更�
   refreshApi.finish("succeeded", (items) => {
     items[11].displayName = "Fixture-12 updated";
   });
+  refreshApi.now += 5000;
+  await page.clock.runFor(5000);
   await expect(page.getByRole("link", { name: "Fixture-12 updated", exact: true })).toBeVisible();
   await expect(pagination).toContainText("2 / 3");
   await expect(page.getByLabel("搜索实例名称、地址或 OCID")).toHaveValue("Fixture");
@@ -349,9 +482,17 @@ test("卡片切换与刷新保留筛选和当前页，详情与总览读取更�
   await page.getByRole("link", { name: "Fixture-12 updated", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Fixture-12 updated");
   expect(refreshApi.count("/api/instances/refresh-instance-12")).toBeGreaterThan(0);
-  await page.locator(".sidebar nav").getByRole("link", { name: "总览", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "资源总览", exact: true })).toBeVisible();
-  expect(refreshApi.count("/api/dashboard")).toBeGreaterThan(0);
+  await page.locator(".sidebar nav").getByRole("link", { name: "任务", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
+  await expect(page.locator(".task-table tbody tr")).toHaveCount(1);
+  const inventoryReads = refreshApi.count("/api/instances");
+  const detailReads = refreshApi.count("/api/instances/refresh-instance-12");
+  const inventoryRefreshes = refreshApi.count("/api/inventory/refresh", "POST");
+  refreshApi.now += 120_000;
+  await page.clock.runFor(120_000);
+  expect(refreshApi.count("/api/instances")).toBe(inventoryReads);
+  expect(refreshApi.count("/api/instances/refresh-instance-12")).toBe(detailReads);
+  expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(inventoryRefreshes);
 });
 
 test("隐藏页面停止快照和自动同步请求，恢复可见后更新", async ({ page, refreshApi }) => {
@@ -574,3 +715,324 @@ test("已知区域使用本地旗帜，未知区域在表格和卡片中保留�
   expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(writesBefore);
   expect(refreshApi.manualRequests()).toEqual([]);
 });
+
+test("可恢复中断任务继续轮询，完成后停止且显示等待期限", async ({ page, refreshApi }) => {
+  await pauseClock(page, refreshApi);
+  const task = refreshApi.taskRows[0];
+  Object.assign(task, {
+    state: "interrupted",
+    attempt: 4,
+    maxAttempts: 4,
+    waitingForCompletion: true,
+    nextRunAt: new Date(refreshApi.now + 5000).toISOString(),
+    completionDeadlineAt: new Date(refreshApi.now + 1800000).toISOString(),
+  });
+  const path = `/api/jobs/${task.id}`;
+  await page.goto(`/tasks/${task.id}`);
+  await expect(page.locator(".task-step.current")).toHaveText("执行中");
+  await expect(page.getByText("任务执行期间自动更新", { exact: true })).toBeVisible();
+  await expect(page.getByText("本轮完成期限", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消任务", exact: true })).toBeVisible();
+  const before = refreshApi.count(path);
+  Object.assign(task, { state: "running", nextRunAt: null });
+  await page.clock.runFor(3100);
+  await expect.poll(() => refreshApi.count(path)).toBeGreaterThan(before);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("执行中");
+  Object.assign(task, {
+    state: "succeeded",
+    waitingForCompletion: false,
+    finishedAt: new Date(refreshApi.now).toISOString(),
+  });
+  await page.clock.runFor(3100);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("已完成");
+  const completed = refreshApi.count(path);
+  await page.clock.runFor(10000);
+  expect(refreshApi.count(path)).toBe(completed);
+});
+
+test("不可恢复中断任务停止轮询并可直接取消，无需重试云端操作", async ({ page, refreshApi }) => {
+  await pauseClock(page, refreshApi);
+  const task = refreshApi.taskRows[0];
+  Object.assign(task, { state: "interrupted", attempt: 4, maxAttempts: 4, nextRunAt: null });
+  const path = `/api/jobs/${task.id}`;
+  await page.goto(`/tasks/${task.id}`);
+  await expect(page.locator(".task-step.current")).toHaveText("等待处理");
+  await expect(page.getByText("自动恢复已停止，可重试或取消任务", { exact: true })).toBeVisible();
+  const before = refreshApi.count(path);
+  await page.clock.runFor(10000);
+  expect(refreshApi.count(path)).toBe(before);
+  await page.getByRole("button", { name: "取消任务", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "取消任务", exact: true });
+  await dialog.getByRole("button", { name: "确认取消", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("已取消");
+  expect(refreshApi.count(path + "/cancel", "POST")).toBe(1);
+  expect(
+    refreshApi.requests
+      .filter((request) => request.method !== "GET")
+      .map((request) => request.path),
+  ).toEqual([path + "/cancel"]);
+});
+
+test("批量同步立即检查状态，快账号先显示且不等待慢账号的状态请求", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  await pauseClock(page, refreshApi);
+  await openTwoAccounts(page);
+  const before = refreshApi.count("/api/instances");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const slowId = `refresh-fixture-sync-${slow.id}`;
+  refreshApi.jobGates.set(slowId, gate);
+  try {
+    await refreshButton(page).click();
+    // The clock is paused: these reads prove there is no initial 2s delay.
+    await expect.poll(() => refreshApi.count("/api/jobs/refresh-fixture-sync")).toBe(1);
+    await expect.poll(() => refreshApi.count(`/api/jobs/${slowId}`)).toBe(1);
+    refreshApi.finish("succeeded", (items) => {
+      items[0].displayName = "Fixture-01 fast";
+    });
+    await advance(page, refreshApi);
+    await expect(page.getByRole("link", { name: "Fixture-01 fast", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Slow-01", exact: true })).toBeVisible();
+    await expect(refreshButton(page)).toBeDisabled();
+    expect(refreshApi.count("/api/instances")).toBe(before + 1);
+    const completedReads = refreshApi.count("/api/jobs/refresh-fixture-sync");
+    await advance(page, refreshApi, 3000);
+    expect(refreshApi.count("/api/jobs/refresh-fixture-sync")).toBe(completedReads);
+    expect(refreshApi.count("/api/instances")).toBe(before + 1);
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("online"));
+    });
+    refreshApi.finishAccount(slow.id, "succeeded", (items) => {
+      items[1].displayName = "Slow-01 done";
+    });
+    refreshApi.jobGates.delete(slowId);
+    release();
+    await expect(page.getByRole("link", { name: "Slow-01 done", exact: true })).toBeVisible();
+    await expect(refreshButton(page)).toBeEnabled();
+    expect(refreshApi.peakInstanceReads).toBe(1);
+    expect(refreshApi.manualRequests()).toHaveLength(1);
+    expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(2);
+  } finally {
+    release();
+    refreshApi.jobGates.clear();
+  }
+});
+
+test("账号逐个完成后仅慢账号保留转圈，失败账号及时显示错误", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  refreshApi.syncJobs = refreshApi.accounts.map((item) => ({
+    ...job(`active-${item.id}`),
+    accountId: item.id,
+    accountName: item.name,
+    state: "running",
+  }));
+  await pauseClock(page, refreshApi);
+  await page.goto("/settings/accounts");
+  const fastCard = page
+    .locator(".account-card")
+    .filter({ has: page.getByRole("heading", { name: account.name, exact: true }) });
+  const slowCard = page
+    .locator(".account-card")
+    .filter({ has: page.getByRole("heading", { name: slow.name, exact: true }) });
+  await expect(fastCard.locator(".spin")).toHaveCount(1);
+  await expect(slowCard.locator(".spin")).toHaveCount(1);
+  refreshApi.finish("failed");
+  await advance(page, refreshApi);
+  await expect(fastCard.locator(".spin")).toHaveCount(0);
+  await expect(fastCard.getByRole("button", { name: "重试刷新", exact: true })).toBeEnabled();
+  await expect(fastCard).toContainText("模拟 OCI 读取失败");
+  await expect(slowCard.locator(".spin")).toHaveCount(1);
+  refreshApi.finishAccount(slow.id, "succeeded");
+  await advance(page, refreshApi);
+  await expect(slowCard.locator(".spin")).toHaveCount(0);
+  await expect(slowCard.getByRole("button", { name: "刷新资源", exact: true })).toBeEnabled();
+  expect(refreshApi.manualRequests()).toEqual([]);
+});
+
+test("快照读取失败保留旧行，另一个账号完成后仍能发布新快照", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  await pauseClock(page, refreshApi);
+  await openTwoAccounts(page);
+  await refreshButton(page).click();
+  await expect.poll(() => refreshApi.syncJobs.length).toBe(2);
+  refreshApi.failedSnapshots = 1;
+  refreshApi.finish("succeeded", (items) => {
+    items[0].displayName = "Fixture-01 recovered";
+  });
+  await advance(page, refreshApi);
+  await expect(page.getByText("模拟快照读取失败", { exact: true })).toBeVisible();
+  await expect(rows(page)).toHaveCount(2);
+  await expect(page.getByRole("link", { name: "Fixture-01", exact: true })).toBeVisible();
+  await expect(refreshButton(page)).toBeDisabled();
+  refreshApi.finishAccount(slow.id, "succeeded", (items) => {
+    items[1].displayName = "Slow-01 recovered";
+  });
+  await advance(page, refreshApi);
+  await expect(page.getByRole("link", { name: "Fixture-01 recovered", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Slow-01 recovered", exact: true })).toBeVisible();
+  await expect(page.getByText("模拟快照读取失败", { exact: true })).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(2);
+  await expect(refreshButton(page)).toBeEnabled();
+});
+
+test("相邻账号完成时串行合并快照读取，完成ID不会反复刷新", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  await pauseClock(page, refreshApi);
+  await openTwoAccounts(page);
+  await refreshButton(page).click();
+  await expect.poll(() => refreshApi.syncJobs.length).toBe(2);
+  const before = refreshApi.count("/api/instances");
+  let release!: () => void;
+  refreshApi.instancesGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    refreshApi.finish("succeeded", (items) => {
+      items[0].displayName = "Fixture-01 first";
+    });
+    await advance(page, refreshApi);
+    await expect.poll(() => refreshApi.activeInstanceReads).toBe(1);
+    refreshApi.finishAccount(slow.id, "succeeded", (items) => {
+      items[1].displayName = "Slow-01 second";
+    });
+    await advance(page, refreshApi);
+    expect(refreshApi.count("/api/instances")).toBe(before + 1);
+    expect(refreshApi.peakInstanceReads).toBe(1);
+    refreshApi.instancesGate = undefined;
+    release();
+    await expect(page.getByRole("link", { name: "Fixture-01 first", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Slow-01 second", exact: true })).toBeVisible();
+    await expect(refreshButton(page)).toBeEnabled();
+    expect(refreshApi.count("/api/instances")).toBe(before + 2);
+    await advance(page, refreshApi, 3000);
+    expect(refreshApi.count("/api/instances")).toBe(before + 2);
+    expect(refreshApi.peakInstanceReads).toBe(1);
+  } finally {
+    release();
+    refreshApi.instancesGate = undefined;
+  }
+});
+
+test("隐藏中止状态等待而不取消后台任务，恢复时补查隐藏期间完成的账号", async ({
+  page,
+  refreshApi,
+}) => {
+  const slow = twoAccounts(refreshApi);
+  await pauseClock(page, refreshApi);
+  await openTwoAccounts(page);
+  const slowId = `refresh-fixture-sync-${slow.id}`;
+  let release!: () => void;
+  refreshApi.jobGates.set(
+    slowId,
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  try {
+    await refreshButton(page).click();
+    await expect.poll(() => refreshApi.count(`/api/jobs/${slowId}`)).toBe(1);
+    refreshApi.finish("succeeded", (items) => {
+      items[0].displayName = "Fixture-01 visible";
+    });
+    await advance(page, refreshApi);
+    await expect(page.getByRole("link", { name: "Fixture-01 visible", exact: true })).toBeVisible();
+    await fixtureVisibility(page, "hidden");
+    await expect.poll(() => refreshApi.failedRequests.includes(`/api/jobs/${slowId}`)).toBe(true);
+    const reads = refreshApi.count("/api/instances");
+    const requests = refreshApi.count(`/api/jobs/${slowId}`);
+    const syncs = refreshApi.count("/api/inventory/refresh", "POST");
+    refreshApi.finishAccount(slow.id, "succeeded", (items) => {
+      items[1].displayName = "Slow-01 while hidden";
+    });
+    refreshApi.jobGates.delete(slowId);
+    release();
+    await advance(page, refreshApi, 10_000);
+    expect(refreshApi.count("/api/instances")).toBe(reads);
+    expect(refreshApi.count(`/api/jobs/${slowId}`)).toBe(requests);
+    expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(syncs);
+    await fixtureVisibility(page, "visible");
+    await expect(
+      page.getByRole("link", { name: "Slow-01 while hidden", exact: true }),
+    ).toBeVisible();
+    await expect.poll(() => refreshApi.count(`/api/jobs/${slowId}`)).toBeGreaterThan(requests);
+    await expect(refreshButton(page)).toBeEnabled();
+    expect(refreshApi.manualRequests()).toHaveLength(1);
+    expect(refreshApi.requests.some((request) => request.path.endsWith("/cancel"))).toBe(false);
+  } finally {
+    release();
+    refreshApi.jobGates.clear();
+  }
+});
+
+test("120秒边界结束浏览器等待，保持旧快照和后台任务", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  await pauseClock(page, refreshApi);
+  await openTwoAccounts(page);
+  await refreshButton(page).click();
+  await expect.poll(() => refreshApi.syncJobs.length).toBe(2);
+  // Jobs are created before the POST response reaches the browser. Its first
+  // status requests prove the waiting budget has actually started.
+  await expect.poll(() => refreshApi.count("/api/jobs/refresh-fixture-sync")).toBe(1);
+  await expect.poll(() => refreshApi.count(`/api/jobs/refresh-fixture-sync-${slow.id}`)).toBe(1);
+  const notice = page.getByText("资源同步仍在后台执行，稍后将自动更新。可在账号页查看进度。", {
+    exact: true,
+  });
+  await advance(page, refreshApi, 119_999);
+  await expect(refreshButton(page)).toBeDisabled();
+  await expect(notice).toHaveCount(0);
+  await advance(page, refreshApi, 1);
+  await expect(notice).toBeVisible();
+  await expect(refreshButton(page)).toBeEnabled();
+  await expect(rows(page)).toHaveCount(2);
+  expect(refreshApi.syncJobs.every((item) => item.state === "queued")).toBe(true);
+  expect(refreshApi.requests.some((request) => request.path.endsWith("/cancel"))).toBe(false);
+  const count = refreshApi.requests.length;
+  await advance(page, refreshApi, 2000);
+  expect(refreshApi.requests.length).toBe(count);
+  await expect(notice).toBeVisible();
+  // A deliberate retry bypasses the automatic-check cooldown and joins the
+  // original jobs, rather than cancelling or replacing work still in progress.
+  const ids = refreshApi.syncJobs.map((item) => item.id);
+  await refreshButton(page).click();
+  await expect.poll(() => refreshApi.manualRequests().length).toBe(2);
+  expect(refreshApi.syncJobs.map((item) => item.id)).toEqual(ids);
+  await expect(refreshButton(page)).toBeDisabled();
+  await expect(notice).toHaveCount(0);
+});
+
+for (const alreadyActive of [false, true]) {
+  test(`自动检查期间手动点击合并请求：${alreadyActive ? "已有同步不再创建" : "fresh后保留一次手动同步"}`, async ({
+    page,
+    refreshApi,
+  }) => {
+    await pauseClock(page, refreshApi);
+    if (alreadyActive) refreshApi.syncJob = job();
+    let release!: () => void;
+    refreshApi.refreshGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await openInstances(page);
+      await expect.poll(() => refreshApi.count("/api/inventory/refresh", "POST")).toBe(1);
+      await refreshButton(page).evaluate((button: HTMLButtonElement) => {
+        button.click();
+        button.click();
+      });
+      refreshApi.refreshGate = undefined;
+      release();
+      await expect(refreshButton(page)).toBeDisabled();
+      await expect.poll(() => refreshApi.manualRequests().length).toBe(alreadyActive ? 0 : 1);
+      refreshApi.finish("succeeded");
+      await advance(page, refreshApi);
+      await expect(refreshButton(page)).toBeEnabled();
+      expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(alreadyActive ? 1 : 2);
+    } finally {
+      release();
+      refreshApi.refreshGate = undefined;
+    }
+  });
+}

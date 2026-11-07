@@ -255,7 +255,6 @@ test("演示控制台只读，实例详情的 VNC 链接在新标签打开", asy
   const fixture = await setup(page, { demo: true });
   await page.goto(`/instances/${instance.id}`);
   await expect(page.getByRole("link", { name: "VNC 控制台" })).toHaveAttribute("target", "_blank");
-  await expect(page.getByRole("button", { name: "SSH 连接信息" })).toBeVisible();
   await page.goto(consolePath);
   await expect(page.getByText("演示环境为只读模式，无法创建 VNC 会话。")).toBeVisible();
   await expect(page.getByRole("button", { name: "连接", exact: true })).toBeDisabled();

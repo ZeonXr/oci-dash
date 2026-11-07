@@ -12,8 +12,6 @@ import {
   Network,
   Play,
   RefreshCw,
-  RotateCw,
-  Terminal,
 } from "lucide-react";
 import type { InstanceSummary, JobSummary, MetricsResult } from "@/lib/contracts";
 import { useApp } from "@/components/app-provider";
@@ -50,6 +48,7 @@ import {
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
 import { UpdatedAt } from "@/components/updated-at";
+import { InventoryFreshness } from "@/components/inventory-freshness";
 import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
 
@@ -113,60 +112,6 @@ function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClos
     </Modal>
   );
 }
-function SshConnectionDialog({
-  instance,
-  onClose,
-}: {
-  instance: InstanceSummary;
-  onClose: () => void;
-}) {
-  const addresses = publicBindings(instance).map((b) => b.publicIp!);
-  const [host, setHost] = useState(primaryAddress(instance));
-  const [username, setUsername] = useState(
-    instance.os.toLowerCase().includes("ubuntu") ? "ubuntu" : "opc",
-  );
-  const validUser = /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(username);
-  const command = `ssh ${username}@${host}`;
-  return (
-    <Modal
-      open
-      title="SSH 连接信息"
-      description="使用你已有的 SSH 私钥登录服务器。"
-      onClose={onClose}
-      footer={<Button onClick={onClose}>完成</Button>}
-    >
-      <div className="stack">
-        <Field label="连接地址">
-          <Select value={host} onChange={(e) => setHost(e.target.value)}>
-            {Array.from(new Set([primaryAddress(instance), ...addresses]))
-              .filter((a) => a !== "—")
-              .map((a) => (
-                <option key={a}>{a}</option>
-              ))}
-          </Select>
-        </Field>
-        <Field label="SSH 用户名" hint="Ubuntu 默认使用 ubuntu，Oracle Linux 默认使用 opc。">
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="off"
-          />
-        </Field>
-        {validUser && host !== "—" ? (
-          <div className="code-block">
-            <code>{command}</code>
-            <CopyButton value={command} label="复制 SSH 命令" />
-          </div>
-        ) : (
-          <ErrorState message="请输入有效的 SSH 用户名，并选择连接地址。" />
-        )}
-        <p className="muted small">
-          在已配置对应 SSH 密钥的终端中运行上述命令。密钥路径和 SSH 端口可根据你的服务器设置调整。
-        </p>
-      </div>
-    </Modal>
-  );
-}
 const tabs = [
   { id: "overview", label: "概览" },
   { id: "monitoring", label: "监控" },
@@ -204,7 +149,6 @@ export default function InstanceDetailPage() {
   );
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   const [renaming, setRenaming] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   const [activityPage, setActivityPage] = useState(1);
   const [activityPageSize, setActivityPageSize] = useState(10);
   const [activityOrder, setActivityOrder] = useState<"ascending" | "descending">("descending");
@@ -374,7 +318,11 @@ export default function InstanceDetailPage() {
           </>
         }
       >
-        <UpdatedAt value={instance.syncedAt} title="此实例最近一次从 OCI 同步资源快照的时间" />
+        <InventoryFreshness instance={instance} />
+        <UpdatedAt
+          value={instance.syncedAt}
+          title="此实例基础信息最近一次从 OCI 同步的时间；部分未更新的字段另行标记"
+        />
         <Button
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
@@ -382,18 +330,10 @@ export default function InstanceDetailPage() {
         >
           <RefreshCw size={15} />
         </Button>
-        {instance.state === "STOPPED" ? (
+        {instance.state === "STOPPED" && (
           <Button disabled={demo} onClick={() => lifecycle("instance-start")}>
             <Play size={15} />
             启动
-          </Button>
-        ) : (
-          <Button
-            disabled={demo || instance.state !== "RUNNING"}
-            onClick={() => lifecycle("instance-reboot")}
-          >
-            <RotateCw size={15} />
-            重启
           </Button>
         )}
         <details className="dropdown">
@@ -409,6 +349,18 @@ export default function InstanceDetailPage() {
               }}
             >
               重命名
+            </button>
+            <button
+              type="button"
+              disabled={demo || instance.state !== "RUNNING"}
+              onClick={(e) => {
+                const menu = e.currentTarget.closest("details");
+                menu?.removeAttribute("open");
+                menu?.querySelector("summary")?.focus({ preventScroll: true });
+                lifecycle("instance-reboot");
+              }}
+            >
+              重启实例
             </button>
             <button
               disabled={demo || instance.state !== "RUNNING"}
@@ -431,13 +383,6 @@ export default function InstanceDetailPage() {
             </button>
           </div>
         </details>
-        <Button
-          disabled={primaryAddress(instance) === "—" || instance.state !== "RUNNING"}
-          onClick={() => setConnecting(true)}
-        >
-          <Terminal size={15} />
-          SSH 连接信息
-        </Button>
         <Link
           href={`/instances/${encodeURIComponent(instance.id)}/console`}
           target="_blank"
@@ -502,7 +447,7 @@ export default function InstanceDetailPage() {
                 <dl className="details-list">
                   <dt>账号</dt>
                   <dd>
-                    <Link href="/accounts" className="text-link">
+                    <Link href="/settings/accounts" className="text-link">
                       {instance.accountName}
                     </Link>
                   </dd>
@@ -698,9 +643,6 @@ export default function InstanceDetailPage() {
       </div>
       {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
       {renaming && <RenameDialog instance={instance} onClose={() => setRenaming(false)} />}
-      {connecting && (
-        <SshConnectionDialog instance={instance} onClose={() => setConnecting(false)} />
-      )}
     </>
   );
 }

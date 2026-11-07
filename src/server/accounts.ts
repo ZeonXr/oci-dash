@@ -49,6 +49,17 @@ export function getCredentialSnapshot(
 }
 export const getCredentials = (id: string, region?: string): OciCredentials =>
   getCredentialSnapshot(id, region).credentials;
+function assertUniqueTenancy(tenancyId: string, exceptId?: string): void {
+  const conflict = getDatabase()
+    .prepare("SELECT id,name FROM accounts WHERE tenancy_id=? AND id<>? LIMIT 1")
+    .get(tenancyId, exceptId ?? "") as { id: string; name: string } | undefined;
+  if (conflict)
+    throw new AppError(
+      `此租户已配置在账号“${conflict.name}”中，请编辑该账号的区域或凭据，不要重复添加。`,
+      409,
+      "DUPLICATE_TENANCY",
+    );
+}
 function assertAccountIdle(id: string): void {
   const db = getDatabase();
   if (
@@ -91,23 +102,28 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
   checkPrivateKey(input.privateKey, input.fingerprint);
   const id = randomUUID(),
     createdAt = new Date().toISOString();
-  getOrm()
-    .insert(accounts)
-    .values({
-      id,
-      name: input.name,
-      tenancyId: input.tenancyId,
-      userId: input.userId,
-      fingerprint: input.fingerprint.toLowerCase(),
-      homeRegion: input.homeRegion,
-      regions: [...new Set([input.homeRegion, ...input.regions])],
-      credential: encryptSecret(input.privateKey.trim()),
-      status: "unchecked",
-      createdAt,
+  return getDatabase()
+    .transaction(() => {
+      assertUniqueTenancy(input.tenancyId);
+      getOrm()
+        .insert(accounts)
+        .values({
+          id,
+          name: input.name,
+          tenancyId: input.tenancyId,
+          userId: input.userId,
+          fingerprint: input.fingerprint.toLowerCase(),
+          homeRegion: input.homeRegion,
+          regions: [...new Set([input.homeRegion, ...input.regions])],
+          credential: encryptSecret(input.privateKey.trim()),
+          status: "unchecked",
+          createdAt,
+        })
+        .run();
+      audit(actor, "account.create", input.name, "账号配置已保存");
+      return getAccount(id)!;
     })
-    .run();
-  audit(actor, "account.create", input.name, "账号配置已保存");
-  return getAccount(id)!;
+    .immediate();
 }
 export function updateAccount(
   id: string,
@@ -153,6 +169,8 @@ export function updateAccount(
         { revision: number } | undefined;
       if (!current || current.revision !== existing.revision)
         throw new AppError("账号配置已变更，请刷新后重试", 409, "ACCOUNT_CHANGED");
+      if (input.tenancyId && input.tenancyId !== existing.tenancyId)
+        assertUniqueTenancy(input.tenancyId, id);
       if (scopeChanged) {
         assertAccountIdle(id);
         changes.revision = existing.revision + 1;
@@ -160,6 +178,12 @@ export function updateAccount(
       getOrm().update(accounts).set(changes).where(eq(accounts.id, id)).run();
       if (credentialChanged)
         getDatabase().prepare("DELETE FROM resources WHERE account_id=?").run(id);
+      else if (scopeChanged)
+        getDatabase()
+          .prepare(
+            `DELETE FROM resources WHERE account_id=? AND region NOT IN (${regions.map(() => "?").join(",")})`,
+          )
+          .run(id, ...regions);
     })
     .immediate();
   audit(actor, "account.update", existing.name, "账号配置已更新");

@@ -513,16 +513,105 @@ describe("OCI inventory and client boundaries", () => {
     expect(result.instances[0].metrics?.memoryPercent).toBeNull();
     expect(result.instances[0].tags).toEqual({ owner: "test" });
     expect(JSON.stringify(result)).not.toContain("MUST-NOT-BE-RETURNED");
+    expect(result.completedScopes).toEqual([
+      { region: "ap-test-1", compartmentId: ids.tenancy },
+      { region: "ap-test-1", compartmentId: child },
+      { region: "ap-test-1", compartmentId: child2 },
+    ]);
     expect(
       f.calls.some((c) => c.operation === "listInstances" && c.request.compartmentId === child2),
     ).toBe(true);
     for (const client of Object.values(f.clients)) expect(client.close).toHaveBeenCalledTimes(1);
+  });
+  it("keeps successful enumeration coverage when detail reads fail", async () => {
+    const f = fixture();
+    for (const operation of ["getVnic", "getBootVolume", "getImage"])
+      f.handlers[operation] = () => {
+        throw { statusCode: 403, code: "NotAuthorizedOrNotFound" };
+      };
+    const result = await f.adapter.inventory(credentials, account, ["ap-test-1"]);
+    expect(result.warnings).toHaveLength(3);
+    expect(result.completedScopes).toEqual([{ region: "ap-test-1", compartmentId: ids.tenancy }]);
+    expect(result.details?.[ids.instance]).toMatchObject({
+      vnics: false,
+      bootVolumes: false,
+      os: false,
+    });
+  });
+  it("reports nested IP failures separately from successful empty collections", async () => {
+    const f = fixture();
+    f.handlers.listPrivateIps = () => ({ items: [f.privateIps[0]] });
+    f.handlers.getPublicIpByPrivateIpId = () => {
+      throw { statusCode: 500 };
+    };
+    f.handlers.listIpv6s = () => {
+      throw { statusCode: 403 };
+    };
+    const failed = await f.adapter.inventory(credentials, account, ["ap-test-1"]);
+    expect(failed.details?.[ids.instance].vnicDetails[ids.vnic]).toEqual({
+      privateIps: true,
+      ipv6: false,
+      publicBindings: [],
+    });
+    f.handlers.listPrivateIps = () => ({ items: [] });
+    f.handlers.listIpv6s = () => ({ items: [] });
+    const empty = await f.adapter.inventory(credentials, account, ["ap-test-1"]);
+    expect(empty.warnings).toEqual([]);
+    expect(empty.details?.[ids.instance].vnicDetails[ids.vnic]).toEqual({
+      privateIps: true,
+      ipv6: true,
+      publicBindings: [],
+    });
+  });
+  it("limits deletion coverage to the compartments whose full list succeeded", async () => {
+    const f = fixture();
+    const child = id("compartment", "unavailable");
+    f.handlers.listCompartments = () => ({
+      items: [{ id: child, name: "Unavailable", lifecycleState: "ACTIVE" }],
+    });
+    f.handlers.listInstances = (request) => {
+      if (request.compartmentId === child) throw { statusCode: 403 };
+      return { items: [] };
+    };
+    const result = await f.adapter.inventory(credentials, account, ["ap-test-1"]);
+    expect(result.instances).toEqual([]);
+    expect(result.completedScopes).toEqual([{ region: "ap-test-1", compartmentId: ids.tenancy }]);
+    expect(result.warnings).toHaveLength(1);
   });
   it("constructs a separate immutable region scope for every inventory region", async () => {
     const f = fixture();
     await f.adapter.inventory(credentials, account, ["ap-test-1", "eu-test-1"]);
     expect(f.factory.mock.calls.map((call) => call[1])).toEqual(["ap-test-1", "eu-test-1"]);
     expect(credentials.region).toBe("ap-test-1");
+  });
+  it("keeps create options and mutation image checks fresh after inventory warms its cache", async () => {
+    const f = fixture();
+    await f.adapter.inventory(credentials, account, ["ap-test-1"]);
+    await f.adapter.createOptions(credentials);
+    f.handlers.listImages = () => ({
+      items: [{ id: ids.image, displayName: "Changed image", lifecycleState: "AVAILABLE" }],
+    });
+    expect((await f.adapter.createOptions(credentials)).images[0].name).toBe("Changed image");
+    expect(f.calls.filter((call) => call.operation === "listImages")).toHaveLength(2);
+    f.handlers.getImage = () => {
+      throw { statusCode: 403, serviceCode: "NotAuthorizedOrNotFound" };
+    };
+    const create = operation("instance-create", {
+      compartmentId: ids.tenancy,
+      availabilityDomain: "TEST:AD-1",
+      displayName: "new-server",
+      shape: "VM.Standard.E2.1.Micro",
+      imageId: ids.image,
+      subnetId: ids.subnet,
+      assignPublicIp: true,
+      sshPublicKey: "ssh-ed25519 AAAATESTPUBLICKEY test",
+    });
+    delete create.resourceId;
+    await expect(f.adapter.execute(credentials, create, jobContext())).rejects.toMatchObject({
+      code: "NotAuthorizedOrNotFound",
+    });
+    expect(f.calls.filter((call) => call.operation === "getImage")).toHaveLength(2);
+    expect(f.writes()).toEqual([]);
   });
   it("detects a repeated pagination cursor", async () => {
     const f = fixture();

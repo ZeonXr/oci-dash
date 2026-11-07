@@ -60,6 +60,8 @@ export interface InstanceSummary {
   bootVolumes: BootVolumeSummary[];
   tags: Record<string, string>;
   syncedAt: string;
+  /** Detail fields that could not be refreshed; retained values may predate syncedAt. */
+  staleFields?: string[];
   metrics?: {
     cpuPercent: number | null;
     memoryPercent: number | null;
@@ -83,6 +85,16 @@ export interface InventoryResult {
   instances: InstanceSummary[];
   warnings: string[];
   regions: string[];
+  /** Only successfully enumerated scopes authorize removal of absent instances. */
+  completedScopes?: { region: string; compartmentId: string }[];
+  /** Successful empty detail collections are distinct from failed reads. */
+  details?: Record<string, InventoryDetailCoverage>;
+}
+export interface InventoryDetailCoverage {
+  vnics: boolean;
+  bootVolumes: boolean;
+  os: boolean;
+  vnicDetails: Record<string, { privateIps: boolean; ipv6: boolean; publicBindings: string[] }>;
 }
 export interface SelectOption {
   id: string;
@@ -166,6 +178,10 @@ export interface JobSummary {
   state: JobState;
   attempt: number;
   maxAttempts: number;
+  /** An accepted operation is being reconciled without spending another error attempt. */
+  waitingForCompletion?: boolean;
+  /** Persisted deadline for this execution window; an explicit manual retry starts a new window. */
+  completionDeadlineAt?: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

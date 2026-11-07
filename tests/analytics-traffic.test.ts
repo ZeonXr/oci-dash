@@ -632,6 +632,51 @@ describe("OCI traffic reader (offline only)", () => {
     }
   });
 
+  it("preserves observations and stops queued VNIC reads when its parent query is cancelled", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const controller = new AbortController();
+    const h = setup({
+      metric: async (_region, vnicId, metric) => {
+        if (vnicId !== id("vnic", "a") || metric === outgoing) await gate;
+        return { items: [series(vnicId, metric)] };
+      },
+    });
+    try {
+      const pending = h.reader.read(
+        credentials,
+        [instance("a"), instance("b"), instance("c")],
+        range(),
+        controller.signal,
+      );
+      await vi.waitFor(() =>
+        expect(
+          h.requests.some((entry) =>
+            entry.request.summarizeMetricsDataDetails?.query?.startsWith(outgoing),
+          ),
+        ).toBe(true),
+      );
+      controller.abort();
+      const result = await pending;
+      expect(result.status).toBe("partial");
+      expect(result.rows[0]).toMatchObject({
+        receivedBytes: 30,
+        sentBytes: null,
+        coverage: "partial",
+      });
+      const count = h.requests.length;
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(h.requests).toHaveLength(count);
+      expect(h.requests.some((entry) => entry.request.vnicId === id("vnic", "c"))).toBe(false);
+      closed(h);
+    } finally {
+      release();
+    }
+  });
+
   it("closes clients whose construction finishes after the overall deadline without issuing RPCs", async () => {
     let release!: () => void;
     const factoryGate = new Promise<void>((resolve) => {

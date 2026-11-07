@@ -445,4 +445,37 @@ describe("read-only OCI cost reader", () => {
     expect(f.close).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("propagates the shared query cancellation to the client and never requests another page", async () => {
+    const f = fixture();
+    let requestSignal: AbortSignal | undefined;
+    let release!: (response: CloudDocument) => void;
+    f.call.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const reader = createCostReader({
+      clientFactory: (_credentials, _region, signal) => {
+        requestSignal = signal;
+        return { call: f.call, close: f.close };
+      },
+    });
+    const controller = new AbortController();
+    const pending = reader.read(credentials, account, range, {}, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "COST_QUERY_TIMEOUT" });
+    await vi.waitFor(() => expect(f.call).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await rejected;
+    expect(requestSignal?.aborted).toBe(true);
+    expect(f.close).toHaveBeenCalledTimes(1);
+    release(page([item()], "next-page"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.call).toHaveBeenCalledTimes(1);
+    await expect(
+      reader.read(credentials, account, range, {}, AbortSignal.abort()),
+    ).rejects.toMatchObject({ code: "COST_QUERY_TIMEOUT" });
+    expect(f.call).toHaveBeenCalledTimes(1);
+  });
 });

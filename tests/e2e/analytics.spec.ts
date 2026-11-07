@@ -544,12 +544,13 @@ for (const pageName of ["traffic", "costs"] as const) {
         .evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().top));
       expect(Math.max(...positions) - Math.min(...positions)).toBeLessThan(2);
     }
+    await expect(page.locator(".topbar")).toHaveCount(0);
     await page.evaluate(() => window.scrollTo(0, 500));
     await expect
       .poll(() =>
-        page.locator(".topbar").evaluate((element) => element.getBoundingClientRect().bottom),
+        page.locator(".sidebar").evaluate((element) => element.getBoundingClientRect().top),
       )
-      .toBeLessThan(0);
+      .toBe(0);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.setViewportSize({ width: 1440, height: 1080 });
     await capture(page, info, `${pageName}-desktop`);
@@ -563,5 +564,37 @@ for (const pageName of ["traffic", "costs"] as const) {
       .evaluate((element) => ({ visible: element.clientWidth, content: element.scrollWidth }));
     expect(scroll.content).toBeGreaterThan(scroll.visible);
     await capture(page, info, `${pageName}-mobile`);
+    const menu = page.getByRole("button", { name: "展开导航", exact: true });
+    const sidebar = page.locator(".sidebar");
+    await expect(sidebar).toHaveAttribute("inert", "");
+    await menu.click();
+    await expect(menu).toHaveAttribute("aria-expanded", "true");
+    await expect(sidebar).toHaveAttribute("aria-modal", "true");
+    await expect(page.locator(".app-main")).toHaveAttribute("inert", "");
+    await expect(page.locator(".toast-stack")).toHaveAttribute("inert", "");
+    await expect(page.getByRole("button", { name: "关闭导航", exact: true })).toBeFocused();
+    const logout = sidebar.getByRole("button", { name: "退出登录", exact: true });
+    await logout.focus();
+    await page.keyboard.press("Tab");
+    await expect(sidebar.getByRole("link", { name: "OCI Dash", exact: true })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(logout).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sidebar).toHaveAttribute("inert", "");
+    await expect(menu).toBeFocused();
+    await expect(page.locator(".app-main")).not.toHaveAttribute("inert", "");
+    await expect(page.locator(".toast-stack")).not.toHaveAttribute("inert", "");
+    await menu.click();
+    await page.locator(".sidebar-backdrop").click({ position: { x: 300, y: 100 } });
+    await expect(sidebar).toHaveAttribute("inert", "");
+    await expect(menu).toBeFocused();
+    await menu.click();
+    await sidebar.locator('a[aria-current="page"]').click();
+    await expect(sidebar).toHaveAttribute("inert", "");
+    await menu.click();
+    await page.setViewportSize({ width: 1440, height: 1080 });
+    await expect(sidebar).not.toHaveAttribute("inert", "");
+    await expect(sidebar).not.toHaveAttribute("aria-modal", "true");
+    await expect(sidebar.locator('a[aria-current="page"]')).toBeFocused();
   });
 }

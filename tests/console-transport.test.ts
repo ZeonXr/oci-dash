@@ -80,6 +80,8 @@ function setup() {
   const history: { operation: string; request: CloudDocument }[] = [];
   const state: {
     createError?: unknown;
+    readError?: unknown;
+    listError?: unknown;
     etag?: string;
     deletePending?: boolean;
     instance?: CloudDocument;
@@ -97,8 +99,10 @@ function setup() {
           lifecycleState: "RUNNING",
         },
       };
-    if (operation === "listInstanceConsoleConnections")
+    if (operation === "listInstanceConsoleConnections") {
+      if (state.listError) throw state.listError;
       return { items: [...records.values()].map((record) => structuredClone(record)) };
+    }
     if (operation === "createInstanceConsoleConnection") {
       const created = live({
         freeformTags: request.createInstanceConsoleConnectionDetails.freeformTags,
@@ -109,6 +113,7 @@ function setup() {
       return { instanceConsoleConnection: structuredClone(created) };
     }
     if (operation === "getInstanceConsoleConnection") {
+      if (state.readError) throw state.readError;
       const found = records.get(request.instanceConsoleConnectionId);
       if (!found) throw { statusCode: 404 };
       return {
@@ -257,6 +262,7 @@ describe("OCI console transport ownership and lifetime", () => {
         "getInstanceConsoleConnection",
         "deleteInstanceConsoleConnection",
         "getInstanceConsoleConnection",
+        "listInstanceConsoleConnections",
       ]);
       const deletion = h.history[1].request;
       expect(deletion).toEqual({
@@ -265,6 +271,67 @@ describe("OCI console transport ownership and lifetime", () => {
       });
       expect(h.records.size).toBe(0);
     }
+  });
+
+  it("verifies a missing known connection with a complete scoped list before releasing it", async () => {
+    const h = setup();
+    await h.transport.cleanup({ ...h.input, connectionId });
+    expect(h.history.map((entry) => entry.operation)).toEqual([
+      "getInstanceConsoleConnection",
+      "getInstance",
+      "listInstanceConsoleConnections",
+    ]);
+    expect(h.history.at(-1)?.request).toEqual({
+      compartmentId: target.credentials.tenancyId,
+      instanceId: target.instanceId,
+    });
+  });
+
+  it("retains cleanup when a permission 404 hides a still-listed connection", async () => {
+    const h = setup();
+    h.records.set(connectionId, live());
+    h.state.readError = { statusCode: 404, code: "NotAuthorizedOrNotFound" };
+    await expect(h.transport.cleanup({ ...h.input, connectionId })).rejects.toMatchObject({
+      code: "CONSOLE_CLEANUP_UNCONFIRMED",
+      retryable: true,
+    });
+    expect(h.records.size).toBe(1);
+    expect(h.history.some((entry) => entry.operation === "deleteInstanceConsoleConnection")).toBe(
+      false,
+    );
+    expect(h.clientClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([403, 404])(
+    "retains cleanup when both read and listing lose access (%i)",
+    async (status) => {
+      const h = setup();
+      h.records.set(connectionId, live());
+      h.state.readError = { statusCode: 404, code: "NotAuthorizedOrNotFound" };
+      h.state.listError = { statusCode: status, code: "NotAuthorizedOrNotFound" };
+      await expect(h.transport.cleanup({ ...h.input, connectionId })).rejects.toMatchObject({
+        code: "NotAuthorizedOrNotFound",
+      });
+      expect(h.records.size).toBe(1);
+      expect(h.history.some((entry) => entry.operation === "deleteInstanceConsoleConnection")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("does not release a deleted connection until its absence can be confirmed", async () => {
+    const h = setup();
+    h.records.set(connectionId, live());
+    h.state.listError = { statusCode: 403, code: "NotAuthorizedOrNotFound" };
+    await expect(h.transport.cleanup({ ...h.input, connectionId })).rejects.toMatchObject({
+      code: "NotAuthorizedOrNotFound",
+    });
+    expect(h.records.size).toBe(0);
+    h.state.listError = undefined;
+    await h.transport.cleanup({ ...h.input, connectionId });
+    expect(
+      h.history.filter((entry) => entry.operation === "deleteInstanceConsoleConnection"),
+    ).toHaveLength(1);
   });
 
   it("persists create ID immediately, validates the target, uses retry token, and releases clients", async () => {

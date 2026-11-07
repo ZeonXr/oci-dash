@@ -703,6 +703,8 @@ async function changeSecurityRule(
     const ruleId = add ? undefined : text(p.ruleId, "规则 ID", 512);
     if (!add && !rules.some((r) => r.id === ruleId))
       return result("安全规则已删除", { groupId, ruleId });
+    if (context.checkpoints.nsgAccepted)
+      throw new CloudError("规则变更尚未可见，稍后核对", "RESOURCE_PENDING", true);
     let intent = context.checkpoints.nsgIntent as CloudDocument | undefined;
     if (intent && add && !intent.knownNotApplied)
       throw new CloudError(
@@ -731,6 +733,7 @@ async function changeSecurityRule(
       }
       throw new CloudError("安全规则操作结果尚未确认，请稍后核对", "UNCERTAIN_OUTCOME", true);
     }
+    await checkpoint(context, "nsgAccepted", true);
     const after = await allPages(
       clients.network,
       "listNetworkSecurityGroupSecurityRules",

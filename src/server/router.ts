@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { DashboardData, OperationRequest } from "@/lib/contracts";
+import { isJobPending } from "@/lib/job-state";
 import {
   login,
   logout,
@@ -48,6 +49,7 @@ import {
 } from "./jobs";
 import { ociAdapter } from "./oci/adapter";
 import { analyticsService } from "./analytics/service";
+import { cpuService } from "./analytics/cpu";
 
 const liveOnly = () => {
   if (isDemo())
@@ -90,9 +92,9 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     if (method === "GET" && path === "auth/me") return json({ user, demo });
     if (
       ["GET", "POST"].includes(method) &&
-      ["analytics/traffic", "analytics/costs"].includes(path)
+      ["analytics/traffic", "analytics/costs", "analytics/cpu"].includes(path)
     ) {
-      const input: Record<string, string> = {};
+      const input: Record<string, string> = Object.create(null);
       for (const [key, value] of url.searchParams) {
         if (Object.hasOwn(input, key))
           throw new AppError("查询参数不能重复", 400, "INVALID_ANALYTICS_QUERY");
@@ -100,16 +102,16 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       }
       const report =
         path === "analytics/traffic"
-          ? await analyticsService.traffic(input, method === "POST")
-          : await analyticsService.costs(input, method === "POST");
+          ? await analyticsService.traffic(input, method === "POST", request.signal)
+          : path === "analytics/cpu"
+            ? await cpuService.query(input, method === "POST")
+            : await analyticsService.costs(input, method === "POST", request.signal);
       return json(report);
     }
     if (method === "POST" && path === "inventory/refresh") {
       liveOnly();
       const result = requestInventoryRefresh(await readJson(request), user.username);
-      const active = result.jobs.some((job) =>
-        ["queued", "running", "retrying", "interrupted"].includes(job.state),
-      );
+      const active = result.jobs.some(isJobPending);
       return json(result, active ? 202 : 200);
     }
     if (method === "GET" && path === "dashboard") {
@@ -229,14 +231,32 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       if (segments.length === 3 && segments[2] === "metrics") {
         const range = z.enum(["1h", "24h", "7d"]).parse(url.searchParams.get("range") ?? "1h");
         if (demo) return json(demoMetrics(range));
-        const key = `${instance.accountId}/${instance.id}/${range}`,
-          cached = metricsCache.get(key);
-        if (cached && cached.expires > Date.now()) return json(cached.value);
-        const value = await ociAdapter.metrics(
-          getCredentials(instance.accountId, instance.region),
-          instance,
+        // Validate the current account's enabled region before consulting a prior snapshot.
+        const snapshot = getCredentialSnapshot(instance.accountId, instance.region);
+        const scopeOf = (value: typeof instance) =>
+          JSON.stringify([
+            value.accountId,
+            value.id,
+            value.region,
+            value.compartmentId,
+            value.vnics.map((vnic) => vnic.id).sort(),
+          ]);
+        const scope = scopeOf(instance);
+        const key = JSON.stringify([
+          scope,
+          snapshot.revision,
+          snapshot.credentials.tenancyId,
+          snapshot.credentials.userId,
           range,
-        );
+        ]);
+        const cached = metricsCache.get(key);
+        if (cached && cached.expires > Date.now()) return json(cached.value);
+        const value = await ociAdapter.metrics(snapshot.credentials, instance, range);
+        const current = getCredentialSnapshot(instance.accountId, instance.region);
+        if (current.revision !== snapshot.revision)
+          throw new AppError("账号配置已变更，请重新读取监控", 409, "ACCOUNT_CHANGED");
+        if (scopeOf(getInstance(instance.id)) !== scope)
+          throw new AppError("实例监控范围已变更，请重新读取", 409, "RESOURCE_CHANGED");
         if (metricsCache.size >= 100) metricsCache.delete(metricsCache.keys().next().value!);
         metricsCache.set(key, { expires: Date.now() + 60000, value });
         return json(value);

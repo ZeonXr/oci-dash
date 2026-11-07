@@ -1,4 +1,4 @@
-import { requireCompartment } from "../oci/helpers";
+import { ocid, requireCompartment } from "../oci/helpers";
 import {
   closeClients,
   cloudError,
@@ -63,7 +63,6 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
   ): Promise<CloudDocument> {
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       const connection = await getConsole(clients, id, signal);
-      if (!connection) throw new CloudError("OCI 控制台连接不存在", "CONSOLE_CONNECTION_MISSING");
       requireOwnedConsole(connection, target, sessionId);
       if (connection.lifecycleState === "ACTIVE") return connection;
       if (connection.lifecycleState !== "CREATING")
@@ -71,6 +70,45 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       if (attempt + 1 < maxPolls) await consoleDelay(pollIntervalMs, signal);
     }
     throw new CloudError("等待 OCI 控制台连接超时", "CONSOLE_CONNECTION_TIMEOUT");
+  }
+
+  async function getForCleanup(
+    clients: OciClients,
+    id: string,
+    target: ConsoleTarget,
+    sessionId: string,
+    signal: AbortSignal,
+    knownCompartmentId?: string,
+  ): Promise<CloudDocument | null> {
+    try {
+      return await getConsole(clients, id, signal);
+    } catch (error) {
+      if (errorStatus(error) !== 404) throw error;
+    }
+    cancelled(signal);
+    // A failed Get alone cannot prove deletion. Require a successful complete
+    // list in the same scope; an access failure or a still-visible ID retains
+    // the durable cleanup slot. Never authorize deletion using a list item.
+    let compartmentId = knownCompartmentId;
+    if (!compartmentId) {
+      const response = await clients.compute.call("getInstance", { instanceId: target.instanceId });
+      cancelled(signal);
+      if (response.instance?.id !== target.instanceId)
+        throw new CloudError("OCI 返回的实例与控制台目标不一致", "CONSOLE_TARGET_MISMATCH");
+      compartmentId = ocid(response.instance.compartmentId, ["tenancy", "compartment"]);
+    }
+    const listed = await listConsoles(clients, target, compartmentId, signal);
+    const existing = listed.find((connection) => connection.id === id);
+    if (existing) {
+      requireOwnedConsole(existing, target, sessionId);
+      if (existing.lifecycleState !== "DELETED")
+        throw new CloudError(
+          "OCI 控制台仍存在但暂时无法读取，保留清理记录并稍后重试",
+          "CONSOLE_CLEANUP_UNCONFIRMED",
+          true,
+        );
+    }
+    return null;
   }
 
   async function removeOwned(
@@ -94,7 +132,14 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       });
     }
     for (let attempt = 0; attempt < maxPolls; attempt++) {
-      const current = await getConsole(clients, connection.id, signal);
+      const current = await getForCleanup(
+        clients,
+        connection.id,
+        target,
+        sessionId,
+        signal,
+        ocid(connection.compartmentId, ["tenancy", "compartment"]),
+      );
       if (!current) return;
       requireOwnedConsole(current, target, sessionId);
       if (current.lifecycleState === "DELETED") return;
@@ -123,7 +168,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       if (connectionId) {
         // The exact ID was persisted from this create. Re-fetch and verify session,
         // account and instance immediately before delete; no tenancy-wide scan is needed.
-        const connection = await getConsole(clients, connectionId, signal);
+        const connection = await getForCleanup(clients, connectionId, target, sessionId, signal);
         if (connection) await removeOwned(clients, connection, target, sessionId, signal);
         if (creationState === "uncertain") onCreationResolved?.();
         return;
@@ -143,7 +188,14 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       }
       for (const connection of matches.values()) {
         // Refresh immediately before deletion: a stale list item is not deletion authority.
-        const current = await getConsole(clients, connection.id, signal);
+        const current = await getForCleanup(
+          clients,
+          connection.id,
+          target,
+          sessionId,
+          signal,
+          connection.compartmentId,
+        );
         if (!current) continue;
         requireCompartment(current.compartmentId, available);
         await removeOwned(clients, current, target, sessionId, signal);

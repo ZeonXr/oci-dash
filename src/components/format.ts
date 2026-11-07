@@ -61,4 +61,3 @@ export const operationLabels: Record<OperationKind, string> = {
   "security-rule-delete": "删除安全规则",
   "ipv6-assign": "分配 IPv6",
 };
-export const activeJobStates = new Set(["queued", "running", "retrying", "cancel_requested"]);

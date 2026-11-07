@@ -2,11 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JobSummary } from "@/lib/contracts";
+import { isJobPending as isPending } from "@/lib/job-state";
 import { api, ApiError, errorMessage } from "./api";
-
-const isPending = (job: JobSummary) =>
-  ["queued", "running", "retrying", "cancel_requested"].includes(job.state) ||
-  (job.state === "interrupted" && !!job.nextRunAt && job.attempt < job.maxAttempts);
 
 function synchronizationId(job: JobSummary): string | null {
   const sync = job.result?.synchronization;

@@ -178,6 +178,7 @@ export function createCostReader({
       account: AccountSummary,
       range: AnalyticsRange,
       filters: CostFilters = {},
+      signal?: AbortSignal,
     ): Promise<CostAccountData> {
       if (credentials.tenancyId !== account.tenancyId || credentials.userId !== account.userId)
         throw new CloudError("费用查询凭据与账号不一致", "COST_SCOPE_MISMATCH");
@@ -219,6 +220,9 @@ export function createCostReader({
       let client: ClientPort | undefined, page: string | undefined;
       const visited = new Set<string>();
       const budget = new AbortController();
+      const cancel = () => budget.abort();
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
       const timer = setTimeout(() => budget.abort(), timeoutMs);
       timer.unref();
       let clientClosed = false;
@@ -230,6 +234,7 @@ export function createCostReader({
           .catch(() => undefined);
       };
       try {
+        if (budget.signal.aborted) throw deadlineError();
         const acquiring = safeCall(() =>
           clientFactory(credentials, credentials.region, budget.signal),
         );
@@ -342,6 +347,7 @@ export function createCostReader({
             await beforeDeadline(closeClient(client), budget.signal).catch(() => undefined);
         } finally {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", cancel);
         }
       }
       rows.sort(

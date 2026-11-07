@@ -4,16 +4,11 @@ import { useId } from "react";
 import Link from "next/link";
 import { Lock, Server } from "lucide-react";
 import type { InstanceSummary, JobSummary, PublicIpBinding, VnicSummary } from "@/lib/contracts";
+import { isJobPending } from "@/lib/job-state";
 import { Button, CopyButton, Status } from "./ui";
-import {
-  activeJobStates,
-  formatDate,
-  instanceHref,
-  number,
-  primaryAddress,
-  taskHref,
-} from "./format";
+import { formatDate, instanceHref, number, primaryAddress, taskHref } from "./format";
 import { RegionLabel } from "./region-label";
+import { InventoryFreshness } from "./inventory-freshness";
 import { useApp } from "./app-provider";
 import { canRotatePublicIp } from "./public-ip-rotation";
 
@@ -38,12 +33,7 @@ export function InstanceCard({
       .filter((binding) => Boolean(binding.publicIp))
       .map((binding) => ({ vnic, binding })),
   );
-  const pending =
-    rotationJob &&
-    (activeJobStates.has(rotationJob.state) ||
-      (rotationJob.state === "interrupted" &&
-        Boolean(rotationJob.nextRunAt) &&
-        rotationJob.attempt < rotationJob.maxAttempts));
+  const pending = rotationJob && isJobPending(rotationJob);
   const failed =
     rotationJob && ["failed", "cancelled", "interrupted"].includes(rotationJob.state) && !pending;
   const syncing = rotationJob?.kind === "sync-account";
@@ -62,7 +52,10 @@ export function InstanceCard({
         <span className="table-resource-icon">
           <Server size={18} aria-hidden="true" />
         </span>
-        <Status value={instance.state} />
+        <div className="row row-wrap">
+          <InventoryFreshness instance={instance} />
+          <Status value={instance.state} />
+        </div>
       </div>
       <h2 id={titleId}>
         <Link className="name-link" href={instanceHref(instance.id)}>

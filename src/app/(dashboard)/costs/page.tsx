@@ -238,7 +238,7 @@ export default function CostsPage() {
             title="先添加 OCI 账号"
             description="连接账号后，可读取该租户的已报告成本。"
             action={
-              <Link className="button" href="/accounts">
+              <Link className="button" href="/settings/accounts">
                 管理账号
               </Link>
             }

@@ -31,6 +31,7 @@ import {
 import { formatDate, instanceHref, number, primaryAddress, regionName } from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
+import { InventoryFreshness } from "@/components/inventory-freshness";
 import { RegionLabel } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
@@ -126,7 +127,7 @@ function InstancesContent() {
           : "添加账号后会自动读取实例，也可以创建一个新实例。"
       }
       action={
-        <Link href="/accounts" className="button">
+        <Link href="/settings/accounts" className="button">
           管理账号
         </Link>
       }
@@ -361,7 +362,10 @@ function InstancesContent() {
                     </span>
                   </td>
                   <td>
-                    <Status value={i.state} />
+                    <div className="row row-wrap">
+                      <Status value={i.state} />
+                      <InventoryFreshness instance={i} />
+                    </div>
                   </td>
                   <td>
                     {i.shape.replace("VM.Standard.", "")}

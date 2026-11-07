@@ -1,5 +1,5 @@
 import { compartments, ocid, regionName, requireCompartment } from "../oci/helpers";
-import { allPages, errorStatus, invoke, type CloudDocument, type OciClients } from "../oci/sdk";
+import { allPages, invoke, type CloudDocument, type OciClients } from "../oci/sdk";
 import { CloudError, type ExecutionContext } from "../oci/types";
 import type { ConsoleTarget } from "./types";
 
@@ -116,22 +116,18 @@ export async function getConsole(
   clients: OciClients,
   id: string,
   signal: AbortSignal,
-): Promise<CloudDocument | null> {
+): Promise<CloudDocument> {
   cancelled(signal);
-  try {
-    const response = await clients.compute.call("getInstanceConsoleConnection", {
-      instanceConsoleConnectionId: ocid(id, "instanceconsoleconnection"),
-    });
-    cancelled(signal);
-    const connection = response.instanceConsoleConnection;
-    if (!connection || connection.id !== id)
-      throw new CloudError("OCI 控制台响应格式不正确", "INVALID_CONSOLE_RESPONSE");
-    return { ...connection, _consoleEtag: response.etag };
-  } catch (error) {
-    if (errorStatus(error) === 404) return null;
-    // SDK responses may include private request material; sanitize at the public boundary.
-    throw error;
-  }
+  // OCI also returns 404 when access was revoked. Keep the raw status until the
+  // transport can verify absence in the exact instance/compartment scope.
+  const response = await clients.compute.call("getInstanceConsoleConnection", {
+    instanceConsoleConnectionId: ocid(id, "instanceconsoleconnection"),
+  });
+  cancelled(signal);
+  const connection = response.instanceConsoleConnection;
+  if (!connection || connection.id !== id)
+    throw new CloudError("OCI 控制台响应格式不正确", "INVALID_CONSOLE_RESPONSE");
+  return { ...connection, _consoleEtag: response.etag };
 }
 
 export async function consoleDelay(milliseconds: number, signal: AbortSignal): Promise<void> {

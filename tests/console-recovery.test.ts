@@ -71,7 +71,13 @@ function fixture() {
   handles.push(db);
   const store = createConsoleStore(db);
   const records = new Map<string, CloudDocument>();
-  const state = { visible: true, outcomes: [] as ("success" | number | "timeout")[], creates: 0 };
+  const state = {
+    visible: true,
+    readDenied: false,
+    listDenied: false,
+    outcomes: [] as ("success" | number | "timeout")[],
+    creates: 0,
+  };
   const history: { operation: string; request: CloudDocument }[] = [];
   const call = vi.fn(async (operation: string, request: CloudDocument): Promise<CloudDocument> => {
     history.push({ operation, request: structuredClone(request) });
@@ -84,10 +90,12 @@ function fixture() {
           lifecycleState: "RUNNING",
         },
       };
-    if (operation === "listInstanceConsoleConnections")
+    if (operation === "listInstanceConsoleConnections") {
+      if (state.listDenied) throw { statusCode: 404, code: "NotAuthorizedOrNotFound" };
       return {
         items: state.visible ? [...records.values()].map((row) => structuredClone(row)) : [],
       };
+    }
     if (operation === "createInstanceConsoleConnection") {
       expect(store.active()?.creationState).toBe("uncertain");
       const outcome = state.outcomes[state.creates++] ?? "success";
@@ -102,6 +110,7 @@ function fixture() {
       return { instanceConsoleConnection: structuredClone(row) };
     }
     if (operation === "getInstanceConsoleConnection") {
+      if (state.readDenied) throw { statusCode: 404, code: "NotAuthorizedOrNotFound" };
       const row = records.get(request.instanceConsoleConnectionId);
       if (!row) throw { statusCode: 404 };
       return { instanceConsoleConnection: structuredClone(row) };
@@ -166,6 +175,36 @@ afterEach(async () => {
 });
 
 describe("durable recovery of ambiguous OCI console creates", () => {
+  it.each([false, true])(
+    "holds the slot after access is revoked and cleans after restoration (list denied: %s)",
+    async (listDenied) => {
+      const f = fixture(),
+        manager = f.makeManager();
+      await manager.initialize();
+      const session = await manager.create(target.instanceId, actor);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(f.store.active()?.state).toBe("ready");
+      f.state.readDenied = true;
+      f.state.listDenied = listDenied;
+      await manager.close(session.id, actor);
+      expect(f.store.active()).toMatchObject({ id: session.id, cleanupPending: true, slot: 1 });
+      expect(f.records.size).toBe(1);
+      await expect(manager.create(target.instanceId, actor)).rejects.toMatchObject({
+        code: "CONSOLE_BUSY",
+      });
+      f.state.readDenied = false;
+      f.state.listDenied = false;
+      await manager.close(session.id, actor);
+      expect(f.records.size).toBe(0);
+      expect(f.store.active()).toBeNull();
+      expect(f.store.get(session.id)).toMatchObject({
+        state: "closed",
+        cleanupPending: false,
+        slot: null,
+      });
+    },
+  );
+
   it("retains an uncertain slot across empty scans, then deletes the late visible connection", async () => {
     const f = fixture(),
       manager = f.makeManager();

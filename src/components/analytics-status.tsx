@@ -8,7 +8,7 @@ import { Modal } from "./ui";
 export function AnalyticsStatusNote({
   report,
 }: {
-  report: AnalyticsMetadata & { status: AnalyticsStatus; warnings: string[] };
+  report: Pick<AnalyticsMetadata, "accounts"> & { status: AnalyticsStatus; warnings: string[] };
 }) {
   const [open, setOpen] = useState(false);
   const incomplete =

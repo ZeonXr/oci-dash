@@ -223,8 +223,11 @@ describe("atomic account save and background connection", () => {
   });
 
   it("changing the actual region set or home region queues a sync", async () => {
-    for (const change of [{ regions: ["ap-singapore-1"] }, { homeRegion: "uk-london-1" }]) {
-      const account = createAccount(input(), USERNAME);
+    for (const [index, change] of [
+      { regions: ["ap-singapore-1"] },
+      { homeRegion: "uk-london-1" },
+    ].entries()) {
+      const account = createAccount(input({ tenancyId: ocid("tenancy") + index }), USERNAME);
       const response = await call("PATCH", `accounts/${account.id}`, change);
       expect(response.status).toBe(200);
       const body = await response.json();
@@ -247,6 +250,31 @@ describe("atomic account save and background connection", () => {
     expect(getCredentialSnapshot(account.id).revision).toBe(0);
     expect(getAccount(account.id)?.regions.slice().sort()).toEqual(account.regions.slice().sort());
     expect(getJobStore().listJobs()).toEqual([]);
+  });
+
+  it("removes disabled-region inventory in the account transaction and restores it on enqueue failure", async () => {
+    const account = createAccount(input(), USERNAME);
+    const insert = getDatabase().prepare(
+      "INSERT INTO resources(id,account_id,region,data,synced_at) VALUES(?,?,?,?,?)",
+    );
+    for (const region of account.regions)
+      insert.run(ocid("instance") + region, account.id, region, "{}", new Date().toISOString());
+    const before = getDatabase().prepare("SELECT * FROM resources ORDER BY id").all();
+    const failure = failAfterEnqueue();
+    const rejected = await call("PATCH", `accounts/${account.id}`, {
+      regions: [account.homeRegion],
+    });
+    expect(rejected.status).toBe(503);
+    expect(getDatabase().prepare("SELECT * FROM resources ORDER BY id").all()).toEqual(before);
+    expect(getAccount(account.id)?.regions).toEqual(account.regions);
+    failure.mockRestore();
+    const accepted = await call("PATCH", `accounts/${account.id}`, {
+      regions: [account.homeRegion],
+    });
+    expect(accepted.status).toBe(200);
+    expect(
+      getDatabase().prepare("SELECT region FROM resources WHERE account_id=?").all(account.id),
+    ).toEqual([{ region: account.homeRegion }]);
   });
 
   it("restores old credentials, revision, cached resources and audit when update enqueue fails", async () => {
@@ -346,6 +374,71 @@ describe("atomic account save and background connection", () => {
     expect((await call("PATCH", `accounts/${account.id}`, replacementKey)).status).toBe(403);
     expect(listAccounts()).toHaveLength(1);
     expect(storedAccount(account.id)).toEqual(before);
+    expect(getJobStore().listJobs()).toEqual([]);
+  });
+
+  it("rejects a duplicate tenancy even with another user, key or region without queue or audit residue", async () => {
+    const original = createAccountConnection(input(), USERNAME);
+    const auditBefore = auditCount();
+    const response = await call(
+      "POST",
+      "accounts",
+      input({
+        name: "Duplicate",
+        userId: ocid("user") + "other",
+        ...replacementKey,
+        homeRegion: "uk-london-1",
+        regions: ["uk-london-1"],
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "DUPLICATE_TENANCY" });
+    expect(listAccounts().map((account) => account.id)).toEqual([original.account.id]);
+    expect(
+      getJobStore()
+        .listJobs()
+        .map((job) => job.id),
+    ).toEqual([original.job!.id]);
+    expect(auditCount()).toBe(auditBefore);
+    expect(() => createAccount(input(), USERNAME)).toThrow(
+      expect.objectContaining({ code: "DUPLICATE_TENANCY" }),
+    );
+  });
+
+  it("rolls back a tenancy change that conflicts with another configured account", async () => {
+    const original = createAccount(input(), USERNAME);
+    const other = createAccount(
+      input({ name: "Other", tenancyId: ocid("tenancy") + "other" }),
+      USERNAME,
+    );
+    const before = storedAccount(other.id);
+    const auditBefore = auditCount();
+    const response = await call("PATCH", `accounts/${other.id}`, {
+      tenancyId: original.tenancyId,
+      ...replacementKey,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "DUPLICATE_TENANCY" });
+    expect(storedAccount(other.id)).toEqual(before);
+    expect(getJobStore().listJobs()).toEqual([]);
+    expect(auditCount()).toBe(auditBefore);
+  });
+
+  it("keeps legacy duplicates for explicit resolution and permits renaming them", async () => {
+    const original = createAccount(input(), USERNAME);
+    const other = createAccount(
+      input({ name: "Legacy duplicate", tenancyId: ocid("tenancy") + "other" }),
+      USERNAME,
+    );
+    getDatabase()
+      .prepare("UPDATE accounts SET tenancy_id=? WHERE id=?")
+      .run(original.tenancyId, other.id);
+    const response = await call("PATCH", `accounts/${other.id}`, {
+      name: "Resolve this duplicate",
+    });
+    expect(response.status).toBe(200);
+    expect(listAccounts()).toHaveLength(2);
+    expect(getAccount(other.id)?.name).toBe("Resolve this duplicate");
     expect(getJobStore().listJobs()).toEqual([]);
   });
 });

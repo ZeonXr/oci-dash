@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { InventoryResult } from "@/lib/contracts";
 import type {
   ExecutionContext,
@@ -9,6 +8,7 @@ import type {
 } from "@/server/oci/types";
 import {
   DEFAULT_LEASE_MS,
+  MAX_CONCURRENT_ACCOUNT_SYNCS,
   JobError,
   LeaseLostError,
   safeErrorMessage,
@@ -27,6 +27,7 @@ export interface WorkerDependencies {
 export interface RunWorkerOptions {
   signal: AbortSignal;
   pollIntervalMs?: number;
+  /** Claim at most one task and await its outcome, without filling concurrent slots. */
   once?: boolean;
   dependencies?: WorkerDependencies;
   /** Override only for isolated tests or a deliberately configured deployment. */
@@ -89,11 +90,13 @@ async function executeClaimed(
   signal.addEventListener("abort", onShutdown, { once: true });
   if (signal.aborted) onShutdown();
   let credentials: OciCredentials | undefined;
+  let cloudConfirmed = Boolean(job.checkpoints[RESULT_CHECKPOINT]);
   function check(): void {
     store.assertLease(id, workerId);
     if (store.cancellationRequested(id) && !controller.signal.aborted)
       controller.abort(new CancellationError());
     controller.signal.throwIfAborted();
+    if (!cloudConfirmed) store.assertCompletionWindow(id, workerId);
   }
   const leaseMonitor = setInterval(() => {
     try {
@@ -102,6 +105,7 @@ async function executeClaimed(
         return;
       }
       if (store.cancellationRequested(id)) controller.abort(new CancellationError());
+      if (!cloudConfirmed) store.assertCompletionWindow(id, workerId);
     } catch (error) {
       controller.abort(error);
     }
@@ -140,10 +144,12 @@ async function executeClaimed(
     credentials = getCredentials(account.id, job.operation.region);
     const regions = account.regions.length ? account.regions : [account.homeRegion];
     if (job.operation.kind === "sync-account") {
-      await context.progress("正在验证 OCI 账号连接。");
-      await adapter.verify(credentials);
-      check();
-      await context.progress("账号连接验证成功，正在读取云资源。");
+      if (account.status !== "connected" || !account.lastSyncAt) {
+        await context.progress("正在验证 OCI 账号连接。");
+        await adapter.verify(credentials);
+        check();
+        await context.progress("账号连接验证成功，正在读取云资源。");
+      } else await context.progress("正在读取云资源。");
       const result = await adapter.inventory(credentials, account, regions, context);
       check();
       if (!store.withActiveLease(id, workerId, () => saveInventory(account.id, result))) {
@@ -165,6 +171,7 @@ async function executeClaimed(
       // Preserve a confirmed successful response even if cancellation raced with completion.
       store.checkpoint(id, workerId, RESULT_CHECKPOINT, outcome);
       context.checkpoints[RESULT_CHECKPOINT] = outcome;
+      cloudConfirmed = true;
     } else
       store.progress(
         id,
@@ -214,6 +221,11 @@ async function executeClaimed(
     // An expired lease belongs to the next worker. The old worker must never commit a result.
     if (error instanceof LeaseLostError || controller.signal.reason instanceof LeaseLostError)
       return;
+    if (
+      controller.signal.reason instanceof JobError &&
+      controller.signal.reason.code === "COMPLETION_TIMEOUT"
+    )
+      error = controller.signal.reason;
     try {
       store.assertLease(id, workerId);
       const message = safeErrorMessage(error, credentials ? [credentials.privateKey] : []);
@@ -234,6 +246,18 @@ async function executeClaimed(
           if (!signal.aborted && !controller.signal.aborted)
             setAccountError(job.operation.accountId, message);
         });
+      }
+      // OCI accepted the operation and is still processing it. This is a status
+      // reconciliation, not another failed request: retain a separate finite window.
+      if (
+        job.operation.kind !== "sync-account" &&
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "RESOURCE_PENDING"
+      ) {
+        store.waitForCompletion(id, workerId, message);
+        return;
       }
       const retryable = Boolean(
         error && typeof error === "object" && "retryable" in error && error.retryable === true,
@@ -281,6 +305,40 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
   options.signal.addEventListener("abort", stop, { once: true });
   if (options.signal.aborted) stop();
   let fatalError: unknown;
+  const active = new Set<Promise<void>>();
+  let wake: (() => void) | undefined;
+  const launch = (job: ClaimedJob) => {
+    const execution = executeClaimed(
+      job,
+      workerId,
+      dependencies,
+      shutdown.signal,
+      leaseMs,
+      heartbeatIntervalMs,
+    )
+      .catch((error) => {
+        fatalError ??= error;
+        shutdown.abort(error);
+      })
+      .finally(() => {
+        active.delete(execution);
+        wake?.();
+      });
+    active.add(execution);
+  };
+  const waitForWork = () =>
+    new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        shutdown.signal.removeEventListener("abort", done);
+        if (wake === done) wake = undefined;
+        resolve();
+      };
+      const timer = setTimeout(done, pollIntervalMs);
+      wake = done;
+      shutdown.signal.addEventListener("abort", done, { once: true });
+      if (shutdown.signal.aborted) done();
+    });
   store.heartbeat(workerId, leaseMs);
   const heartbeat = setInterval(() => {
     try {
@@ -295,28 +353,28 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
     while (!shutdown.signal.aborted) {
       // Demo is enforced at the execution boundary too: pre-existing real jobs
       // remain queued while this worker only maintains its health heartbeat.
-      const job = process.env.DEMO_MODE === "true" ? null : store.claimNext(workerId, leaseMs);
-      if (job)
-        await executeClaimed(
-          job,
-          workerId,
-          dependencies,
-          shutdown.signal,
-          leaseMs,
-          heartbeatIntervalMs,
-        );
+      // The database enforces the two-read/one-write limits across all workers;
+      // this local bound only caps execution objects owned by this process.
+      const capacity = options.once ? 1 : MAX_CONCURRENT_ACCOUNT_SYNCS + 1;
+      while (!shutdown.signal.aborted && active.size < capacity) {
+        const job = process.env.DEMO_MODE === "true" ? null : store.claimNext(workerId, leaseMs);
+        if (!job) break;
+        launch(job);
+      }
       if (options.once) break;
-      if (!job)
-        try {
-          await sleep(pollIntervalMs, undefined, { signal: shutdown.signal });
-        } catch (error) {
-          if (!shutdown.signal.aborted) throw error;
-        }
+      await waitForWork();
     }
-    if (fatalError) throw fatalError;
+  } catch (error) {
+    fatalError ??= error;
+    shutdown.abort(error);
   } finally {
+    // Keep process and job heartbeats alive until every running task has persisted
+    // its outcome/interruption. The entrypoint's existing shutdown deadline still
+    // handles a transport that cannot return promptly.
+    await Promise.allSettled([...active]);
     clearInterval(heartbeat);
     options.signal.removeEventListener("abort", stop);
     store.stopWorker(workerId);
   }
+  if (fatalError) throw fatalError;
 }

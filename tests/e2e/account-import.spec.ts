@@ -82,6 +82,12 @@ const test = base.extend<{ mockApi: MockApi }>({
           }
           return json({ account }); // Metadata edits never echo a private key or invent a job.
         }
+        if (method === "DELETE" && url.pathname === `/api/accounts/${sample.id}`) {
+          state.writes.push({ method, path: url.pathname, body: {} });
+          state.accounts = [];
+          state.syncJobs = [];
+          return json({ ok: true });
+        }
         if (method === "POST" && url.pathname === `/api/accounts/${sample.id}/sync`) {
           state.writes.push({ method, path: url.pathname, body: request.postDataJSON() });
           const job = { ...queuedSync, id: "ui-test-sync-retry" };
@@ -92,7 +98,7 @@ const test = base.extend<{ mockApi: MockApi }>({
         // Next.js link prefetches are unnecessary for this isolated form test.
         if (request.headers()["rsc"] === "1") return route.abort();
         if (
-          (request.resourceType() === "document" && url.pathname === "/accounts") ||
+          (request.resourceType() === "document" && url.pathname === "/settings/accounts") ||
           url.pathname.startsWith("/_next/") ||
           /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname) ||
           url.pathname === "/favicon.ico" ||
@@ -113,7 +119,7 @@ const test = base.extend<{ mockApi: MockApi }>({
 test.use({ trace: "off", video: "off", screenshot: "off", serviceWorkers: "block" });
 
 const opener = (page: Page) =>
-  page.locator(".page-heading").getByRole("button", { name: "添加账号", exact: true });
+  page.locator(".settings-account-toolbar").getByRole("button", { name: "添加账号", exact: true });
 async function openAdd(page: Page) {
   await opener(page).click();
   const dialog = page.getByRole("dialog", { name: "添加 OCI 账号" });
@@ -156,7 +162,7 @@ function config(fingerprint: string) {
 
 test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确", async ({ page, mockApi }, info) => {
   await page.setViewportSize({ width: 1691, height: 1004 });
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   let dialog = await openAdd(page);
   await centered(dialog);
   await expect(dialog.locator("input:visible, textarea:visible")).toHaveCount(2);
@@ -245,7 +251,7 @@ test("连接失败可重试，排队期间禁用按钮且不重复提交", async
   mockApi.syncJobs = [
     { ...queuedSync, state: "failed", lastError: error, finishedAt: sample.createdAt },
   ];
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   const card = page.locator(".account-card");
   await expect(card).toContainText(error);
   const retry = card.getByRole("button", { name: "重试连接", exact: true });
@@ -263,7 +269,7 @@ test("连接失败可重试，排队期间禁用按钮且不重复提交", async
 });
 
 test("缺少配置字段与非 PEM 文件均在提交前显示错误", async ({ page, mockApi }) => {
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   const dialog = await openAdd(page);
   await dialog
     .getByLabel(/^OCI 配置文本/)
@@ -285,7 +291,7 @@ test("缺少配置字段与非 PEM 文件均在提交前显示错误", async ({ 
 
 test("编辑名称不读取或提交现有私钥，也不重新连接", async ({ page, mockApi }) => {
   mockApi.accounts = [{ ...sample }];
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   await page.locator(".account-card").getByRole("button", { name: "编辑", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑账号" });
   await expect(dialog.getByRole("checkbox", { name: "替换连接凭据" })).not.toBeChecked();
@@ -306,7 +312,7 @@ test("编辑名称不读取或提交现有私钥，也不重新连接", async ({
 
 test("390×480 短屏仅内容滚动，标题与操作栏可见，遮罩点击关闭", async ({ page, mockApi }, info) => {
   await page.setViewportSize({ width: 390, height: 480 });
-  await page.goto("/accounts");
+  await page.goto("/settings/accounts");
   const dialog = await openAdd(page);
   await dialog.locator("summary").click();
   await centered(dialog);
@@ -335,4 +341,25 @@ test("390×480 短屏仅内容滚动，标题与操作栏可见，遮罩点击�
   await page.mouse.click(4, 4);
   await expect(dialog).not.toBeVisible();
   expect(mockApi.writes.length).toBe(0);
+});
+
+test("设置账号页移除配置仍需名称确认，且只提交一次删除", async ({ page, mockApi }) => {
+  mockApi.accounts = [{ ...sample, status: "connected" }];
+  await page.goto("/settings/accounts");
+  await page.locator(".account-card").getByRole("button", { name: "移除", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "移除账号配置" });
+  const remove = dialog.getByRole("button", { name: "移除配置", exact: true });
+  await expect(dialog).toContainText("不会删除 OCI 云资源");
+  await expect(remove).toBeDisabled();
+  await dialog.getByRole("textbox").fill("Wrong account");
+  await expect(remove).toBeDisabled();
+  expect(mockApi.writes).toHaveLength(0);
+  await dialog.getByRole("textbox").fill(sample.name);
+  await remove.click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(".account-card")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "添加你的第一个 OCI 账号" })).toBeVisible();
+  expect(mockApi.writes.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    `DELETE /api/accounts/${sample.id}`,
+  ]);
 });

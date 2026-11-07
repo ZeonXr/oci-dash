@@ -1,4 +1,5 @@
 import type { InstanceSummary, JobSummary, PublicIpBinding, VnicSummary } from "@/lib/contracts";
+import { isJobPending } from "@/lib/job-state";
 import type { OperationDialogProps } from "./operation-dialog";
 
 export function canRotatePublicIp(binding: PublicIpBinding): boolean {
@@ -21,8 +22,7 @@ export function rotationNeedsRefresh(
     Boolean(
       syncJob &&
       (["failed", "cancelled"].includes(syncJob.state) ||
-        (syncJob.state === "interrupted" &&
-          (!syncJob.nextRunAt || syncJob.attempt >= syncJob.maxAttempts)) ||
+        (syncJob.state === "interrupted" && !isJobPending(syncJob)) ||
         (Array.isArray(syncJob.result?.warnings) && syncJob.result.warnings.length > 0)),
     );
   if (!incomplete) return false;

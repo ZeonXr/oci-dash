@@ -13,6 +13,7 @@ import {
   Square,
 } from "lucide-react";
 import type { JobEvent, JobSummary } from "@/lib/contracts";
+import { isJobPending, isJobCancellable, isJobRetryable } from "@/lib/job-state";
 import { send, useAction, useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
 import {
@@ -27,14 +28,7 @@ import {
   PageHeader,
   Status,
 } from "@/components/ui";
-import {
-  activeJobStates,
-  formatDate,
-  instanceHref,
-  operationLabels,
-  shortId,
-  taskHref,
-} from "@/components/format";
+import { formatDate, instanceHref, operationLabels, shortId, taskHref } from "@/components/format";
 import { RegionLabel } from "@/components/region-label";
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -50,7 +44,7 @@ export default function TaskDetailPage() {
   const job = resource.data?.job;
   useEffect(() => setPoll(3000), [id]);
   useEffect(() => {
-    if (job && !activeJobStates.has(job.state)) setPoll(0);
+    if (job) setPoll(isJobPending(job) ? 3000 : 0);
   }, [job]);
   const execute = async () => {
     if (demo || !confirm) return;
@@ -68,8 +62,8 @@ export default function TaskDetailPage() {
   if (resource.loading) return <LoadingState />;
   if (!job)
     return <ErrorState message={resource.error || "未找到任务。"} retry={resource.reload} />;
-  const stages = ["已排队", "执行中", "已结束"];
-  const stage = job.state === "queued" ? 0 : activeJobStates.has(job.state) ? 1 : 2;
+  const stages = ["已排队", "执行中", job.state === "interrupted" ? "等待处理" : "已结束"];
+  const stage = job.state === "queued" ? 0 : isJobPending(job) ? 1 : 2;
   return (
     <>
       <PageHeader
@@ -97,7 +91,7 @@ export default function TaskDetailPage() {
           <RefreshCw size={15} />
           刷新
         </Button>
-        {["failed", "interrupted", "cancelled"].includes(job.state) && (
+        {isJobRetryable(job) && (
           <Button
             disabled={demo}
             onClick={() => {
@@ -109,7 +103,7 @@ export default function TaskDetailPage() {
             重试
           </Button>
         )}
-        {["queued", "running", "retrying"].includes(job.state) && (
+        {isJobCancellable(job) && (
           <Button
             disabled={demo}
             onClick={() => {
@@ -125,6 +119,9 @@ export default function TaskDetailPage() {
       <div className="stack">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
         {job.lastError && <Alert tone="error">{job.lastError}</Alert>}
+        {job.waitingForCompletion && isJobPending(job) && (
+          <Alert tone="info">OCI 仍在处理操作，系统会继续核对结果。</Alert>
+        )}
         <Card>
           <div className="task-progress">
             {stages.map((label, index) => (
@@ -158,6 +155,12 @@ export default function TaskDetailPage() {
             <dd>
               {job.attempt} / {job.maxAttempts}
             </dd>
+            {job.completionDeadlineAt && isJobPending(job) && (
+              <>
+                <dt>本轮完成期限</dt>
+                <dd>{formatDate(job.completionDeadlineAt, true)}</dd>
+              </>
+            )}
             <dt>开始时间</dt>
             <dd>{formatDate(job.startedAt, true)}</dd>
             <dt>结束时间</dt>
@@ -178,7 +181,11 @@ export default function TaskDetailPage() {
         <Card
           title="执行日志"
           description={
-            activeJobStates.has(job.state) ? "任务执行期间自动更新" : "已保存的完整执行记录"
+            isJobPending(job)
+              ? "任务执行期间自动更新"
+              : job.state === "interrupted"
+                ? "自动恢复已停止，可重试或取消任务"
+                : "已保存的完整执行记录"
           }
         >
           {resource.data?.events.length ? (

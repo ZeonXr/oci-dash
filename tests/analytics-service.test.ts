@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountSummary, InstanceSummary } from "@/lib/contracts";
 import type { CostAccountData, CostRow, TrafficAccountData } from "@/lib/analytics-contracts";
-import { createAnalyticsService } from "@/server/analytics/service";
+import { createAnalyticsService, type AnalyticsServiceOptions } from "@/server/analytics/service";
 import { aggregateCostRows } from "@/server/analytics/costs";
 import { CloudError } from "@/server/oci/types";
 
@@ -93,19 +93,25 @@ function traffic(a: AccountSummary): TrafficAccountData {
     dataThrough: "2026-11-07T12:00:00.000Z",
   };
 }
-function fixture(initial = [account("one")]) {
+function fixture(
+  initial = [account("one")],
+  options: Pick<AnalyticsServiceOptions, "timeoutMs" | "instances"> = {},
+) {
   let clock = NOW;
   let revision = 0;
   let available = initial;
-  const costRead = vi.fn(async (_credentials, a: AccountSummary) => cost(a));
-  const trafficRead = vi.fn(async (_credentials, items: InstanceSummary[]) =>
-    items.length
-      ? traffic(available.find((a) => a.id === items[0].accountId)!)
-      : ({ points: [], rows: [], status: "empty", warnings: [] } as TrafficAccountData),
+  const costRead = vi.fn<NonNullable<AnalyticsServiceOptions["costs"]>["read"]>(
+    async (_credentials, a) => cost(a),
+  );
+  const trafficRead = vi.fn<NonNullable<AnalyticsServiceOptions["traffic"]>["read"]>(
+    async (_credentials, items) =>
+      items.length
+        ? traffic(available.find((a) => a.id === items[0].accountId)!)
+        : ({ points: [], rows: [], status: "empty", warnings: [] } as TrafficAccountData),
   );
   const service = createAnalyticsService({
     accounts: () => available,
-    instances: () => available.map(instance),
+    instances: options.instances ?? (() => available.map(instance)),
     access: (id) => ({
       revision,
       credentials: {
@@ -121,6 +127,7 @@ function fixture(initial = [account("one")]) {
     demo: () => false,
     costs: { read: costRead },
     traffic: { read: trafficRead },
+    timeoutMs: options.timeoutMs,
   });
   return {
     service,
@@ -137,6 +144,7 @@ function fixture(initial = [account("one")]) {
     },
   };
 }
+afterEach(() => vi.useRealTimers());
 
 describe("analytics report orchestration", () => {
   it("does not round cross-account traffic totals beyond safe integer precision", async () => {
@@ -185,6 +193,7 @@ describe("analytics report orchestration", () => {
     );
     const a = f.service.costs(range),
       b = f.service.costs(range, true);
+    await vi.waitFor(() => expect(f.costRead).toHaveBeenCalledTimes(1));
     release(cost(account("one")));
     await Promise.all([a, b]);
     expect(f.costRead).toHaveBeenCalledTimes(1);
@@ -199,6 +208,7 @@ describe("analytics report orchestration", () => {
         }),
     );
     const pending = f.service.costs(range);
+    await vi.waitFor(() => expect(f.costRead).toHaveBeenCalledTimes(1));
     f.changeRevision();
     release(cost(account("one")));
     await expect(pending).rejects.toMatchObject({ code: "ACCOUNT_CHANGED" });
@@ -299,5 +309,165 @@ describe("analytics report orchestration", () => {
     });
     expect((await service.traffic(range, true)).source).toBe("demo");
     expect((await service.costs(range, true)).source).toBe("demo");
+  });
+});
+
+describe("analytics whole-query budgets and current region scope", () => {
+  it.each(["costs", "traffic"] as const)(
+    "returns completed accounts before the browser deadline for %s",
+    async (kind) => {
+      vi.useFakeTimers();
+      const selected = Array.from({ length: 8 }, (_, i) => account(`account${i}`));
+      const f = fixture(selected);
+      f.costRead.mockImplementation(async (_credentials, a) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20_000));
+        return cost(a);
+      });
+      f.trafficRead.mockImplementation(async (_credentials, items) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20_000));
+        return traffic(account(items[0].accountId));
+      });
+      const pending = f.service[kind](range);
+      await vi.advanceTimersByTimeAsync(50_000);
+      const result = await pending;
+      expect(result.status).toBe("partial");
+      expect(result.rows).toHaveLength(4);
+      expect(result.accounts.filter((item) => item.status === "ok")).toHaveLength(4);
+      expect(result.accounts.filter((item) => item.status === "error")).toHaveLength(4);
+      expect(
+        result.accounts
+          .filter((item) => item.status === "error")
+          .every((item) => item.message?.includes("整体时间限制")),
+      ).toBe(true);
+      expect(kind === "costs" ? f.costRead : f.trafficRead).toHaveBeenCalledTimes(6);
+      if (kind === "costs")
+        expect(
+          (result as import("@/lib/analytics-contracts").CostReport).totals[0].amount,
+        ).toBeNull();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(kind === "costs" ? f.costRead : f.trafficRead).toHaveBeenCalledTimes(6);
+    },
+  );
+
+  it("keeps only two actual account reads after timeout and removes cancelled queue entries", async () => {
+    vi.useFakeTimers();
+    const f = fixture([account("one"), account("two")], { timeoutMs: 50 });
+    const release: (() => void)[] = [];
+    f.costRead.mockImplementation(async (_credentials, a) => {
+      await new Promise<void>((resolve) => release.push(resolve));
+      return cost(a);
+    });
+    const first = f.service.costs(range);
+    await vi.advanceTimersByTimeAsync(51);
+    expect((await first).status).toBe("partial");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      f.advance(3000);
+      const pending = f.service.costs(range, true);
+      await vi.advanceTimersByTimeAsync(51);
+      expect((await pending).status).toBe("partial");
+    }
+    expect(f.costRead).toHaveBeenCalledTimes(2);
+    release.forEach((resolve) => resolve());
+    await vi.advanceTimersByTimeAsync(0);
+    f.advance(3000);
+    f.costRead.mockImplementation(async (_credentials, a) => cost(a));
+    expect((await f.service.costs(range, true)).status).toBe("ok");
+    expect(f.costRead).toHaveBeenCalledTimes(4);
+  });
+
+  it("cancels only the departing subscriber while another caller shares the same query", async () => {
+    const f = fixture();
+    let release!: () => void;
+    f.costRead.mockImplementation(async (_credentials, a) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return cost(a);
+    });
+    const controller = new AbortController();
+    const first = f.service.costs(range, false, controller.signal);
+    const firstRejected = expect(first).rejects.toMatchObject({ code: "ANALYTICS_CANCELLED" });
+    const second = f.service.costs(range);
+    await vi.waitFor(() => expect(f.costRead).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await firstRejected;
+    const signal = f.costRead.mock.calls[0][4]!;
+    expect(signal.aborted).toBe(false);
+    release();
+    expect((await second).rows).toHaveLength(1);
+  });
+
+  it("stops dispatching and avoids caching when every caller cancels", async () => {
+    const f = fixture([account("one"), account("two"), account("three")]);
+    f.costRead.mockImplementation(async (_credentials, _account, _range, _filters, signal) => {
+      if (!signal) throw new Error("Expected shared query signal");
+      await new Promise<void>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("mock stopped")), { once: true }),
+      );
+      return cost(account("one"));
+    });
+    const controller = new AbortController();
+    const pending = f.service.costs(range, false, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "ANALYTICS_CANCELLED" });
+    await vi.waitFor(() => expect(f.costRead).toHaveBeenCalledTimes(2));
+    controller.abort();
+    await rejected;
+    expect(f.costRead).toHaveBeenCalledTimes(2);
+    f.costRead.mockImplementation(async (_credentials, a) => cost(a));
+    const next = await f.service.costs(range);
+    expect(next.cached).toBe(false);
+    expect(next.rows).toHaveLength(3);
+  });
+
+  it("never starts a query for an already-aborted caller", async () => {
+    const f = fixture();
+    await expect(f.service.costs(range, false, AbortSignal.abort())).rejects.toMatchObject({
+      code: "ANALYTICS_CANCELLED",
+    });
+    expect(f.costRead).not.toHaveBeenCalled();
+  });
+
+  it("preserves a valid cached snapshot when the caller abandons a manual refresh", async () => {
+    const f = fixture();
+    await f.service.costs(range);
+    f.advance(3000);
+    f.costRead.mockImplementationOnce(async (_credentials, _account, _range, _filters, signal) => {
+      if (!signal) throw new Error("Expected shared query signal");
+      await new Promise<void>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("mock stopped")), { once: true }),
+      );
+      return cost(account("one"));
+    });
+    const controller = new AbortController();
+    const pending = f.service.costs(range, true, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "ANALYTICS_CANCELLED" });
+    await vi.waitFor(() => expect(f.costRead).toHaveBeenCalledTimes(2));
+    controller.abort();
+    await rejected;
+    expect((await f.service.costs(range)).cached).toBe(true);
+    expect(f.costRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("excludes stale instances from disabled regions before reads and rejects explicit scope filters", async () => {
+    const a = account("one");
+    a.regions.push("uk-london-1");
+    const stale = { ...instance(a), region: "uk-london-1" };
+    const f = fixture([a], { instances: () => [stale] });
+    await f.service.traffic(range);
+    expect(f.trafficRead.mock.calls[0][1]).toHaveLength(1);
+    a.regions = [a.homeRegion];
+    f.changeRevision();
+    const result = await f.service.traffic(range);
+    expect(result.rows).toHaveLength(0);
+    expect(f.trafficRead.mock.calls[1][1]).toHaveLength(0);
+    for (const filter of [
+      { region: "uk-london-1" },
+      { instanceId: stale.id },
+      { vnicId: stale.vnics[0].id },
+    ])
+      await expect(f.service.traffic({ ...range, ...filter })).rejects.toMatchObject({
+        status: filter.region ? 400 : 404,
+      });
+    expect(f.trafficRead).toHaveBeenCalledTimes(2);
   });
 });

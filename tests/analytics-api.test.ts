@@ -39,12 +39,12 @@ function request(path: string, method = "GET", signed = true, requestOrigin = or
   );
 }
 describe("analytics API boundaries", () => {
-  it("requires login for both report types", async () => {
-    for (const kind of ["traffic", "costs"])
+  it("requires login for all report types", async () => {
+    for (const kind of ["traffic", "costs", "cpu"])
       expect((await request(`analytics/${kind}`, "GET", false)).status).toBe(401);
   });
   it("allows demo inspection and refresh without querying real accounts", async () => {
-    for (const kind of ["traffic", "costs"]) {
+    for (const kind of ["traffic", "costs", "cpu"]) {
       for (const method of ["GET", "POST"]) {
         const response = await request(`analytics/${kind}`, method);
         expect(response.status).toBe(200);
@@ -59,6 +59,9 @@ describe("analytics API boundaries", () => {
     expect((await request("analytics/costs", "POST", true, "https://other.invalid")).status).toBe(
       403,
     );
+    expect((await request("analytics/cpu", "POST", true, "https://other.invalid")).status).toBe(
+      403,
+    );
   });
   it("rejects duplicate and invalid calendar parameters", async () => {
     expect((await request("analytics/traffic?accountId=a&accountId=b")).status).toBe(400);
@@ -69,5 +72,9 @@ describe("analytics API boundaries", () => {
   it("does not accept user supplied tenant identities or arbitrary monitoring queries", async () => {
     expect((await request("analytics/costs?tenantId=other")).status).toBe(400);
     expect((await request("analytics/traffic?query=CpuUtilization")).status).toBe(400);
+    expect((await request("analytics/cpu?query=CpuUtilization")).status).toBe(400);
+    expect((await request("analytics/cpu?__proto__=ignored")).status).toBe(400);
+    expect((await request("analytics/cpu?accountId=a&accountId=b")).status).toBe(400);
+    expect((await request("analytics/cpu?startDate=2026-11-01")).status).toBe(400);
   });
 });
