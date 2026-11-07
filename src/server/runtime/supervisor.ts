@@ -7,6 +7,7 @@ export type RuntimeFailureReason =
 export interface RuntimeCommand {
   file: string;
   args: string[];
+  env?: Partial<NodeJS.ProcessEnv>;
 }
 export interface RuntimeChildSnapshot {
   role: RuntimeRole;
@@ -226,7 +227,7 @@ export function startRuntimeSupervisor(options: RuntimeSupervisorOptions): Runti
     try {
       const child = spawn(command.file, command.args, {
         cwd: options.cwd ?? process.cwd(),
-        env: options.env ?? process.env,
+        env: { ...(options.env ?? process.env), ...command.env },
         stdio: ["ignore", "inherit", "inherit"],
         shell: false,
         detached: false,

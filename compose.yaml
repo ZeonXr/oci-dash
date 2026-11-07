@@ -19,6 +19,8 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
     volumes:
       - app-data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:

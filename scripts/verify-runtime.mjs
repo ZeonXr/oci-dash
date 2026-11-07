@@ -89,6 +89,8 @@ try {
     "unless-stopped",
     "--stop-timeout",
     "35",
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
     "--security-opt",
     "no-new-privileges:true",
     "--cap-drop",
@@ -149,12 +151,14 @@ try {
     "none",
     "--read-only",
     "--mount",
-    `type=volume,src=${volume},dst=/data,readonly`,
+    `type=volume,src=${volume},dst=/source,readonly`,
+    "--tmpfs",
+    "/data:rw,uid=1000,gid=1000,mode=0700",
     "--entrypoint",
     "node",
     image,
     "-e",
-    `const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});const w=d.prepare('SELECT stopped_at FROM job_workers WHERE id=?').get(${JSON.stringify(beforeStop.workerId)});console.log(JSON.stringify({stopped:Boolean(w?.stopped_at),users:d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(',')}));d.close();`,
+    `require('node:fs').cpSync('/source','/data',{recursive:true});const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});const w=d.prepare('SELECT stopped_at FROM job_workers WHERE id=?').get(${JSON.stringify(beforeStop.workerId)});console.log(JSON.stringify({stopped:Boolean(w?.stopped_at),users:d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(',')}));d.close();`,
   );
   const result = JSON.parse(probe);
   assert.equal(result.stopped, true, "Worker must record its graceful shutdown");

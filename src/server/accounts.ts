@@ -51,6 +51,13 @@ export const getCredentials = (id: string, region?: string): OciCredentials =>
   getCredentialSnapshot(id, region).credentials;
 function assertAccountIdle(id: string): void {
   const db = getDatabase();
+  if (
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='console_sessions'")
+      .get() &&
+    db.prepare("SELECT id FROM console_sessions WHERE account_id=? AND slot=1").get(id)
+  )
+    throw new AppError("账号仍有控制台会话或清理任务，请先断开并等待清理完成", 409, "ACCOUNT_BUSY");
   if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").get())
     return;
   if (

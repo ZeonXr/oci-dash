@@ -1,6 +1,6 @@
 # OCI Dash 运维说明
 
-本文说明默认的单主机 Docker 部署。Compose 项目为 `oci-dash`，唯一服务 `app` 使用 `oci-dash:local` 镜像，在同一容器内运行 Web 和后台 Worker，共享数据库及加密密钥。本版本尚未进行真实 OCI 写操作验收；各项部署验证结果以 [验证记录](VERIFICATION.md) 为准。
+本文说明默认的单主机 Docker 部署。Compose 项目为 `oci-dash`，唯一服务 `app` 使用 `oci-dash:local` 镜像，在同一容器内运行 Web 和后台 Worker，共享数据库及加密密钥。实际 OCI 验收范围与各项部署验证结果以 [验证记录](VERIFICATION.md) 为准。
 
 ## 环境配置
 
@@ -43,7 +43,7 @@ Web 和 Worker 使用 SQLite WAL 与 `busy_timeout`。数据卷应放在支持�
 
 ## 运行入口与停止
 
-默认入口 `node dist/runtime.mjs` 管理 Next.js standalone `server.js` 和后台 `dist/worker.mjs`。任何一个业务进程退出，包括意外以状态 0 退出，入口都会停止另一个并以非零状态退出。Docker 的 `restart: unless-stopped` 策略随后重启整个容器，避免只剩页面可访问或只剩后台执行的状态。
+默认入口 `node dist/runtime.mjs` 管理 Next.js standalone `server.js` 和后台 `dist/worker.mjs`，同时提供统一 HTTP/WebSocket 网关。Next.js 仅监听容器内部动态分配的 loopback 端口，网关提供对外的 3000 端口。任何一个业务进程退出，包括意外以状态 0 退出，入口都会停止另一个并以非零状态退出。Docker 的 `restart: unless-stopped` 策略随后重启整个容器，避免只剩页面可访问或只剩后台执行的状态。
 
 ```sh
 docker compose stop app
@@ -60,7 +60,27 @@ Compose 仅绑定宿主机 `127.0.0.1:${PORT}`。反向代理需要把域名转�
 
 `APP_ORIGIN` 必须包含实际协议、主机名及非默认端口。例如浏览器使用 `https://oci.example.com` 时，应配置该值，不要保留 `http://localhost:3000`。否则登录和其他写请求会返回 `ORIGIN_MISMATCH`。HTTPS 配置还决定会话 Cookie 的 Secure 属性。
 
-当前任务页面通过 HTTP API 读取状态，不需要为任务更新额外建立 WebSocket 或 VNC 代理路径。
+任务页面通过 HTTP API 读取状态。VNC 控制台使用同域 `/api/console/sessions/:id/socket` WebSocket；同一个站点代理需要支持 Upgrade，并保留正确的 Host/Origin。无需额外映射 VNC 端口或配置独立的 `/myvnc/` 服务。例如在现有代理 location 中启用：
+
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+proxy_read_timeout 3600s;
+proxy_send_timeout 3600s;
+```
+
+VNC 页面和 WebSocket 都经过面板登录校验。不要为控制台创建绕过网关的公开转发。面板主机需能通过 SSH 协议访问所属区域的 OCI 控制台服务 TCP 443；仅允许 HTTPS 的出口代理可能无法承载 SSH。
+
+## 控制台会话与清理
+
+OCI 账号需要允许读取实例、创建/读取/删除实例控制台连接。此功能不要求来宾系统的 SSH 服务可用，也不依赖实例公网 IP；已有的外部 OCI 控制台连接会阻止新建，应用不会删除其他客户端的连接。
+
+每次连接生成临时 SSH 密钥，所有 SSH 参数由服务端按已验证的 OCI 连接信息构造。外层主机密钥与 OCI API 返回指纹严格匹配；内层只通过已认证的外层通道连接，在同一次 SSH 握手中取得主机密钥并保存到本次会话的 known_hosts。内层不另开密钥扫描连接，避免超过 OCI 的并发连接限制。Compose 的 `/tmp` 使用 tmpfs，密钥与 known_hosts 不写入持久数据卷；直接运行镜像时也应挂载临时 `/tmp`。
+
+全站同时一个会话；15 分钟无操作或到达 1 小时上限会断开。关闭页面、登出或重启时触发清理。清理异常的会话保留全局占用与所属账号锁，后台定时重试，也可在控制台页点击“重试断开”。不要通过删除数据库记录或修改账号密钥绕过清理；应先核对 OCI 控制台连接状态与权限。
+
+会话仅删除带有本应用账号及会话标签、并与记录实例相符的 OCI 控制台连接。进程异常退出后，下一次启动会根据持久记录恢复清理。创建请求超时且云端结果仍不明确时，暂时查不到连接不会释放占用；应用继续按会话标签核对，直到确认并清理。切到演示模式不会执行这些云端清理，记录保留到恢复真实模式后处理。
 
 ## 演示模式切换
 

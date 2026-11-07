@@ -8,6 +8,7 @@ import {
   ChevronRight,
   HardDrive,
   ListChecks,
+  Monitor,
   Network,
   Play,
   RefreshCw,
@@ -107,7 +108,7 @@ function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClos
     </Modal>
   );
 }
-function ConnectionDialog({
+function SshConnectionDialog({
   instance,
   onClose,
 }: {
@@ -124,7 +125,7 @@ function ConnectionDialog({
   return (
     <Modal
       open
-      title="连接实例"
+      title="SSH 连接信息"
       description="使用你已有的 SSH 私钥登录服务器。"
       onClose={onClose}
       footer={<Button onClick={onClose}>完成</Button>}
@@ -375,13 +376,22 @@ export default function InstanceDetailPage() {
           </div>
         </details>
         <Button
-          variant="primary"
           disabled={primaryAddress(instance) === "—" || instance.state !== "RUNNING"}
           onClick={() => setConnecting(true)}
         >
           <Terminal size={15} />
-          连接实例
+          SSH 连接信息
         </Button>
+        <Link
+          href={`/instances/${encodeURIComponent(instance.id)}/console`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="button button-primary"
+        >
+          <Monitor size={15} />
+          VNC 控制台
+          <ArrowUpRight size={14} aria-hidden="true" />
+        </Link>
       </PageHeader>
       {resource.error && (
         <div style={{ marginBottom: 20 }}>
@@ -627,7 +637,9 @@ export default function InstanceDetailPage() {
       </div>
       {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
       {renaming && <RenameDialog instance={instance} onClose={() => setRenaming(false)} />}
-      {connecting && <ConnectionDialog instance={instance} onClose={() => setConnecting(false)} />}
+      {connecting && (
+        <SshConnectionDialog instance={instance} onClose={() => setConnecting(false)} />
+      )}
       <p className="muted small" style={{ marginTop: 20 }}>
         资源快照同步于 {formatDate(instance.syncedAt, true)}
       </p>

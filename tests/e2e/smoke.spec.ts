@@ -77,7 +77,10 @@ test.beforeAll(async ({ browser, baseURL }) => {
       "Inject ADMIN_PASSWORD for the local demo administrator before running E2E tests.",
     );
   const origin = localOrigin(baseURL);
-  const context = await browser.newContext({ baseURL: origin, locale: "zh-CN" });
+  const context = await browser.newContext({
+    baseURL: origin,
+    locale: "zh-CN",
+  });
   await guardNetwork(context, origin);
   try {
     const page = await context.newPage();
@@ -228,20 +231,23 @@ test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
 test("连接对话框与公网地址保护", async ({ page }, testInfo) => {
   await instancePage(page);
   await test.step("连接对话框保留焦点并支持 Escape", async () => {
-    await page.getByRole("button", { name: "连接实例", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "连接实例" })).toBeVisible();
+    await page.getByRole("button", { name: "SSH 连接信息", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "SSH 连接信息" })).toBeVisible();
     await page.keyboard.press("Tab");
     expect(await page.evaluate(() => Boolean(document.activeElement?.closest("dialog")))).toBe(
       true,
     );
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "连接实例" })).not.toBeVisible();
+    await expect(page.getByRole("dialog", { name: "SSH 连接信息" })).not.toBeVisible();
   });
   await test.step("网络详情展示完整绑定与保护标记", async () => {
     await page.getByRole("tab", { name: "网络", exact: true }).click();
     await expect(page.getByText("保留公网 IP", { exact: true })).toBeVisible();
     await expect(page.getByText("受保护", { exact: true })).toBeVisible();
-    const rotations = page.getByRole("button", { name: "更换 IP", exact: true });
+    const rotations = page.getByRole("button", {
+      name: "更换 IP",
+      exact: true,
+    });
     expect(await rotations.count()).toBeGreaterThan(0);
     for (const button of await rotations.all()) await expect(button).toBeDisabled();
     await expect(page.getByRole("button", { name: "分配 IPv6", exact: true })).toBeDisabled();
@@ -316,9 +322,10 @@ test("390px 小屏导航与已加载的实例表格不撑宽页面", async ({ pa
       document: document.documentElement.scrollWidth,
     }));
     expect(width.document).toBeLessThanOrEqual(width.viewport + 1);
-    const table = await page
-      .locator(".table-scroll")
-      .evaluate((element) => ({ visible: element.clientWidth, content: element.scrollWidth }));
+    const table = await page.locator(".table-scroll").evaluate((element) => ({
+      visible: element.clientWidth,
+      content: element.scrollWidth,
+    }));
     expect(table.content).toBeGreaterThan(table.visible);
     await capture(page, testInfo, "instances-mobile");
   });
