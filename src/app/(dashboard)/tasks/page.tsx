@@ -91,22 +91,17 @@ export default function TasksPage() {
         </Select>
       </div>
       <section className="card table-card">
-        <div className="table-toolbar">
-          <strong>{jobs.length} 个任务</strong>
-          <span className="small muted">任务状态会在刷新或重新登录后保留</span>
-        </div>
         {resource.loading ? (
           <LoadingState />
         ) : jobs.length ? (
           <>
             <div className="table-scroll">
-              <table className="task-table">
+              <table className="task-table task-list-table">
                 <thead>
                   <tr>
                     <th>任务</th>
                     <th>账号 / 区域</th>
                     <th>状态</th>
-                    <th>尝试</th>
                     <th>提交时间</th>
                     <th>操作</th>
                   </tr>
@@ -133,9 +128,6 @@ export default function TasksPage() {
                       </td>
                       <td>
                         <Status value={job.state} />
-                      </td>
-                      <td>
-                        {job.attempt} / {job.maxAttempts}
                       </td>
                       <td className="nowrap">
                         {formatDate(job.createdAt)}

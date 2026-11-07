@@ -1467,6 +1467,9 @@ pre {
 .task-table {
   min-width: 820px;
 }
+.task-list-table {
+  min-width: 720px;
+}
 .task-table td {
   font-size: 12px;
 }
