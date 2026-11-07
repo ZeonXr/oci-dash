@@ -60,6 +60,7 @@ export function AnalyticsRange({
     <div className="analytics-range">
       <Select
         aria-label="时间范围"
+        title={`${value.startDate} 至 ${value.endDate}（UTC，包含首尾日期）`}
         value={editing ? "custom" : value.preset}
         onChange={(event) => {
           const preset = event.target.value as AnalyticsPreset;
@@ -70,12 +71,12 @@ export function AnalyticsRange({
           }
         }}
       >
-        {!fullMonths && <option value="today">今天</option>}
-        {!fullMonths && <option value="last7">近 7 日</option>}
-        {!fullMonths && <option value="month">本月</option>}
-        <option value="lastMonth">上月</option>
-        {allowYear && <option value="last12Months">过去 12 个完整月</option>}
-        <option value="custom">自定义</option>
+        {!fullMonths && <option value="today">今天 · UTC</option>}
+        {!fullMonths && <option value="last7">近 7 日 · UTC</option>}
+        {!fullMonths && <option value="month">本月 · UTC</option>}
+        <option value="lastMonth">上月 · UTC</option>
+        {allowYear && <option value="last12Months">过去 12 个完整月 · UTC</option>}
+        <option value="custom">自定义 · UTC</option>
       </Select>
       {editing && (
         <>
@@ -105,13 +106,5 @@ export function AnalyticsRange({
         </>
       )}
     </div>
-  );
-}
-
-export function AnalyticsRangeNote({ range }: { range: AnalyticsDateRange }) {
-  return (
-    <p className="analytics-range-note">
-      {range.startDate} 至 {range.endDate} · UTC · 包含首尾日期
-    </p>
   );
 }

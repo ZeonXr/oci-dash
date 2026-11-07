@@ -36,6 +36,7 @@ import {
   regionName,
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
+import { UpdatedAt } from "@/components/updated-at";
 export default function OverviewPage() {
   const resource = useResource<DashboardData>("/api/dashboard", 30000);
   const sync = useInventoryRefresh({ onUpdated: resource.reload });
@@ -66,16 +67,15 @@ export default function OverviewPage() {
   return (
     <>
       <PageHeader title="资源总览" description="所有账号的资源状态，一目了然。">
-        <span className="muted small">
-          {data.instances.length
-            ? `最近同步 ${formatDate(
-                data.instances
-                  .map((i) => i.syncedAt)
-                  .sort()
-                  .at(-1),
-              )}`
-            : "尚未同步资源"}
-        </span>
+        <UpdatedAt
+          value={
+            data.instances
+              .map((instance) => instance.syncedAt)
+              .filter((value) => Number.isFinite(Date.parse(value)))
+              .sort((left, right) => Date.parse(right) - Date.parse(left))[0]
+          }
+          title="当前资源中最新的 OCI 资源快照时间"
+        />
         <Button
           onClick={() => {
             void sync.refresh();

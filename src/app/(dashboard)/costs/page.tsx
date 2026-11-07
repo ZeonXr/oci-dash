@@ -8,9 +8,10 @@ import type { CostReport } from "@/lib/analytics-contracts";
 import { useApp } from "@/components/app-provider";
 import { useResource } from "@/components/api";
 import { useAnalytics } from "@/components/analytics-query";
-import { AnalyticsRange, AnalyticsRangeNote, analyticsRange } from "@/components/analytics-range";
+import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
+import { UpdatedAt } from "@/components/updated-at";
 import {
   compareCostAmounts,
   costChartPoints,
@@ -144,7 +145,9 @@ export default function CostsPage() {
   const subtotalLabel = filtered || data?.status === "partial" ? "已获取小计" : "已报告成本";
   return (
     <>
-      <PageHeader title="成本分析" description="按币种、服务和资源查看 OCI 已报告成本。">
+      <PageHeader title="成本分析" description="OCI 已报告成本，账单数据可能延迟约 48 小时。">
+        {data && <AnalyticsStatusNote report={data} />}
+        <UpdatedAt value={data?.generatedAt} title="统计查询时间，不代表账单上报时间" />
         <Button onClick={report.refresh} loading={report.refreshing} disabled={!url}>
           <RefreshCw size={15} />
           刷新数据
@@ -224,11 +227,7 @@ export default function CostsPage() {
             <option value="monthly">按月</option>
           </Select>
         </div>
-        <AnalyticsRangeNote range={range} />
       </div>
-      <p className="analytics-delay">
-        成本可能延迟约 48 小时上报；这里显示已报告金额，最终费用以 OCI 账单为准。
-      </p>
       {report.error && <ErrorState message={report.error} retry={report.retry} />}
       {accountsLoading || report.loading ? (
         <LoadingState label="正在读取成本分析…" />
@@ -287,10 +286,6 @@ export default function CostsPage() {
                 }
               />
             </Card>
-          )}
-          <AnalyticsStatusNote report={data} />
-          {filtered && data.status === "partial" && (
-            <p className="analytics-delay">筛选结果仅来自已取得的明细，小计可能不完整。</p>
           )}
           {currencies.map((currency) => {
             const chartPoints = costChartPoints(data, points, currency);
@@ -361,7 +356,6 @@ export default function CostsPage() {
           </TablePanel>
           <div className="section-heading">
             <h2>资源明细</h2>
-            <span className="muted small">保留当前库存以外的资源</span>
           </div>
           <TablePanel
             label="资源成本明细"

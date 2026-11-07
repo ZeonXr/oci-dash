@@ -51,8 +51,11 @@ export default function TasksPage() {
   return (
     <>
       <PageHeader title="任务" description="追踪云操作的执行进度、结果与重试记录。">
-        <span className="muted small">每 5 秒更新</span>
-        <Button onClick={resource.reload} loading={resource.refreshing}>
+        <Button
+          onClick={resource.reload}
+          loading={resource.refreshing}
+          title="页面可见时每 5 秒检查任务状态；点击立即刷新"
+        >
           <RefreshCw size={15} />
           刷新
         </Button>

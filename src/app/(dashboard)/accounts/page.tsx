@@ -20,7 +20,8 @@ import {
   PageHeader,
   Status,
 } from "@/components/ui";
-import { formatDate, regionName, shortId, taskHref } from "@/components/format";
+import { regionName, shortId, taskHref } from "@/components/format";
+import { UpdatedAt } from "@/components/updated-at";
 
 const pendingSyncStates = new Set([
   "queued",
@@ -160,7 +161,10 @@ export default function AccountsPage() {
                         <Badge key={region}>{regionName(region)}</Badge>
                       ))}
                     </div>
-                    <span>最近同步 {formatDate(account.lastSyncAt, true)}</span>
+                    <UpdatedAt
+                      value={account.lastSyncAt}
+                      title="此账号最近一次从 OCI 获取资源快照的时间"
+                    />
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
                   <div className="account-actions">

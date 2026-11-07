@@ -150,7 +150,7 @@ function traffic(query: URLSearchParams, factor: number, partial = false): Traff
     ...metadata(query),
     rows,
     status: rows.length ? (partial ? "partial" : "ok") : "empty",
-    warnings: [],
+    warnings: ["仅统计当前库存网卡，不含已分离或删除的网卡。"],
     dataThrough: "2026-11-07T12:00:00.000Z",
     totals: { receivedBytes, sentBytes, totalBytes: receivedBytes + sentBytes },
     points: rows.length
@@ -356,6 +356,12 @@ async function capture(page: Page, info: TestInfo, name: string) {
 test("流量按账号、区域、实例、网卡筛选并使用UTC日期范围", async ({ page, analyticsApi }) => {
   await page.goto("/traffic");
   await expect(page.locator(".analytics-table tbody tr")).toHaveCount(3);
+  await page
+    .locator(".heading-actions")
+    .getByRole("button", { name: "统计说明", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("不含已分离或删除的网卡");
+  await page.getByRole("dialog").getByRole("button", { name: "关闭对话框", exact: true }).click();
   expect(analyticsApi.latest("/api/analytics/traffic")?.query.get("startDate")).toBe("2026-11-01");
   await page.getByLabel("流量账号", { exact: true }).selectOption(accounts[0].id);
   await page.getByLabel("流量区域", { exact: true }).selectOption(accounts[0].homeRegion);
@@ -377,7 +383,7 @@ test("流量按账号、区域、实例、网卡筛选并使用UTC日期范围",
     startDate: "2026-11-01",
     endDate: "2026-11-07",
   });
-  await expect(page.getByText(/当前小时未计入/)).toBeVisible();
+  await expect(page.getByText("截至 2026/11/07 12:00 UTC", { exact: true })).toBeVisible();
 });
 
 test("部分流量区间显示已观测小计，图表和提示仍可见", async ({ page, analyticsApi }) => {
@@ -388,7 +394,10 @@ test("部分流量区间显示已观测小计，图表和提示仍可见", async
   await expect(chart.locator(".recharts-line-dot")).toHaveCount(2);
   await expect(page.locator(".analytics-legend")).toContainText("接收（已获取）");
   await expect(page.locator(".analytics-legend")).toContainText("发送（已获取）");
-  await expect(page.getByText(/部分区间为已观测小计/)).toBeVisible();
+  await expect(
+    page.locator(".heading-actions").getByRole("button", { name: "部分数据", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".metric-note").first()).toHaveText("已获取小计");
   await expect(page.getByText("所选范围暂无流量数据", { exact: true })).toHaveCount(0);
   await chart.locator(".recharts-line-dot").first().hover();
   await expect(page.locator(".recharts-tooltip-label")).toContainText("部分数据（已观测小计）");
@@ -477,7 +486,12 @@ test("零成本、缺失金额、部分返回与空记录保持不同状态", as
   analyticsApi.costMode = "unknown";
   await page.getByRole("button", { name: "刷新数据", exact: true }).click();
   await expect(metric(page, "USD · 已获取小计")).toHaveText("—");
-  await expect(page.getByText(/部分数据未能完整取得/)).toBeVisible();
+  await page
+    .locator(".heading-actions")
+    .getByRole("button", { name: "部分数据", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("模拟成本数据未完整返回");
+  await page.getByRole("dialog").getByRole("button", { name: "关闭对话框", exact: true }).click();
   await expect(page.getByText("暂无可绘制的成本数据", { exact: true })).toBeVisible();
   analyticsApi.costMode = "empty";
   await page.getByRole("button", { name: "刷新数据", exact: true }).click();
@@ -517,6 +531,26 @@ for (const pageName of ["traffic", "costs"] as const) {
     await page.goto(`/${pageName}`);
     await expect(page.locator(".analytics-table tbody tr").first()).toBeVisible();
     await expect(page.locator(".analytics-chart").first()).toBeVisible();
+    await expect(page.locator(".heading-actions .updated-at time")).toHaveAttribute(
+      "datetime",
+      now,
+    );
+    await expect(page.getByRole("search")).toHaveCount(0);
+    for (const width of [1440, 2191]) {
+      await page.setViewportSize({ width, height: 1039 });
+      const positions = await page
+        .locator(".analytics-controls select")
+        .evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().top));
+      expect(Math.max(...positions) - Math.min(...positions)).toBeLessThan(2);
+    }
+    await page.evaluate(() => window.scrollTo(0, 500));
+    await expect
+      .poll(() =>
+        page.locator(".topbar").evaluate((element) => element.getBoundingClientRect().bottom),
+      )
+      .toBeLessThan(0);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.setViewportSize({ width: 1440, height: 1080 });
     await capture(page, info, `${pageName}-desktop`);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect

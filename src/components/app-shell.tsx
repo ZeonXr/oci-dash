@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   KeyRound,
   LayoutDashboard,
@@ -9,7 +9,6 @@ import {
   LogOut,
   Menu,
   Moon,
-  Search,
   Server,
   Settings2,
   Sun,
@@ -30,11 +29,8 @@ const navigation = [
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, demo, theme, setTheme, logout } = useApp();
   const pathname = usePathname();
-  const router = useRouter();
-  const search = useRef<HTMLInputElement>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [query, setQuery] = useState("");
   useEffect(() => {
     const query = window.matchMedia("(max-width:900px)");
     const update = () => setIsMobile(query.matches);
@@ -44,10 +40,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        search.current?.focus();
-      }
       if (event.key === "Escape") setMobileOpen(false);
     };
     window.addEventListener("keydown", key);
@@ -118,24 +110,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Menu size={20} />
           </IconButton>
           <div className="topbar-actions">
-            <form
-              className="global-search"
-              role="search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                router.push(`/instances?q=${encodeURIComponent(query.trim())}`);
-              }}
-            >
-              <Search size={15} />
-              <input
-                ref={search}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索资源、地址…"
-                aria-label="搜索实例"
-              />
-              <kbd>⌘ K</kbd>
-            </form>
             {demo && <Badge tone="info">演示环境 · 只读</Badge>}
             <IconButton
               label={theme === "light" ? "切换深色主题" : "切换浅色主题"}

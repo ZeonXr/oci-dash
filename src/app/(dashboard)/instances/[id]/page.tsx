@@ -48,6 +48,7 @@ import {
   taskHref,
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
+import { UpdatedAt } from "@/components/updated-at";
 import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
 
@@ -368,6 +369,7 @@ export default function InstanceDetailPage() {
         }
         description={`${regionName(instance.region)} · ${instance.region} · ${instance.accountName}`}
       >
+        <UpdatedAt value={instance.syncedAt} title="此实例最近一次从 OCI 同步资源快照的时间" />
         <Button
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
@@ -694,9 +696,6 @@ export default function InstanceDetailPage() {
       {connecting && (
         <SshConnectionDialog instance={instance} onClose={() => setConnecting(false)} />
       )}
-      <p className="muted small" style={{ marginTop: 20 }}>
-        资源快照同步于 {formatDate(instance.syncedAt, true)}
-      </p>
     </>
   );
 }

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui";
 import { formatDate, instanceHref, number, primaryAddress, regionName } from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
+import { UpdatedAt } from "@/components/updated-at";
 
 function InstancesContent() {
   const { demo, accounts, notify } = useApp();
@@ -152,6 +153,15 @@ function InstancesContent() {
   return (
     <>
       <PageHeader title="实例" description="跨账号查看与管理计算资源。">
+        <UpdatedAt
+          value={
+            filtered
+              .map((instance) => instance.syncedAt)
+              .filter((value) => Number.isFinite(Date.parse(value)))
+              .sort((left, right) => Date.parse(right) - Date.parse(left))[0]
+          }
+          title="当前筛选实例中最新的 OCI 资源快照时间"
+        />
         <Button onClick={sync.refresh} loading={resource.refreshing || sync.refreshing}>
           <RefreshCw size={15} />
           刷新

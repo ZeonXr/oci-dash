@@ -8,9 +8,10 @@ import type { TrafficReport } from "@/lib/analytics-contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
 import { useAnalytics } from "@/components/analytics-query";
-import { AnalyticsRange, AnalyticsRangeNote, analyticsRange } from "@/components/analytics-range";
+import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart, analyticsNumber, utcTimestamp } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
+import { UpdatedAt } from "@/components/updated-at";
 import {
   Badge,
   Button,
@@ -101,6 +102,8 @@ export default function TrafficPage() {
   return (
     <>
       <PageHeader title="流量统计" description="按账号、实例和网卡查看接收与发送流量。">
+        {data && <AnalyticsStatusNote report={data} />}
+        <UpdatedAt value={data?.generatedAt} title="统计查询时间" />
         <Button onClick={report.refresh} loading={report.refreshing} disabled={!url}>
           <RefreshCw size={15} />
           刷新数据
@@ -180,7 +183,6 @@ export default function TrafficPage() {
             <option value="daily">按日</option>
           </Select>
         </div>
-        <AnalyticsRangeNote range={range} />
       </div>
       {inventory.error && (
         <ErrorState message={`筛选选项读取失败：${inventory.error}`} retry={inventory.reload} />
@@ -211,7 +213,13 @@ export default function TrafficPage() {
                 </>
               }
               icon={<ArrowDownToLine size={17} />}
-              note={data.totals.receivedBytes == null ? "未取得完整接收数据" : "已返回的网卡接收量"}
+              note={
+                data.totals.receivedBytes == null
+                  ? "暂无数据"
+                  : partialPoints
+                    ? "已获取小计"
+                    : "网卡接收"
+              }
             />
             <MetricCard
               label="发送流量"
@@ -221,7 +229,13 @@ export default function TrafficPage() {
                 </>
               }
               icon={<ArrowUpFromLine size={17} />}
-              note={data.totals.sentBytes == null ? "未取得完整发送数据" : "已返回的网卡发送量"}
+              note={
+                data.totals.sentBytes == null
+                  ? "暂无数据"
+                  : partialPoints
+                    ? "已获取小计"
+                    : "网卡发送"
+              }
             />
             <MetricCard
               label="收发合计"
@@ -231,16 +245,15 @@ export default function TrafficPage() {
                 </>
               }
               icon={<ArrowLeftRight size={17} />}
-              note="接收 + 发送"
+              note={partialPoints ? "接收 + 发送 · 已获取小计" : "接收 + 发送"}
             />
           </div>
-          <AnalyticsStatusNote report={data} />
           <Card
             title="流量趋势"
             description={
               data.dataThrough
-                ? `数据截至 ${utcTimestamp(data.dataThrough)} UTC，当前小时未计入。`
-                : "按完整 UTC 小时累计，缺失区间保留为空。"
+                ? `截至 ${utcTimestamp(data.dataThrough)} UTC`
+                : "按完整 UTC 小时统计"
             }
           >
             {hasPoints ? (
@@ -268,11 +281,7 @@ export default function TrafficPage() {
                 description="没有监控样本不等同于零流量，可调整日期或筛选条件。"
               />
             )}
-            <p className="chart-note">
-              {partialPoints &&
-                "部分区间为已观测小计，不代表完整流量；没有观测值的区间仍保留为空。"}
-              来源：OCI 网卡监控。统计包含网卡可观测的收发量，与公网计费流量不完全等同。
-            </p>
+            <p className="chart-note">仅统计当前网卡，非公网计费流量。</p>
           </Card>
           <div className="section-heading">
             <h2>网卡明细</h2>
