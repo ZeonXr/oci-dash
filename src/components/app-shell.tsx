@@ -13,12 +13,16 @@ import {
   Server,
   Settings2,
   Sun,
+  ChartNoAxesCombined,
+  CircleDollarSign,
 } from "lucide-react";
 import { useApp } from "./app-provider";
 import { Badge, IconButton } from "./ui";
 const navigation = [
   { href: "/overview", label: "总览", icon: LayoutDashboard },
   { href: "/instances", label: "实例", icon: Server },
+  { href: "/traffic", label: "流量", icon: ChartNoAxesCombined },
+  { href: "/costs", label: "成本", icon: CircleDollarSign },
   { href: "/accounts", label: "账号", icon: KeyRound },
   { href: "/tasks", label: "任务", icon: ListChecks },
   { href: "/settings", label: "设置", icon: Settings2 },

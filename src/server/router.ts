@@ -47,6 +47,7 @@ import {
   listAccountSyncJobs,
 } from "./jobs";
 import { ociAdapter } from "./oci/adapter";
+import { analyticsService } from "./analytics/service";
 
 const liveOnly = () => {
   if (isDemo())
@@ -87,6 +88,22 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     const user = requireUser(request),
       demo = isDemo();
     if (method === "GET" && path === "auth/me") return json({ user, demo });
+    if (
+      ["GET", "POST"].includes(method) &&
+      ["analytics/traffic", "analytics/costs"].includes(path)
+    ) {
+      const input: Record<string, string> = {};
+      for (const [key, value] of url.searchParams) {
+        if (Object.hasOwn(input, key))
+          throw new AppError("查询参数不能重复", 400, "INVALID_ANALYTICS_QUERY");
+        input[key] = value;
+      }
+      const report =
+        path === "analytics/traffic"
+          ? await analyticsService.traffic(input, method === "POST")
+          : await analyticsService.costs(input, method === "POST");
+      return json(report);
+    }
     if (method === "POST" && path === "inventory/refresh") {
       liveOnly();
       const result = requestInventoryRefresh(await readJson(request), user.username);

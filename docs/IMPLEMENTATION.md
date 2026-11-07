@@ -1,6 +1,6 @@
 # OCI Dash implementation scope
 
-Private project. Next.js App Router, TypeScript, SQLite/Drizzle, official OCI TypeScript SDK, and a durable background worker. The default Docker deployment runs Web and Worker in one application container under a Node process supervisor. UI follows the editable OCI Dash Figma desktop designs with a simpler navigation: overview, instances, accounts, tasks, settings. Network, security rules and storage are inside instance details.
+Private project. Next.js App Router, TypeScript, SQLite/Drizzle, official OCI TypeScript SDK, and a durable background worker. The default Docker deployment runs Web and Worker in one application container under a Node process supervisor. Navigation includes overview, instances, traffic, costs, accounts, tasks and settings. Network, security rules and storage are inside instance details.
 
 Excluded by the user: AI chat, Telegram interactive management, automatic rescue, maps. VNC has subsequently been authorized as an integrated OCI console feature. Telegram notifications and other integrations are not part of this release. Do not copy production credentials, data, or logs into this repository.
 
@@ -30,6 +30,8 @@ Operational commands and migration/restore sequencing are documented in [OPERATI
 - Disconnect, logout, timeout and shutdown close SSH streams and request deletion only of matching session-tagged OCI connections. Startup reconciles unfinished cleanup. Demonstration mode preserves existing records without performing cloud operations. Real OCI acceptance is limited to the explicitly authorized temporary console connection; instance lifecycle, networking and guest configuration are outside these tests.
 
 ## API contract
+
+Analytics uses `GET /api/analytics/traffic` and `GET /api/analytics/costs` with explicit date and scope filters; `POST` on the same URL refreshes the query. Both require login, with same-origin checks for POST. Demonstration responses never access real credentials. `src/lib/analytics-contracts.ts` defines public reports; server readers, date validation and bounded caches are in `src/server/analytics/`. This release queries current-inventory VNIC history and reported Usage API costs on demand; it does not implement long-term archives, forecasts or credit accounting. Statistical semantics and accepted limitations are documented in [ANALYTICS.md](ANALYTICS.md).
 
 All responses are JSON. Errors: `{error, code?}` with an appropriate HTTP status. Routes except login/health require a session. Mutations enforce same-origin requests. Public DTOs are in `src/lib/contracts.ts`.
 

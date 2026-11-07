@@ -1082,6 +1082,139 @@ pre {
   outline: 2px solid var(--focus-border);
   outline-offset: -2px;
 }
+
+.analytics-controls {
+  margin-bottom: 20px;
+}
+.analytics-filters {
+  margin-bottom: 12px;
+}
+.analytics-filters > .select {
+  max-width: 270px;
+}
+.analytics-period,
+.analytics-range {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.analytics-period > .select {
+  min-width: 110px;
+  width: auto;
+  flex: 0 0 auto;
+}
+.analytics-range > .select {
+  min-width: 140px;
+}
+.analytics-range input[type="date"] {
+  width: 155px;
+  min-width: 0;
+  color-scheme: light;
+}
+[data-theme="dark"] .analytics-range input[type="date"] {
+  color-scheme: dark;
+}
+.analytics-range-note,
+.analytics-updated,
+.analytics-delay {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.analytics-range-note {
+  margin: 10px 0 0;
+}
+.analytics-delay {
+  margin: 0 0 18px;
+}
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.analytics-metrics .metric-value > span:not(:only-child) {
+  font-size: 17px;
+  font-weight: 450;
+  color: var(--muted);
+}
+.analytics-status {
+  display: grid;
+  gap: 10px;
+}
+.analytics-notes {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.analytics-notes summary {
+  cursor: pointer;
+}
+.analytics-notes ul {
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+.analytics-legend {
+  flex-wrap: wrap;
+}
+.analytics-chart {
+  height: 280px;
+}
+.analytics-content .section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.analytics-content .section-heading h2 {
+  font-size: 15px;
+  font-weight: 550;
+  margin: 0;
+}
+.analytics-table {
+  min-width: 820px;
+}
+.analytics-table td {
+  font-size: 12px;
+  height: 56px;
+  padding-block: 8px;
+}
+.analytics-table td:first-child {
+  max-width: 300px;
+  overflow-wrap: anywhere;
+}
+.analytics-service-table {
+  min-width: 420px;
+}
+.analytics-cost-table {
+  min-width: 900px;
+}
+@media (max-width: 620px) {
+  .analytics-metrics {
+    grid-template-columns: 1fr;
+  }
+  .analytics-period {
+    align-items: stretch;
+  }
+  .analytics-range {
+    flex: 1;
+  }
+  .analytics-range > .select {
+    flex: 1;
+  }
+  .analytics-range input[type="date"] {
+    width: 138px;
+  }
+  .analytics-filters > .select {
+    max-width: none;
+    flex-basis: calc(50% - 8px);
+  }
+  .analytics-chart {
+    height: 230px;
+  }
+}
 .table-sort {
   border-radius: 4px;
   white-space: nowrap;
