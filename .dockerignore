@@ -1,0 +1,17 @@
+.git
+node_modules
+.next
+dist
+data
+.env*
+*.pem
+*.key
+*.sqlite*
+*.db*
+coverage
+test-results
+playwright-report
+.tools
+*.log
+.test-tmp
+*.tsbuildinfo

@@ -1,0 +1,33 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+      - run: node scripts/bootstrap.mjs
+      - run: npx playwright install --with-deps chromium
+      - name: Start local demonstration services
+        run: docker compose up -d --build --wait --wait-timeout 60
+      - name: Browser smoke tests against Docker
+        run: node --env-file=.env node_modules/@playwright/test/cli.js test
+      - name: Container status
+        if: always()
+        run: docker compose ps && docker compose logs --tail 60 web worker
+      - name: Clean up CI services
+        if: always()
+        run: docker compose down -v --remove-orphans
