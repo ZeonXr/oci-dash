@@ -13,7 +13,7 @@ function stop() {
 }
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
-runWorker({ signal: shutdown.signal })
+runWorker({ signal: shutdown.signal, workerId: process.env.OCI_DASH_WORKER_ID })
   .catch((error) => {
     console.error("Worker stopped:", safeErrorMessage(error));
     process.exitCode = 1;

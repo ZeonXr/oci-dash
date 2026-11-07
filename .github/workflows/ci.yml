@@ -29,13 +29,15 @@ jobs:
       - run: node scripts/bootstrap.mjs
       - name: Check runner-provided Chrome
         run: google-chrome --version
-      - name: Start local demonstration services
+      - name: Start local demonstration application
         run: docker compose up -d --build --wait --wait-timeout 60
+      - name: Verify isolated container lifecycle
+        run: npm run test:runtime
       - name: Browser smoke tests against Docker
         run: node --env-file=.env node_modules/@playwright/test/cli.js test
       - name: Container status
         if: always()
-        run: docker compose ps && docker compose logs --tail 60 web worker
+        run: docker compose ps && docker compose logs --tail 60 app
       - name: Clean up CI services
         if: always()
         run: docker compose down -v --remove-orphans

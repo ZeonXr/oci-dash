@@ -1,10 +1,10 @@
 # OCI Dash
 
-面向个人多账号管理的自托管 OCI 面板，采用 Next.js App Router、TypeScript、官方 OCI TypeScript SDK，以及共享 SQLite 数据库的独立 Worker。
+面向个人多账号管理的自托管 OCI 面板，采用 Next.js App Router、TypeScript、官方 OCI TypeScript SDK 和 SQLite。默认 Docker 部署只运行一个 `app` 容器，由 Node 入口统一管理 Web 与后台 Worker。
 
 导航包括总览、实例、账号、任务和设置。资源读取与有副作用的操作分开：页面提交操作后获得任务编号，Worker 执行任务并保存进度、结果和恢复检查点。
 
-首版已完成本地 Docker 联调、115 项离线测试、14 项浏览器回归及真实 OCI 只读核验。**尚未执行真实 OCI 写操作验收**。具体证据与限制见 [验证记录](docs/VERIFICATION.md)。
+测试、Docker 联调及真实 OCI 只读核验的结果与适用版本见 [验证记录](docs/VERIFICATION.md)。**尚未执行真实 OCI 写操作验收**；此前的验证结果不自动代表新的运行方式已通过验收。
 
 ## 功能范围
 
@@ -50,7 +50,7 @@ npm run worker
 
 1. 将 `.env` 的 `DEMO_MODE` 改为 `false`。
 2. 确认 `APP_ORIGIN` 与浏览器实际访问地址一致，并保留原 `MASTER_KEY`。
-3. 执行 `docker compose up -d --force-recreate web worker`，让容器重新读取环境变量。
+3. 执行 `docker compose up -d --force-recreate app`，让容器重新读取环境变量。
 4. 在“账号”页粘贴 OCI 配置文本、上传对应的 PEM 私钥文件并添加账号。应用自动在后台验证连接、同步资源，卡片状态随进度更新。
 
 添加时自动解析配置中的 OCID、指纹和区域，名称默认取密钥文件名；需要自定义名称或同步多个区域时，展开“更多选项”。`key_file` 中的本地路径无需修改，应用使用你选择的文件。
@@ -59,7 +59,7 @@ npm run worker
 
 账号导入需要 OCI API 签名私钥，不是实例的 SSH 私钥。当前接收至少 2048 位、未加密 PEM 格式的 RSA API 私钥，并在保存前核对指纹。私钥只用于服务端签名，不通过账号读取 API 返回。
 
-从真实环境切回演示时，先停止 Worker，并优先使用独立数据库/数据卷。改变演示开关不会删除原来的任务或撤销 OCI 已受理的操作；不要将该开关当作云操作的回滚按钮。
+从真实环境切回演示时，先等待运行中的任务结束并执行 `docker compose stop app`，再修改配置；优先使用独立数据库/数据卷预览演示。改变演示开关不会删除原来的任务或撤销 OCI 已受理的操作；不要将该开关当作云操作的回滚按钮。
 
 ## Docker Compose
 
@@ -68,8 +68,8 @@ npm run worker
 ```sh
 npm run bootstrap
 # 按实际访问方式编辑 .env 的 APP_ORIGIN、DEMO_MODE 和 PORT。
-docker compose up -d --build
-docker compose ps
+docker compose up -d --build app
+docker compose ps app
 ```
 
 如果主机没有 npm、但有 Node.js，可直接执行 `node scripts/bootstrap.mjs`，效果相同。也可以按 `.env.example` 手动提供完整配置；Compose 会拒绝缺少 `ADMIN_PASSWORD` 或 `MASTER_KEY` 的启动请求。
@@ -82,14 +82,16 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node scripts/bootstrap.mjs
 ```
 
-Compose 包含 `web` 与 `worker` 两个服务，使用同一个本地镜像和 `app-data` 数据卷，数据库路径为 `/data/oci-dash.db`。宿主机默认只在 `127.0.0.1:3000` 暴露 Web；通过远程域名访问时，应在现有反向代理上配置 HTTPS，并让 `APP_ORIGIN` 使用该 HTTPS 源地址。
+Compose 项目名为 `oci-dash`，唯一服务为 `app`，使用 `oci-dash:local` 镜像和 `app-data` 数据卷，数据库路径为 `/data/oci-dash.db`。宿主机默认只在 `127.0.0.1:3000` 暴露 Web；通过远程域名访问时，应在现有反向代理上配置 HTTPS，并让 `APP_ORIGIN` 使用该 HTTPS 源地址。
+
+容器入口 `node dist/runtime.mjs` 同时启动 `server.js` 与 `dist/worker.mjs`。任一业务进程在正常停止流程之外退出时，入口停止另一个进程并以非零状态退出，由 Docker 的 `restart: unless-stopped` 策略重启容器。单容器简化了部署和日志管理，后台任务仍独立执行；它不意味着取消 Worker 或显著降低内存占用。开发时仍可在两个终端分别运行 Web 和 Worker。
 
 ```sh
-docker compose logs --tail 100 web worker
-docker compose exec worker node dist/worker-health.mjs
+docker compose logs --tail 100 app
+docker compose exec app node dist/health.mjs
 ```
 
-详细部署、备份、恢复和任务排错说明见 [运维说明](docs/OPERATIONS.md)。
+整体健康检查同时验证 Web、SQLite 与 Worker 心跳；HTTP `/api/health` 仅验证 Web 和 SQLite。详细部署、旧双容器迁移、备份、恢复和任务排错说明见 [运维说明](docs/OPERATIONS.md)。
 
 ## 数据与密钥
 
@@ -115,6 +117,9 @@ npm run format:check
 npm run typecheck
 npm test
 npm run build
+# 构建镜像后，验证独立测试容器的故障恢复和正常关机。
+docker compose build app
+npm run test:runtime
 ```
 
 默认自动化测试使用模拟 OCI 客户端及临时 SQLite，不访问真实云账号。测试详情及尚待完成的验收项见 [验证记录](docs/VERIFICATION.md)。
@@ -125,8 +130,10 @@ src/components/          页面组件及操作确认界面
 src/server/oci/          OCI SDK 适配与资源操作
 src/server/jobs/         持久队列、租约、事件与 Worker
 src/server/              账号、加密、认证、缓存与 API 逻辑
-src/worker.ts            独立 Worker 入口
-src/worker-health.ts     Worker 心跳检查
+src/worker.ts            后台 Worker 入口，开发时可独立运行
+src/worker-health.ts     独立 Worker 心跳诊断
+dist/runtime.mjs         构建生成的容器进程管理入口
+dist/health.mjs          构建生成的整体健康检查
 tests/                  离线测试
 docs/                   实现契约、验证与运维说明
 ```

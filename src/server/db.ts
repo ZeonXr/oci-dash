@@ -45,9 +45,9 @@ export function getDatabase(): Database.Database {
   connection?.close();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
+  db.pragma("busy_timeout = 10000");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 10000");
   db.transaction(() => {
     db.exec(migration);
     const columns = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
@@ -56,7 +56,7 @@ export function getDatabase(): Database.Database {
     db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(
       new Date().toISOString(),
     );
-  })();
+  }).immediate();
   if (process.env.ADMIN_PASSWORD && !db.prepare("SELECT id FROM users LIMIT 1").get()) {
     if (process.env.ADMIN_PASSWORD.length < 12) {
       db.close();

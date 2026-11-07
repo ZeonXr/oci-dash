@@ -1,10 +1,23 @@
 # OCI Dash implementation scope
 
-Private project. Next.js App Router, TypeScript, SQLite/Drizzle, official OCI TypeScript SDK, and a separate durable worker. UI follows the editable OCI Dash Figma desktop designs with a simpler navigation: overview, instances, accounts, tasks, settings. Network, security rules and storage are inside instance details.
+Private project. Next.js App Router, TypeScript, SQLite/Drizzle, official OCI TypeScript SDK, and a durable background worker. The default Docker deployment runs Web and Worker in one application container under a Node process supervisor. UI follows the editable OCI Dash Figma desktop designs with a simpler navigation: overview, instances, accounts, tasks, settings. Network, security rules and storage are inside instance details.
 
 Excluded by the user: AI chat, VNC/noVNC, Telegram interactive management, automatic rescue, maps. Telegram notifications and other integrations are not part of this release. Do not copy production credentials, data, or logs into this repository.
 
 First usable release must include authenticated account import/verification, multi-region inventory including accessible compartments, real instance list/details, instance creation and lifecycle actions, explicit public IP binding protection/rotation, boot-volume configuration, security rules, native OCI metrics where available, durable jobs and history, and local Docker deployment. Demo data is explicitly labeled and cannot execute cloud operations. Existing services are not modified by development verification.
+
+## Default runtime contract
+
+- Compose project: `oci-dash`; sole service: `app`; local image: `oci-dash:local`. Preserve the `app-data` volume and `/data/oci-dash.db` database path.
+- The container starts `node dist/runtime.mjs`. It supervises the standalone Web server (`node server.js`) and background worker (`node dist/worker.mjs`) as separate business processes with the same database and environment. Consolidating deployment does not remove the worker or imply a substantial memory reduction.
+- Any child exit outside coordinated shutdown, including exit code 0, stops the other child and causes a nonzero supervisor exit. Docker uses `restart: unless-stopped` to restart the container. An explicitly stopped container remains stopped until restarted by the operator.
+- `SIGTERM` and `SIGINT` are forwarded and child exit is awaited. The worker has a 25-second hard-stop limit, the supervisor a 30-second limit, and Compose a 35-second stop grace period. Shutdown must not leave an unmanaged Web or Worker process behind; interrupted cloud operations still require checkpoint reconciliation.
+- Container health runs `node dist/health.mjs`, checking Web/SQLite availability and a recent worker heartbeat. HTTP `GET /api/health` retains its Web/SQLite-only meaning. `dist/worker-health.mjs` may remain for standalone development diagnostics. An unhealthy status alone does not activate Docker's restart policy.
+- Development may continue to use `npm run dev` and `npm run worker` in separate terminals. Default deployment, logs, recreation and backup commands target `app`.
+- Migration from the old two-service layout stops the old services after active jobs finish, retains the project/data volume, `.env` and original `MASTER_KEY`, starts and checks `app`, then removes the old containers. No account re-import or manual data conversion is required for this runtime change.
+- Restore backups in isolation and reconcile nonterminal jobs against OCI before enabling the default runtime. Starting `app` normally starts the worker too. A temporary Web-only inspection must explicitly override the command, for example `docker compose run --service-ports --rm --no-deps app node server.js`; it is not a read-only API mode.
+
+Operational commands and migration/restore sequencing are documented in [OPERATIONS.md](OPERATIONS.md). Verification evidence belongs in [VERIFICATION.md](VERIFICATION.md); this runtime contract does not claim acceptance results.
 
 ## API contract
 
