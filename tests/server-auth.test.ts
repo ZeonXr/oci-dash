@@ -193,12 +193,16 @@ describe("credential storage, account revisions and jobs", () => {
   });
   it("a name-only HTTP PATCH preserves regions, encrypted credentials and revision", async () => {
     const auth = loggedIn(), account = createAccount(accountInput(), USERNAME), snapshot = getCredentialSnapshot(account.id);
+    const cached = instance(account.id, "rename-cache");
+    saveInventory(account.id, { instances: [cached], warnings: [], regions: account.regions });
     const before = getDatabase().prepare("SELECT credential FROM accounts WHERE id=?").get(account.id);
     expect(accountPatchSchema.parse({ name: "renamed" })).toEqual({ name: "renamed" });
     const response = await handleApi(request(`accounts/${account.id}`, { method: "PATCH", token: auth.token, body: { name: "renamed" } }), ["accounts", account.id]);
     expect(response.status).toBe(200); expect(getAccount(account.id)?.name).toBe("renamed");
     expect(getAccount(account.id)?.regions).toEqual(account.regions); expect(getCredentialSnapshot(account.id).revision).toBe(snapshot.revision);
     expect(getDatabase().prepare("SELECT credential FROM accounts WHERE id=?").get(account.id)).toEqual(before);
+    expect(listInstances()[0].accountName).toBe("renamed");
+    expect(getInstance(cached.id).accountName).toBe("renamed");
   });
   it("blocks identity/region changes and removal for every unfinished job state while allowing a rename", () => {
     const account = createAccount(accountInput(), USERNAME), store = getJobStore();

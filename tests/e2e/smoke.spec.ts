@@ -142,7 +142,7 @@ test("总览展示资源指标与动态监控", async ({ page }, testInfo) => {
   await test.step("监控时间范围可以切换", async () => {
     await page.getByLabel("监控时间范围").selectOption("7d");
     await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toBeVisible();
-    await expect(page.locator(".recharts-xAxis .recharts-cartesian-axis-tick-value").first()).toHaveText(/\d{2}\/\d{2}/);
+    await expect(page.getByRole("img", { name: "CPU 使用率时间趋势" })).toContainText(/\d{2}\/\d{2}/);
   });
   await capture(page, testInfo, "overview-desktop");
 });

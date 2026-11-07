@@ -3,12 +3,13 @@ import { getDatabase } from "./db";
 import { AppError } from "./errors";
 
 export function listInstances(): InstanceSummary[] {
-  return (getDatabase().prepare("SELECT data FROM resources ORDER BY account_id,region,id").all() as { data: string }[]).map(row => JSON.parse(row.data) as InstanceSummary);
+  return (getDatabase().prepare("SELECT r.data,a.name AS accountName FROM resources r JOIN accounts a ON a.id=r.account_id ORDER BY r.account_id,r.region,r.id").all() as { data: string; accountName: string }[])
+    .map(row => ({ ...JSON.parse(row.data) as InstanceSummary, accountName: row.accountName }));
 }
 export function getInstance(id: string): InstanceSummary {
-  const row = getDatabase().prepare("SELECT data FROM resources WHERE id=?").get(id) as { data: string } | undefined;
+  const row = getDatabase().prepare("SELECT r.data,a.name AS accountName FROM resources r JOIN accounts a ON a.id=r.account_id WHERE r.id=?").get(id) as { data: string; accountName: string } | undefined;
   if (!row) throw new AppError("实例不存在或尚未同步", 404, "INSTANCE_NOT_FOUND");
-  return JSON.parse(row.data) as InstanceSummary;
+  return { ...JSON.parse(row.data) as InstanceSummary, accountName: row.accountName };
 }
 export function saveInventory(accountId: string, result: InventoryResult): void {
   const db = getDatabase(), now = new Date().toISOString();
