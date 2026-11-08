@@ -11,7 +11,6 @@ import {
   Monitor,
   Network,
   Play,
-  RefreshCw,
 } from "lucide-react";
 import type { InstanceSummary, JobSummary, MetricsResult } from "@/lib/contracts";
 import { useApp } from "@/components/app-provider";
@@ -22,6 +21,7 @@ import { RegionLabel } from "@/components/region-label";
 import {
   Badge,
   Button,
+  RefreshButton,
   Card,
   CopyButton,
   EmptyState,
@@ -322,16 +322,14 @@ export default function InstanceDetailPage() {
           value={instance.syncedAt}
           title="此实例基础信息最近一次从 OCI 同步的时间；部分未更新的字段另行标记"
         />
-        <Button
+        <RefreshButton
+          iconOnly
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
-          aria-label="刷新实例"
-        >
-          <RefreshCw size={15} />
-        </Button>
+          label="刷新实例"
+        />
         {instance.state === "STOPPED" && (
-          <Button onClick={() => lifecycle("instance-start")}>
-            <Play size={15} />
+          <Button onClick={() => lifecycle("instance-start")} icon={<Play size={16} />}>
             启动
           </Button>
         )}
@@ -606,9 +604,12 @@ export default function InstanceDetailPage() {
                     <option value="24h">最近 24 小时</option>
                     <option value="7d">过去 7 天</option>
                   </Select>
-                  <Button onClick={metrics.reload} loading={metrics.refreshing}>
-                    <RefreshCw size={14} />
-                  </Button>
+                  <RefreshButton
+                    iconOnly
+                    label="刷新监控"
+                    onClick={metrics.reload}
+                    loading={metrics.refreshing}
+                  />
                 </div>
               }
             >
@@ -627,12 +628,7 @@ export default function InstanceDetailPage() {
         {tab === "activity" && (
           <Card
             title="任务与活动"
-            action={
-              <Button onClick={jobs.reload} loading={jobs.refreshing}>
-                <RefreshCw size={14} />
-                刷新
-              </Button>
-            }
+            action={<RefreshButton onClick={jobs.reload} loading={jobs.refreshing} />}
           >
             {jobs.error && <ErrorState message={jobs.error} retry={jobs.reload} />}
             {taskRows()}

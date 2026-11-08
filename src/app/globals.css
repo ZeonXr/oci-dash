@@ -392,6 +392,18 @@ pre {
 .button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
+.button-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.button-icon > svg {
+  width: 100%;
+  height: 100%;
+}
 .button-primary {
   background: var(--primary);
   border-color: var(--primary);
@@ -432,6 +444,10 @@ pre {
   min-height: 30px;
   padding: 4px 9px;
   font-size: 12px;
+}
+.button-sm .button-icon {
+  width: 14px;
+  height: 14px;
 }
 .text-link {
   color: var(--primary);
@@ -2433,6 +2449,9 @@ pre {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none !important;
+  }
   *,
   *::before,
   *::after {

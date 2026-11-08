@@ -68,6 +68,10 @@ npm run test:e2e:isolated -- --no-build
 
 ## 已有基线
 
+### v0.2.1 发布验收
+
+本版本统一刷新与异步操作的加载图标、动画和 busy 状态，并修正暂停浏览器时钟时等待任务完成的测试同步方式。发布结果将在完成验收后记录于此。
+
 ### v0.2.0 发布验收
 
 **2026-11-09** 完成 `v0.2.0` 的公开发布验收。源码为 [`b147ac2`](https://github.com/ZeonXr/oci-dash/commit/b147ac2c51e29f42faaba40040e869880cc21234)，[GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.2.0) 提供独立的 [compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.2.0/compose.yaml)，附件内容与已提交源码一致。

@@ -17,36 +17,74 @@ import {
   Copy,
   Inbox,
   LoaderCircle,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  loading?: boolean;
+  icon?: ReactNode;
+  loadingIcon?: ReactNode;
+};
+
+export function Spinner({ size = 16 }: { size?: number }) {
+  return <LoaderCircle size={size} className="spin" aria-hidden="true" />;
+}
+
 export function Button({
   children,
   variant = "secondary",
   loading,
+  icon,
+  loadingIcon,
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "ghost" | "danger";
-  loading?: boolean;
-}) {
+}: ButtonProps) {
   return (
     <button
       {...props}
       type={props.type || "button"}
       disabled={props.disabled || loading}
+      aria-busy={loading || undefined}
       className={clsx("button", `button-${variant}`, className)}
     >
-      {loading && <LoaderCircle size={16} className="spin" />}
+      {(icon || loading) && (
+        <span className="button-icon" aria-hidden="true">
+          {loading ? (loadingIcon ?? <Spinner />) : icon}
+        </span>
+      )}
       {children}
     </button>
+  );
+}
+export function RefreshButton({
+  iconOnly = false,
+  label,
+  children = "刷新",
+  className,
+  variant = iconOnly ? "ghost" : "secondary",
+  ...props
+}: Omit<ButtonProps, "icon" | "loadingIcon"> & { iconOnly?: boolean; label?: string }) {
+  return (
+    <Button
+      {...props}
+      variant={variant}
+      className={clsx(iconOnly && "icon-button", className)}
+      aria-label={label ?? props["aria-label"] ?? (iconOnly ? "刷新" : undefined)}
+      title={props.title || label}
+      icon={<RefreshCw size={16} />}
+      loadingIcon={<RefreshCw size={16} className="spin" />}
+    >
+      {iconOnly ? null : children}
+    </Button>
   );
 }
 export function IconButton({
   label,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: Omit<ButtonProps, "icon" | "loadingIcon"> & { label: string }) {
   return (
     <Button
       {...props}
@@ -54,9 +92,8 @@ export function IconButton({
       variant="ghost"
       aria-label={label}
       title={props.title || label}
-    >
-      {children}
-    </Button>
+      icon={children}
+    />
   );
 }
 export function Card({
@@ -238,7 +275,7 @@ export function EmptyState({
 export function LoadingState({ label = "正在获取数据…" }: { label?: string }) {
   return (
     <div className="loading-state" role="status">
-      <LoaderCircle className="spin" size={24} />
+      <Spinner size={24} />
       <span>{label}</span>
     </div>
   );

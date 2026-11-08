@@ -1,13 +1,14 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { RefreshCw, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import type { JobSummary } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
 import { SortableHeader, TablePanel } from "@/components/table";
 import {
   Button,
+  RefreshButton,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -52,14 +53,11 @@ export default function TasksPage() {
   return (
     <>
       <PageHeader title="任务" description="追踪云操作的执行进度、结果与重试记录。">
-        <Button
+        <RefreshButton
           onClick={resource.reload}
           loading={resource.refreshing}
           title="页面可见时每 5 秒检查任务状态；点击立即刷新"
-        >
-          <RefreshCw size={15} />
-          刷新
-        </Button>
+        />
       </PageHeader>
       {resource.error && (
         <div style={{ marginBottom: 18 }}>

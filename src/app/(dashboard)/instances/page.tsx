@@ -2,16 +2,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import {
-  ArrowDown,
-  ArrowUp,
-  LayoutGrid,
-  List,
-  Plus,
-  RefreshCw,
-  Search,
-  Server,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, LayoutGrid, List, Plus, Search, Server } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
@@ -20,6 +11,7 @@ import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
 import {
   Button,
+  RefreshButton,
   CopyButton,
   EmptyState,
   ErrorState,
@@ -155,21 +147,18 @@ function InstancesContent() {
           }
           title="当前筛选实例中最新的 OCI 资源快照时间"
         />
-        <Button
+        <RefreshButton
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
           disabled={accountsLoading || !accounts.length}
-        >
-          <RefreshCw size={15} />
-          刷新
-        </Button>
+        />
         <Button
           variant="primary"
+          icon={<Plus size={16} />}
           disabled={!accounts.length}
           title={!accounts.length ? "请先添加 OCI 账号" : undefined}
           onClick={() => setCreating(true)}
         >
-          <Plus size={16} />
           创建实例
         </Button>
       </PageHeader>

@@ -8,7 +8,6 @@ import {
   ChevronRight,
   Clock3,
   Info,
-  RefreshCw,
   RotateCcw,
   Square,
 } from "lucide-react";
@@ -19,6 +18,7 @@ import { useApp } from "@/components/app-provider";
 import {
   Alert,
   Button,
+  RefreshButton,
   Card,
   CopyButton,
   EmptyState,
@@ -87,10 +87,7 @@ export default function TaskDetailPage() {
           </>
         }
       >
-        <Button onClick={resource.reload} loading={resource.refreshing}>
-          <RefreshCw size={15} />
-          刷新
-        </Button>
+        <RefreshButton onClick={resource.reload} loading={resource.refreshing} />
         {isJobRetryable(job) && (
           <Button
             onClick={() => {

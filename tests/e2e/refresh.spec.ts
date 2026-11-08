@@ -478,10 +478,29 @@ test("手动刷新提交 OCI 同步任务，终态后重新读取快照，等待
   page,
   refreshApi,
 }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await openInstances(page);
   const before = refreshApi.count("/api/instances");
-  await refreshButton(page).click();
+  const refresh = refreshButton(page);
+  const originalSize = await refresh.evaluate((button) => {
+    const { width, height } = button.getBoundingClientRect();
+    return { width, height };
+  });
+  await expect(refresh.locator("svg")).toHaveCount(1);
+  await refresh.click();
   await expect.poll(() => refreshApi.manualRequests().length).toBe(1);
+  await expect(refresh).toBeDisabled();
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  await expect(refresh.locator("svg")).toHaveCount(1);
+  await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+  await expect(refresh.locator("svg")).toHaveCSS("animation-duration", "1s");
+  await expect(refresh.locator("svg")).toHaveCSS("animation-timing-function", "linear");
+  expect(
+    await refresh.evaluate((button) => {
+      const { width, height } = button.getBoundingClientRect();
+      return { width, height };
+    }),
+  ).toEqual(originalSize);
   await expect(rows(page)).toHaveCount(10);
   await expect(page.getByRole("link", { name: "Fixture-01", exact: true })).toBeVisible();
   refreshApi.finish("succeeded", (items) => {
@@ -490,7 +509,16 @@ test("手动刷新提交 OCI 同步任务，终态后重新读取快照，等待
   await expect(page.getByRole("link", { name: "Fixture-01 updated", exact: true })).toBeVisible();
   expect(refreshApi.count("/api/jobs/refresh-fixture-sync")).toBeGreaterThan(0);
   expect(refreshApi.count("/api/instances")).toBeGreaterThan(before);
-  await expect(refreshButton(page)).toBeEnabled();
+  await expect(refresh).toBeEnabled();
+  await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+  await expect(refresh.locator("svg")).toHaveCount(1);
+  await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+  expect(
+    await refresh.evaluate((button) => {
+      const { width, height } = button.getBoundingClientRect();
+      return { width, height };
+    }),
+  ).toEqual(originalSize);
 });
 
 test("同步失败显示可重试错误，保留先前快照和表格", async ({ page, refreshApi }) => {
@@ -1089,8 +1117,24 @@ for (const alreadyActive of [false, true]) {
       release();
       await expect(refreshButton(page)).toBeDisabled();
       await expect.poll(() => refreshApi.manualRequests().length).toBe(alreadyActive ? 0 : 1);
+      const jobPath = `/api/jobs/${refreshApi.syncJob!.id}`;
+      let completedStatusReceived = false;
+      page.on("response", async (response) => {
+        if (response.request().method() !== "GET" || new URL(response.url()).pathname !== jobPath)
+          return;
+        const body = await response.json().catch(() => null);
+        if (body?.job?.state === "succeeded") completedStatusReceived = true;
+      });
       refreshApi.finish("succeeded");
-      await advance(page, refreshApi);
+      // Recording the manual request does not mean its response or first status
+      // read has reached the browser. Keep driving the paused clock until the
+      // terminal status arrives, including when a pending response arms the next poll late.
+      await expect
+        .poll(async () => {
+          await advance(page, refreshApi);
+          return completedStatusReceived;
+        })
+        .toBe(true);
       await expect(refreshButton(page)).toBeEnabled();
       expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(alreadyActive ? 1 : 2);
     } finally {

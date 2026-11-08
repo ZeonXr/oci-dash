@@ -432,6 +432,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </div>
           <div className="console-actions">
             <Button
+              icon={<Keyboard size={16} />}
               disabled={!connected}
               onClick={() => {
                 touch();
@@ -439,7 +440,6 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
                 rfb.current?.focus();
               }}
             >
-              <Keyboard size={15} />
               Ctrl+Alt+Del
             </Button>
             <Button
@@ -454,14 +454,15 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               适应窗口
             </Button>
             <Button
+              icon={fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               onClick={() => void toggleFullscreen()}
               aria-label={fullscreen ? "退出全屏" : "全屏"}
             >
-              {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
               <span>{fullscreen ? "退出全屏" : "全屏"}</span>
             </Button>
             {active ? (
               <Button
+                icon={<Unplug size={16} />}
                 disabled={creating}
                 loading={closing}
                 onClick={() => {
@@ -471,17 +472,16 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
                   }
                 }}
               >
-                <Unplug size={15} />
                 {session?.cleanupPending ? "重试断开" : occupied ? "断开现有会话" : "断开"}
               </Button>
             ) : (
               <Button
+                icon={<Plug size={16} />}
                 variant="primary"
                 disabled={!canConnect}
                 loading={creating}
                 onClick={() => void connect()}
               >
-                <Plug size={15} />
                 {session ? "重试连接" : "连接"}
               </Button>
             )}

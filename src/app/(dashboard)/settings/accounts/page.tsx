@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { KeyRound, Plus, RefreshCw } from "lucide-react";
+import { KeyRound, Plus } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { isJobPending as pendingSync } from "@/lib/job-state";
 import { api, send, useAction, useResource } from "@/components/api";
@@ -11,6 +11,7 @@ import {
   Alert,
   Badge,
   Button,
+  RefreshButton,
   Card,
   CopyButton,
   EmptyState,
@@ -162,15 +163,14 @@ export default function AccountsPage() {
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
                   <div className="account-actions">
-                    <Button
+                    <RefreshButton
                       className="button-sm"
                       disabled={action.pending || syncing}
                       loading={requesting || syncing}
                       onClick={() => sync(account)}
                     >
-                      {!requesting && !syncing && <RefreshCw size={13} />}
                       {label}
-                    </Button>
+                    </RefreshButton>
                     <Button
                       className="button-sm"
                       variant="ghost"

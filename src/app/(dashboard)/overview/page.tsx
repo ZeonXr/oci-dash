@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { RefreshCw } from "lucide-react";
 import type { CostReport, TrafficReport } from "@/lib/analytics-contracts";
 import type { CpuReport } from "@/lib/cpu-contracts";
 import { useApp } from "@/components/app-provider";
@@ -23,7 +22,7 @@ import {
   Card,
   EmptyState,
   ErrorState,
-  IconButton,
+  RefreshButton,
   LoadingState,
   PageHeader,
   Select,
@@ -177,9 +176,11 @@ export default function OverviewPage() {
           <option value="month">本月</option>
         </Select>
         <UpdatedAt value={generated[0]} title={updateTitle} />
-        <IconButton
+        <RefreshButton
+          iconOnly
           label="刷新总览"
-          disabled={!enabled || refreshing}
+          disabled={!enabled}
+          loading={refreshing}
           onClick={() => {
             const next = dateRange(period);
             if (next.startDate !== range.startDate || next.endDate !== range.endDate)
@@ -190,9 +191,7 @@ export default function OverviewPage() {
             }
             void cpu.refresh();
           }}
-        >
-          <RefreshCw size={16} className={refreshing ? "spin" : undefined} />
-        </IconButton>
+        />
       </PageHeader>
       {accountsLoading ? (
         <LoadingState />

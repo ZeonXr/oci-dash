@@ -377,15 +377,33 @@ test("部分实例缺少一个方向时排行占比仍使用全部已观测流�
 });
 
 test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", async ({ page, overview }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   let release!: () => void;
   overview.costGate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.goto("/overview");
-  await expect(summary(page, "发送流量")).toHaveText("269.8");
-  await expect(page.locator(".overview-cost").getByText("正在读取统计…")).toBeVisible();
-  release();
-  overview.costGate = undefined;
+  try {
+    await page.goto("/overview");
+    await expect(summary(page, "发送流量")).toHaveText("269.8");
+    await expect(page.locator(".overview-cost").getByText("正在读取统计…")).toBeVisible();
+    const refresh = page.getByRole("button", { name: "刷新总览", exact: true });
+    await expect(refresh).toBeDisabled();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(refresh.locator("svg")).toHaveCount(1);
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-duration", "1s");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-timing-function", "linear");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+    await expect(refresh).toBeDisabled();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+  } finally {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    release();
+    overview.costGate = undefined;
+  }
   await page.getByLabel("总览费用币种").selectOption("USD");
   await expect(page.locator(".overview-cost-summary strong")).toHaveText("1.40");
   const cpuCalls = overview.count("/api/analytics/cpu");

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CircleDollarSign, RefreshCw } from "lucide-react";
+import { CircleDollarSign } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { CostReport } from "@/lib/analytics-contracts";
 import { useApp } from "@/components/app-provider";
@@ -23,6 +23,7 @@ import {
 } from "@/components/analytics-cost-data";
 import {
   Button,
+  RefreshButton,
   Card,
   EmptyState,
   ErrorState,
@@ -152,10 +153,9 @@ function CostsContent() {
       <PageHeader title="成本分析" description="OCI 已报告成本，账单数据可能延迟约 48 小时。">
         {data && <AnalyticsStatusNote report={data} />}
         <UpdatedAt value={data?.generatedAt} title="统计查询时间，不代表账单上报时间" />
-        <Button onClick={report.refresh} loading={report.refreshing} disabled={!url}>
-          <RefreshCw size={15} />
+        <RefreshButton onClick={report.refresh} loading={report.refreshing} disabled={!url}>
           刷新数据
-        </Button>
+        </RefreshButton>
       </PageHeader>
       <div className="analytics-controls">
         <div className="filters analytics-filters">

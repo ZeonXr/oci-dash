@@ -15,6 +15,7 @@ import {
   Alert,
   Badge,
   Button,
+  RefreshButton,
   Card,
   CopyButton,
   EmptyState,
@@ -546,10 +547,9 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
     <div className="stack">
       <div className="row between">
         <p className="muted small">同时显示网卡关联的网络安全组与子网安全列表。</p>
-        <Button onClick={resource.reload} loading={resource.refreshing}>
-          <RefreshCw size={14} />
+        <RefreshButton onClick={resource.reload} loading={resource.refreshing}>
           刷新规则
-        </Button>
+        </RefreshButton>
       </div>
       {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
       {resource.data?.groups.length

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight, RefreshCw } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { TrafficReport } from "@/lib/analytics-contracts";
 import { useResource } from "@/components/api";
@@ -15,7 +15,7 @@ import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { UpdatedAt } from "@/components/updated-at";
 import {
   Badge,
-  Button,
+  RefreshButton,
   Card,
   EmptyState,
   ErrorState,
@@ -110,10 +110,9 @@ function TrafficContent() {
       <PageHeader title="流量统计" description="按账号、实例和网卡查看接收与发送流量。">
         {data && <AnalyticsStatusNote report={data} />}
         <UpdatedAt value={data?.generatedAt} title="统计查询时间" />
-        <Button onClick={report.refresh} loading={report.refreshing} disabled={!url}>
-          <RefreshCw size={15} />
+        <RefreshButton onClick={report.refresh} loading={report.refreshing} disabled={!url}>
           刷新数据
-        </Button>
+        </RefreshButton>
       </PageHeader>
       <div className="analytics-controls">
         <div className="filters analytics-filters">

@@ -1,15 +1,15 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.2.0`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.2.1`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.2.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.2.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.2.1 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.2.1/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.2.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.2.1/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，先在同一目录创建可由容器用户读写的空数据目录：
@@ -25,7 +25,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v020-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v021-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
 
 打开 `http://localhost:3000`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
 
@@ -236,7 +236,7 @@ docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
 
 升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。
 
-从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。`v0.2.0` 的默认挂载已改为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、`PORT` 和必要的高级覆盖配置；旧 `.env` 的 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。完成适用检查后，在数据迁移已核对的部署目录执行：
+从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。`v0.2.1` 的默认挂载已改为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、`PORT` 和必要的高级覆盖配置；旧 `.env` 的 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。完成适用检查后，在数据迁移已核对的部署目录执行：
 
 ```sh
 docker compose pull app
