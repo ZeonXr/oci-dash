@@ -52,7 +52,7 @@ function localOrigin(value: string | undefined) {
   return url.origin;
 }
 
-async function guardNetwork(context: BrowserContext, origin: string) {
+async function guardNetwork(context: BrowserContext, origin: string, allowSetup = false) {
   const guard: Guard = { external: [], mutations: [], errors: [], fixtures: true };
   guards.set(context, guard);
   context.on("page", (page) => page.on("pageerror", (error) => guard.errors.push(error.message)));
@@ -135,7 +135,8 @@ async function guardNetwork(context: BrowserContext, origin: string) {
     }
     if (
       !["GET", "HEAD", "OPTIONS"].includes(request.method()) &&
-      !["/api/auth/login", "/api/auth/logout"].includes(url.pathname)
+      !["/api/auth/login", "/api/auth/logout"].includes(url.pathname) &&
+      !(allowSetup && method === "POST" && path === "/api/auth/setup")
     ) {
       guard.mutations.push(`${request.method()} ${url.pathname}`);
       await route.abort();
@@ -207,16 +208,41 @@ test.beforeAll(async ({ browser, baseURL }) => {
     baseURL: origin,
     locale: "zh-CN",
   });
-  await guardNetwork(context, origin);
+  await guardNetwork(context, origin, true);
   try {
+    const initialStatus = await context.request.get(`${origin}/api/auth/status`);
+    expect(initialStatus.status()).toBe(200);
+    expect(await initialStatus.json()).toEqual({ setupRequired: true });
     const page = await context.newPage();
     await page.goto("/login");
-    await expect(page.getByRole("heading", { name: "欢迎回来" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "创建管理员", exact: true })).toBeVisible();
     await expect(page.locator(".brand")).toContainText("OCI Dash");
     // Avoid including a credential-bearing Playwright fill call in a failure log.
     try {
       await page.getByLabel(/^用户名/).fill(process.env.ADMIN_USERNAME || "admin");
-      await page.getByLabel(/^密码/).fill(password);
+      await page.getByLabel("密码", { exact: true }).fill(password);
+      await page.getByLabel("确认密码", { exact: true }).fill(password);
+    } catch {
+      throw new Error("Could not fill the local administrator setup fields.");
+    }
+    await page.getByRole("button", { name: "创建管理员", exact: true }).click();
+    await page.waitForURL("**/overview");
+    const initializedStatus = await context.request.get(`${origin}/api/auth/status`);
+    expect(initializedStatus.status()).toBe(200);
+    expect(await initializedStatus.json()).toEqual({ setupRequired: false });
+    await requireTestSession(context, origin);
+    // Verify the new administrator can sign in through the existing login flow,
+    // then share only that fresh session with the later serial smoke tests.
+    const logout = await context.request.post(`${origin}/api/auth/logout`, {
+      headers: { Origin: origin },
+    });
+    expect(logout.status()).toBe(200);
+    await page.goto("/login");
+    await expect(page.getByRole("heading", { name: "欢迎回来", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "创建管理员", exact: true })).toHaveCount(0);
+    try {
+      await page.getByLabel("用户名", { exact: true }).fill(process.env.ADMIN_USERNAME || "admin");
+      await page.getByLabel("密码", { exact: true }).fill(password);
     } catch {
       throw new Error("Could not fill the local administrator login fields.");
     }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 // Every destructive check targets resources created here. No host .env, existing
@@ -9,6 +9,7 @@ const runId = randomUUID();
 const name = `oci-dash-runtime-test-${runId}`;
 const volume = `${name}-data`;
 const image = process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local";
+const password = randomBytes(24).toString("base64url");
 
 function docker(...args: string[]): string {
   return execFileSync("docker", args, {
@@ -104,8 +105,22 @@ const accountIdentity = (): string =>
   );
 const initializationIdentity = (): string =>
   execute(
-    "const f=require('node:fs');const c=require('node:crypto');const a=require('node:assert/strict');const files=['/data/.master-key','/data/.initial-admin-password'];for(const p of files)a.equal(f.statSync(p).mode&0o777,0o600);a.equal(f.readFileSync(files[0]).length,32);console.log(c.createHash('sha256').update(f.readFileSync(files[0])).update(f.readFileSync(files[1])).digest('hex'));",
+    "const f=require('node:fs'),c=require('node:crypto'),a=require('node:assert/strict'),D=require('better-sqlite3');const key=f.readFileSync('/data/.master-key');a.equal(f.statSync('/data/.master-key').mode&0o777,0o600);a.equal(key.length,32);a.equal(f.existsSync('/data/.initial-admin-password'),false);const d=new D('/data/oci-dash.db',{readonly:true});console.log(c.createHash('sha256').update(key).update(JSON.stringify(d.prepare('SELECT id,password_hash FROM users ORDER BY id').all())).digest('hex'));d.close();",
   );
+function authenticate(action: "setup" | "login"): void {
+  // Pass a synthetic credential through stdin so command-line errors cannot echo it.
+  const code = `const a=require('node:assert/strict');const password=require('node:fs').readFileSync(0,'utf8');fetch('http://127.0.0.1:3000/api/auth/${action}',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://127.0.0.1:3000'},body:JSON.stringify({username:'runtime-test',password})}).then(async r=>{a.equal(r.status,${action === "setup" ? 201 : 200});a.ok(r.headers.get('set-cookie')?.includes('HttpOnly'));const status=await fetch('http://127.0.0.1:3000/api/auth/status');a.equal((await status.json()).setupRequired,false);console.log('ok')});`;
+  assert.equal(
+    execFileSync("docker", ["exec", "-i", name, "node", "-e", code], {
+      input: password,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15_000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim(),
+    "ok",
+  );
+}
 
 let containerCreated = false;
 let volumeCreated = false;
@@ -147,17 +162,21 @@ try {
     "ok",
     "Temporary runtime and SSH files must use the container's built-in memory filesystem",
   );
+  assert.equal(accountIdentity(), "", "Empty deployments must wait for browser setup");
+  assert.equal(
+    execute(
+      "fetch('http://127.0.0.1:3000/api/auth/status').then(async r=>console.log((await r.json()).setupRequired))",
+    ),
+    "true",
+  );
+  initializationIdentity();
+  authenticate("setup");
   const admin = accountIdentity();
   const initialization = initializationIdentity();
   assert.ok(admin);
-  assert.equal(
-    execute(
-      "const a=require('node:assert/strict');const password=require('node:fs').readFileSync('/data/.initial-admin-password','utf8').trim();fetch('http://127.0.0.1:3000/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://127.0.0.1:3000'},body:JSON.stringify({username:'admin',password})}).then(async r=>{a.equal(r.status,200);a.ok(r.headers.get('set-cookie')?.includes('HttpOnly'));console.log('ok')});",
-    ),
-    "ok",
-  );
+  authenticate("login");
   console.log(
-    "PASS: container initializes and accepts its generated administrator without environment configuration",
+    "PASS: empty container accepts first administrator setup and login without environment configuration",
   );
 
   for (const role of ["worker", "web"] as const) {
@@ -178,6 +197,7 @@ try {
       initialization,
       "Generated secrets must survive restarts",
     );
+    authenticate("login");
     console.log(
       `PASS: ${role} failure restarts the complete application and preserves its database`,
     );

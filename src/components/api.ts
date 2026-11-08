@@ -27,6 +27,7 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
     options.method === "POST" &&
     [
       "/api/auth/login",
+      "/api/auth/setup",
       "/api/auth/logout",
       "/api/settings/password",
       "/api/settings/mfa/confirm",

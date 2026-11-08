@@ -2,7 +2,7 @@ name: oci-dash
 
 services:
   app:
-    image: ghcr.io/zeonxr/oci-dash:v0.1.1
+    image: ghcr.io/zeonxr/oci-dash:v0.2.0
     restart: unless-stopped
     stop_grace_period: 35s
     security_opt: [no-new-privileges:true]
@@ -10,9 +10,6 @@ services:
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
     volumes:
-      - "${DATA_PATH:-app-data}:/data"
+      - "./data:/data"
     logging:
       driver: local
-
-volumes:
-  app-data:

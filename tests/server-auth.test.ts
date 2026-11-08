@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import * as OTPAuth from "otpauth";
 import type { InstanceSummary } from "@/lib/contracts";
@@ -203,19 +203,16 @@ describe("session and request boundaries", () => {
     expect(getDatabase().prepare("SELECT count(*) FROM login_attempts").pluck().get()).toBe(0);
   });
 
-  it("removes the generated initial password only after a successful password change", () => {
-    getDatabase().prepare("DELETE FROM users").run();
-    closeDatabase();
-    vi.stubEnv("ADMIN_PASSWORD", undefined);
+  it("removes a legacy generated initial password only after a successful password change", () => {
     const db = getDatabase();
     const path = join(dirname(db.name), ".initial-admin-password");
-    const generated = readFileSync(path, "utf8").trim();
-    const current = login(USERNAME, generated);
+    writeFileSync(path, PASSWORD + "\n", { mode: 0o600 });
+    const current = login(USERNAME, PASSWORD);
     expect(() =>
       changePassword(current.user, "wrong-password", "replacement-password-901"),
     ).toThrow();
     expect(existsSync(path)).toBe(true);
-    changePassword(current.user, generated, "replacement-password-901");
+    changePassword(current.user, PASSWORD, "replacement-password-901");
     expect(existsSync(path)).toBe(false);
     expect(() => requireUser(request("auth/me", { token: current.token }))).toThrow();
     expect(login(USERNAME, "replacement-password-901").user.id).toBe(current.user.id);

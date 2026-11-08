@@ -30,7 +30,7 @@ npm run dev
 npm run worker
 ```
 
-无需 `.env`。首次访问应用后，从 `data/.initial-admin-password` 读取 `admin` 的初始密码，密钥同样自动保存到 `data/`。新数据库是空面板，不生成示例账号。可选的本地 `.env` 可覆盖应用变量，见[运维说明](docs/OPERATIONS.md#可选配置)。不要把生产环境配置复制到开发目录；初始密码不应出现在提交或截图中。开发脚本默认监听 `0.0.0.0`；仅本机使用时可运行 `npx --no-install next dev --hostname 127.0.0.1`。
+无需 `.env`。首次在浏览器中填写用户名、密码和确认密码，或生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。主密钥仍自动保存到 `data/.master-key`，不生成默认管理员或初始密码文件。新数据库不生成示例账号。可选的本地 `.env` 可覆盖应用变量，见[运维说明](docs/OPERATIONS.md#可选配置)。不要把生产配置复制到开发目录，也不要把密码放进提交或截图。首个可访问初始化页面的人可创建管理员；开发脚本默认监听 `0.0.0.0`，首次设置应使用受控网络，仅本机使用时运行 `npx --no-install next dev --hostname 127.0.0.1`。
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
@@ -40,7 +40,7 @@ npm run worker
 docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
 ```
 
-该命令构建 `oci-dash:local`。不要在生产部署目录运行它；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
+该命令构建 `oci-dash:local`，数据挂载为 Compose 所在目录的 `./data:/data`。Linux 首次运行前，用 `sudo install -d -o 1000 -g 1000 -m 0700 ./data` 创建空目录；Windows Docker Desktop 通过宿主 ACL 允许 Docker 访问。不要在生产部署目录运行它，也不要把开发数据目录混用为生产数据；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
 
 `scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
 
@@ -91,7 +91,7 @@ npm run test:backup
 
 浏览器安装、平台差异、已知基线和验收限制见[验证指南](docs/VERIFICATION.md)。真实 OCI 验收不属于上述自动化测试，必须另行选择隔离账号或资源，并记录操作范围与清理结果。
 
-发布以源码 tag 对应固定镜像版本和同版本的独立 `compose.yaml` 资产。`v0.1.1` 的目标平台为原生 Linux `amd64`、`arm64`；发布前需分别完成构建验证、镜像索引与匿名拉取检查，不能把工作流配置等同于已经通过。当前发布核对项见[发布验收](docs/VERIFICATION.md#v011-发布验收)。
+发布以源码 tag 对应固定镜像版本和同版本的独立 `compose.yaml` 资产。`v0.2.0` 的目标平台为原生 Linux `amd64`、`arm64`；发布前需分别完成构建验证、镜像索引、匿名拉取、宿主目录持久化和网页首次初始化检查，不能把工作流配置等同于已经通过。当前发布核对项见[发布验收](docs/VERIFICATION.md#v020-发布验收)。
 
 ## 提交与评审
 

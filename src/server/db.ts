@@ -61,7 +61,7 @@ export function getDatabase(): Database.Database {
       );
     }).immediate();
     initializeMasterKey(db, path);
-    ensureInitialAdmin(db, path);
+    ensureInitialAdmin(db);
   } catch (error) {
     db.close();
     throw error;

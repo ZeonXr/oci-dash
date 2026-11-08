@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   accessSync,
+  chmodSync,
   constants,
   mkdirSync,
   mkdtempSync,
@@ -189,8 +190,13 @@ async function verifyAnonymousRegistry(
 function verifyComposeSource(source: string): void {
   const substitutions = source.match(/\$\{[^}]*\}/g) ?? [];
   check(
-    substitutions.every((value) => ["${PORT:-3000}", "${DATA_PATH:-app-data}"].includes(value)),
+    substitutions.every((value) => value === "${PORT:-3000}"),
     "Release Compose contains unsupported or required environment inputs.",
+  );
+  check(
+    (source.match(/^\s*-\s*(?:"\.\/data:\/data"|'\.\/data:\/data'|\.\/data:\/data)\s*$/gm) ?? [])
+      .length === 1,
+    "Release Compose must use the literal ./data:/data mount.",
   );
   const plain = source.replace(/\$\{[^}]*\}/g, "placeholder");
   check(
@@ -215,7 +221,6 @@ function verifyComposeSource(source: string): void {
     "volumes",
     "logging",
     "driver",
-    "app-data",
   ]);
   for (const line of plain.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -235,7 +240,13 @@ function verifyComposeSource(source: string): void {
   }
 }
 
-function verifyResolved(config: ObjectValue, project: string, image: string, port: number): void {
+function verifyResolved(
+  config: ObjectValue,
+  project: string,
+  image: string,
+  port: number,
+  dataDirectory: string,
+): void {
   check(
     keys(config, ["name", "services", "volumes", "networks"]) && config.name === project,
     "Unexpected Compose project configuration.",
@@ -303,19 +314,17 @@ function verifyResolved(config: ObjectValue, project: string, image: string, por
   );
   const mount = app.volumes[0];
   check(
-    keys(mount, ["type", "source", "target", "volume"]) &&
-      mount.type === "volume" &&
-      mount.source === "app-data" &&
-      mount.target === "/data",
-    "Release data mount is not the isolated named volume.",
+    keys(mount, ["type", "source", "target", "bind"]) &&
+      mount.type === "bind" &&
+      typeof mount.source === "string" &&
+      resolve(mount.source) === resolve(dataDirectory) &&
+      mount.target === "/data" &&
+      (mount.bind == null || (object(mount.bind) && keys(mount.bind, ["create_host_path"]))),
+    "Release data mount is not the isolated sibling data directory.",
   );
   check(
-    object(config.volumes) &&
-      Object.keys(config.volumes).join() === "app-data" &&
-      object(config.volumes["app-data"]) &&
-      keys(config.volumes["app-data"], ["name"]) &&
-      config.volumes["app-data"].name === `${project}_app-data`,
-    "Release volume is not owned by this test project.",
+    config.volumes == null || (object(config.volumes) && Object.keys(config.volumes).length === 0),
+    "Release must not declare named volumes.",
   );
   check(
     object(app.networks) && Object.keys(app.networks).join() === "default",
@@ -411,18 +420,17 @@ const containerProbe = String.raw`
   ensure(typeof process.getuid === 'function' && process.getuid() === 1000);
   ensure(f.readFileSync('/proc/1/comm','utf8').trim() === 'tini');
   ensure(o.tmpdir() === '/dev/shm' && Number(f.statfsSync(o.tmpdir()).type) === 0x01021994);
-  for (const file of ['/data/.master-key','/data/.initial-admin-password']) ensure((f.statSync(file).mode & 0o777) === 0o600);
+  if (process.argv[2] === 'check-posix-mode') ensure((f.statSync('/data/.master-key').mode & 0o777) === 0o600);
+  ensure(!f.existsSync('/data/.initial-admin-password'));
   const key = f.readFileSync('/data/.master-key'); ensure(key.length === 32);
-  const password = f.readFileSync('/data/.initial-admin-password','utf8').trim();
   const D = require('better-sqlite3'), db = new D('/data/oci-dash.db',{readonly:true});
   const users = db.prepare('SELECT id,username,password_hash FROM users ORDER BY id').all();
-  ensure(users.length === 1 && users[0].username === 'admin');
+  ensure(process.argv[1] === 'pending' ? users.length === 0 : users.length === 1 && users[0].username === 'release-admin');
+  const marker = db.prepare('SELECT value FROM settings WHERE key=?').get('auth.setup.completed');
+  ensure(process.argv[1] === 'pending' ? !marker : Boolean(marker));
   ensure(db.prepare('SELECT count(*) AS total FROM accounts').get().total === 0); db.close();
-  const response = await fetch('http://127.0.0.1:3000/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://127.0.0.1:3000'},body:JSON.stringify({username:'admin',password}),signal:AbortSignal.timeout(10000)});
-  ensure(response.status === 200 && response.headers.get('set-cookie')?.includes('HttpOnly'));
-  const body = await response.json(); ensure(body.user?.username === 'admin');
-  console.log(c.createHash('sha256').update(key).update(password).update(JSON.stringify(users)).digest('hex'));
-})().catch(() => { console.error('Container initialization or login verification failed.'); process.exitCode=1; });
+  console.log(c.createHash('sha256').update(key).digest('hex') + ':' + c.createHash('sha256').update(JSON.stringify(users)).digest('hex'));
+})().catch(() => { console.error('Container setup-state verification failed.'); process.exitCode=1; });
 `;
 
 async function main(): Promise<void> {
@@ -458,6 +466,10 @@ async function main(): Promise<void> {
     verifyComposeSource(source);
     const endpoint = await localDockerEndpoint();
     directory = mkdtempSync(join(tmpdir(), "oci-dash-release-"));
+    const dataDirectory = join(directory, "data");
+    // Only this freshly created leaf is writable by the container. Its parent remains private.
+    mkdirSync(dataDirectory, { mode: 0o777 });
+    if (process.platform !== "win32") chmodSync(dataDirectory, 0o777);
     const configDirectory = join(directory, "docker");
     mkdirSync(configDirectory, { mode: 0o700 });
     // An explicit empty GHCR entry disables Docker's automatic system credential-helper discovery.
@@ -494,7 +506,6 @@ async function main(): Promise<void> {
     Object.assign(env, {
       DOCKER_CONFIG: configDirectory,
       PORT: String(port),
-      DATA_PATH: "app-data",
       COMPOSE_PROJECT_NAME: project,
       COMPOSE_DISABLE_ENV_FILE: "1",
     });
@@ -537,8 +548,14 @@ async function main(): Promise<void> {
       composeFile,
     ];
     compose = (args, options) => docker!([...composePrefix, ...args], options);
-    verifyResolved(json(await compose(["config", "--format", "json"])), project, image, port);
-    for (const kind of ["container", "volume", "network"]) {
+    verifyResolved(
+      json(await compose(["config", "--format", "json"])),
+      project,
+      image,
+      port,
+      dataDirectory,
+    );
+    for (const kind of ["container", "network"]) {
       const args = kind === "container" ? ["ps", "--all"] : [kind, "ls"];
       const found = await docker([
         ...args,
@@ -549,10 +566,7 @@ async function main(): Promise<void> {
       ]);
       check(found === "", "The randomly selected project already has Docker resources.");
     }
-    for (const [kind, name] of [
-      ["volume", `${project}_app-data`],
-      ["network", `${project}_default`],
-    ]) {
+    for (const [kind, name] of [["network", `${project}_default`]]) {
       check(
         (await docker([kind, "ls", "--filter", `name=^${name}$`, "--format", "{{.Name}}"])) === "",
         "The randomly selected storage or network name already exists.",
@@ -586,7 +600,7 @@ async function main(): Promise<void> {
     );
     const runCompose = compose,
       runDocker = docker;
-    const probe = async (): Promise<string> => {
+    const probe = async (state: "pending" | "registered" = "registered"): Promise<string> => {
       const container = await runCompose(["ps", "--quiet", "app"]);
       check(/^[a-f0-9]{12,64}$/.test(container), "Expected exactly one isolated app container.");
       const labels = json(
@@ -598,22 +612,97 @@ async function main(): Promise<void> {
         "Container is not owned by this verification.",
       );
       await runDocker(["exec", container, "node", "dist/health.mjs"]);
-      const hash = await runDocker(["exec", container, "node", "-e", containerProbe]);
-      check(/^[a-f0-9]{64}$/.test(hash), "Container probe returned unexpected output.");
+      const hash = await runDocker([
+        "exec",
+        container,
+        "node",
+        "-e",
+        containerProbe,
+        state,
+        // Docker Desktop bind permissions are governed by Windows ACLs, not POSIX modes.
+        process.platform === "win32" ? "host-acl" : "check-posix-mode",
+      ]);
+      check(
+        /^[a-f0-9]{64}:[a-f0-9]{64}$/.test(hash),
+        "Container probe returned unexpected output.",
+      );
       return hash;
     };
-    const initial = await probe();
-    const health = await fetch(`http://127.0.0.1:${port}/api/health`, {
-      redirect: "error",
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
-    });
+    const pending = await probe("pending");
+    const origin = `http://127.0.0.1:${port}`;
+    const api = (path: string, options: RequestInit = {}) =>
+      fetch(`${origin}/api/${path}`, {
+        redirect: "error",
+        credentials: "omit",
+        ...options,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+      });
+    const health = await api("health");
     const healthBody = json(await health.text());
     check(
       health.ok && healthBody.ok === true && healthBody.version === tag.slice(1),
       "Published loopback endpoint is unhealthy or reports an unexpected version.",
     );
+    const setupState = await api("auth/status");
+    check(
+      setupState.ok && json(await setupState.text()).setupRequired === true,
+      "Empty release database must require browser administrator setup.",
+    );
+    const administrator = {
+      username: "release-admin",
+      password: randomBytes(24).toString("base64url"),
+    };
+    const authenticate = async (action: "setup" | "login"): Promise<string> => {
+      const response = await api(`auth/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: origin },
+        body: JSON.stringify(administrator),
+      });
+      check(
+        response.status === (action === "setup" ? 201 : 200),
+        "Administrator setup or login failed.",
+      );
+      const body = json(await response.text()),
+        cookie = response.headers.get("set-cookie");
+      check(
+        object(body.user) &&
+          body.user.username === administrator.username &&
+          typeof body.user.id === "string",
+        "Administrator response is invalid.",
+      );
+      check(
+        cookie &&
+          cookie.includes("HttpOnly") &&
+          cookie.includes("SameSite=Lax") &&
+          !cookie.includes("; Secure") &&
+          /^oci_dash_session=[A-Za-z0-9_-]{43};/.test(cookie),
+        "Administrator session cookie is invalid.",
+      );
+      const current = await api("auth/me", { headers: { Cookie: cookie.split(";", 1)[0] } });
+      const authenticated = json(await current.text());
+      check(
+        current.ok && object(authenticated.user) && authenticated.user.id === body.user.id,
+        "Created administrator session was not usable.",
+      );
+      return body.user.id;
+    };
+    const administratorId = await authenticate("setup");
+    const closedState = await api("auth/status");
+    check(
+      closedState.ok && json(await closedState.text()).setupRequired === false,
+      "Setup did not close after administrator creation.",
+    );
+    const initial = await probe();
+    check(
+      initial.split(":", 1)[0] === pending.split(":", 1)[0],
+      "Setup unexpectedly replaced the generated encryption key.",
+    );
+    check(
+      (await authenticate("login")) === administratorId,
+      "Created administrator could not log in again.",
+    );
     console.log(
-      "PASS: anonymous pull starts a healthy non-root application with Tini, tmpfs and generated admin login",
+      "PASS: anonymous pull starts a healthy non-root application with Tini, tmpfs and browser administrator setup",
     );
     await compose(["restart", "--timeout", "35", "app"], { timeoutMs: 60_000 });
     let restarted: string | undefined;
@@ -628,6 +717,10 @@ async function main(): Promise<void> {
       }
     }
     check(restarted === initial, "Administrator or key identity did not survive restart.");
+    check(
+      (await authenticate("login")) === administratorId,
+      "Administrator login did not survive restart.",
+    );
     await compose(
       [
         "up",
@@ -647,8 +740,21 @@ async function main(): Promise<void> {
       (await probe()) === initial,
       "Administrator or key identity did not survive container recreation.",
     );
+    check(
+      (await authenticate("login")) === administratorId,
+      "Administrator login did not survive container recreation.",
+    );
+    const duplicate = await api("auth/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify(administrator),
+    });
+    check(
+      duplicate.status === 409 && json(await duplicate.text()).code === "SETUP_ALREADY_COMPLETED",
+      "Administrator setup reopened after container recreation.",
+    );
     console.log(
-      "PASS: restart and container recreation preserve administrator and generated secrets",
+      "PASS: restart and container recreation preserve administrator, password hash and encryption key",
     );
   } catch (error) {
     failure = error;
@@ -684,10 +790,7 @@ async function main(): Promise<void> {
             "Refusing cleanup of an unrelated container.",
           );
         }
-        for (const [kind, name] of [
-          ["volume", `${project}_app-data`],
-          ["network", `${project}_default`],
-        ]) {
+        for (const [kind, name] of [["network", `${project}_default`]]) {
           const names = await docker(
             [
               kind,
@@ -720,11 +823,11 @@ async function main(): Promise<void> {
             );
           }
         }
-        await compose(["down", "--volumes", "--remove-orphans", "--timeout", "35"], {
+        await compose(["down", "--remove-orphans", "--timeout", "35"], {
           signal: undefined,
           timeoutMs: 90_000,
         });
-        for (const kind of ["container", "volume", "network"]) {
+        for (const kind of ["container", "network"]) {
           const args = kind === "container" ? ["ps", "--all"] : [kind, "ls"];
           check(
             (await docker(
@@ -747,12 +850,18 @@ async function main(): Promise<void> {
       }
     }
     if (directory && !cleanupErrors.length) {
-      check(
-        dirname(resolve(directory)) === resolve(tmpdir()) &&
-          basename(directory).startsWith("oci-dash-release-"),
-        "Invalid verification cleanup path.",
-      );
-      rmSync(directory, { recursive: true, force: true });
+      try {
+        check(
+          dirname(resolve(directory)) === resolve(tmpdir()) &&
+            basename(directory).startsWith("oci-dash-release-"),
+          "Invalid verification cleanup path.",
+        );
+        rmSync(directory, { recursive: true, force: true });
+      } catch {
+        cleanupErrors.push(
+          `Could not remove this verification's temporary bind data and configuration at ${directory}.`,
+        );
+      }
     }
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
@@ -772,7 +881,7 @@ async function main(): Promise<void> {
 
 if (process.argv.includes("--help")) {
   console.log(
-    "Usage: npm run test:release\nAnonymously verifies the published Compose asset and GHCR image using a fresh local Docker project.\nDefaults to v plus package.version; OCI_DASH_RELEASE_TAG may select another vMAJOR.MINOR.PATCH release.\nDoes not read personal .env or registry credentials. Removes its temporary containers, data and configuration; retains the official release image.",
+    "Usage: npm run test:release\nAnonymously verifies the published Compose asset and GHCR image using a fresh local Docker project and sibling ./data bind directory.\nChecks first administrator setup, login and persistence without logging credentials. Defaults to v plus package.version; OCI_DASH_RELEASE_TAG may select another compatible vMAJOR.MINOR.PATCH release.\nDoes not read personal .env or registry credentials. Removes its temporary containers, bind data and configuration; retains the official release image.",
   );
 } else {
   await main().catch(() => {

@@ -1,0 +1,41 @@
+.login-status .alert {
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+.login-status .alert > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.login-feedback {
+  margin-bottom: 16px;
+}
+.setup-password-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -8px 0 20px;
+}
+.setup-password-tools > span {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.setup-password-tools > .button {
+  flex-shrink: 0;
+}
+.setup-manual-copy {
+  display: flex;
+  margin-top: 10px;
+}
+.login-feedback .alert > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 360px) {
+  .setup-password-tools {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,13 +7,10 @@ import { runProcess } from "./lib/process.ts";
 import type { RunProcessOptions } from "./lib/process.ts";
 
 interface VerificationEnvironment {
-  ADMIN_USERNAME: string;
-  ADMIN_PASSWORD: string;
   MASTER_KEY: string;
   APP_ORIGIN: string;
   DATABASE_PATH: string;
   PORT: string;
-  DATA_PATH: string;
   NEXT_TELEMETRY_DISABLED: string;
 }
 
@@ -68,6 +65,7 @@ const project = `oci-dash-e2e-${randomUUID()}`;
 const image = noBuild ? process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local" : `${project}:local`;
 mkdirSync(base, { recursive: true });
 const directory = mkdtempSync(join(base, "e2e-"));
+const dataDirectory = join(directory, "data");
 const envFile = join(directory, "test.env");
 const composeFile = join(directory, "compose.yaml");
 const override = join(directory, "compose.json");
@@ -97,15 +95,20 @@ let failure: unknown;
 try {
   // A copied deployment file must work without adjacent source or inherited files.
   copyFileSync(join(repository, "compose.yaml"), composeFile);
+  // Only this test-owned leaf is writable by the non-root container. Its parent
+  // remains private, and cleanup removes the entire unique temporary directory.
+  mkdirSync(dataDirectory, { mode: 0o777 });
+  if (process.platform !== "win32") chmodSync(dataDirectory, 0o777);
   const port = await unusedPort();
-  const values: VerificationEnvironment = {
+  const administrator = {
     ADMIN_USERNAME: project.slice("oci-dash-".length),
     ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
+  };
+  const values: VerificationEnvironment = {
     MASTER_KEY: randomBytes(32).toString("base64"),
     APP_ORIGIN: `http://127.0.0.1:${port}`,
     DATABASE_PATH: "/data/oci-dash.db",
     PORT: String(port),
-    DATA_PATH: "app-data",
     NEXT_TELEMETRY_DISABLED: "1",
   };
   writeFileSync(
@@ -125,8 +128,6 @@ try {
           pull_policy: "never",
           restart: "no",
           environment: {
-            ADMIN_USERNAME: values.ADMIN_USERNAME,
-            ADMIN_PASSWORD: values.ADMIN_PASSWORD,
             MASTER_KEY: values.MASTER_KEY,
             APP_ORIGIN: values.APP_ORIGIN,
             DATABASE_PATH: values.DATABASE_PATH,
@@ -138,6 +139,8 @@ try {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...values,
+    ADMIN_USERNAME: undefined,
+    ADMIN_PASSWORD: undefined,
     COMPOSE_PROJECT_NAME: project,
     COMPOSE_ENV_FILES: envFile,
     E2E_BASE_URL: values.APP_ORIGIN,
@@ -165,27 +168,25 @@ try {
     await compose(["config", "--format", "json"]),
   ) as ResolvedComposeConfiguration;
   const service = config.services?.app;
-  const dataVolume = config.volumes?.["app-data"];
   const volumes = service?.volumes;
   const ports = service?.ports;
   if (
     config.name !== project ||
     !service ||
     Object.keys(config.services ?? {}).length !== 1 ||
-    Object.keys(config.volumes ?? {}).length !== 1 ||
-    dataVolume?.name !== `${project}_app-data` ||
-    dataVolume.external ||
+    Object.keys(config.volumes ?? {}).length !== 0 ||
     volumes?.length !== 1 ||
-    volumes[0].type !== "volume" ||
-    volumes[0].source !== "app-data" ||
+    volumes[0].type !== "bind" ||
+    !volumes[0].source ||
+    resolve(volumes[0].source) !== resolve(dataDirectory) ||
     volumes[0].target !== "/data" ||
     Object.keys(service.environment ?? {}).some((key) => !(key in values)) ||
     service.environment?.MASTER_KEY !== values.MASTER_KEY ||
-    service.environment?.ADMIN_PASSWORD !== values.ADMIN_PASSWORD ||
+    service.environment?.ADMIN_USERNAME !== undefined ||
+    service.environment?.ADMIN_PASSWORD !== undefined ||
     service.environment?.APP_ORIGIN !== values.APP_ORIGIN ||
     service.environment?.DATABASE_PATH !== "/data/oci-dash.db" ||
     service.environment?.PORT !== undefined ||
-    service.environment?.DATA_PATH !== undefined ||
     service.init === true ||
     service.stop_grace_period !== "35s" ||
     (service.tmpfs?.length ?? 0) !== 0 ||
@@ -198,23 +199,6 @@ try {
     ports[0].target !== 3000
   )
     throw new Error("Refusing to start: the resolved Compose configuration is not isolated.");
-  // Check custom storage resolution without starting a service or touching that path.
-  const previewPath = join(directory, "data-preview");
-  const preview = JSON.parse(
-    await runProcess("docker", [...prefix, "config", "--format", "json"], {
-      cwd: repository,
-      env: { ...env, DATA_PATH: previewPath },
-    }),
-  ) as ResolvedComposeConfiguration;
-  const previewMounts = preview.services?.app.volumes;
-  if (
-    previewMounts?.length !== 1 ||
-    previewMounts[0].type !== "bind" ||
-    !previewMounts[0].source ||
-    resolve(previewMounts[0].source) !== resolve(previewPath) ||
-    previewMounts[0].target !== "/data"
-  )
-    throw new Error("Custom storage did not resolve to the requested isolated directory.");
   controller.signal.throwIfAborted();
   started = true;
   await compose(
@@ -244,7 +228,9 @@ try {
     [join(repository, "node_modules/@playwright/test/cli.js"), "test", ...testArgs],
     {
       cwd: repository,
-      env,
+      // Credentials are supplied only to the browser test host. The server must
+      // begin without an administrator and initialize through its setup UI.
+      env: { ...env, ...administrator },
       inherit: true,
       timeoutMs: 15 * 60_000,
       signal: controller.signal,

@@ -15,33 +15,38 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.1.1 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.1`，支持 Linux `amd64` 和 `arm64`。
+只需 Docker Engine、Docker Compose 和一份 [v0.2.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.2.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.2.0`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v020-发布验收)。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml -o compose.yaml
-docker compose pull
-docker compose up -d --wait
-docker compose exec app cat /data/.initial-admin-password
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.2.0/compose.yaml -o compose.yaml
 ```
 
-打开 `http://localhost:3000`，使用 `admin` 和命令显示的初始密码登录，然后在“设置 → 登录安全”修改密码。初始密码文件在成功改密后删除；重启和升级不会重置已有管理员。
+Linux 首次部署时，在同一目录准备可由容器用户读写的数据目录：
 
-这份 Compose 不依赖其他仓库文件。镜像自带非 root 运行用户、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。发布与验证状态见[验证指南](docs/VERIFICATION.md#v011-发布验收)。
+```sh
+sudo install -d -o 1000 -g 1000 -m 0700 ./data
+```
 
-新数据库启动后是空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问通过 HTTPS 反向代理，保留浏览器访问的 Host，并启用 WebSocket Upgrade。无需配置域名环境变量，具体示例见[运维说明](docs/OPERATIONS.md#https-与访问)。
+Windows Docker Desktop 用户在该目录创建 `data` 文件夹，并通过宿主机 ACL 限制访问、允许 Docker 读写，无需运行上面的 Linux 命令。然后启动：
 
-日常只需按需调整端口和数据位置，可直接修改主 `compose.yaml` 的映射，也可使用可选的 `.env`：
+```sh
+docker compose pull
+docker compose up -d --wait
+```
 
-| 设置        | 默认值     | 用途                                                          |
-| ----------- | ---------- | ------------------------------------------------------------- |
-| `PORT`      | `3000`     | 宿主机端口；容器内仍使用 3000。                               |
-| `DATA_PATH` | `app-data` | 默认命名卷，或仓库之外的宿主目录，例如 `/opt/oci-dash-data`。 |
+打开 `http://localhost:3000`，在首次初始化页面填写管理员用户名、密码和确认密码，也可点击按钮生成并复制 32 位随机密码。创建成功后自动登录，初始化入口随即关闭；重启和升级不会重置已有管理员。
 
-默认命名卷与已有部署保持一致。自定义目录应位于源码和构建目录之外，避免将持久数据带入构建上下文。Linux 目录需允许容器的 UID/GID `1000:1000` 读写；已有数据必须先按[迁移步骤](docs/OPERATIONS.md#更换数据位置)完整复制，再切换位置。直接指向空目录会显示新面板。不要用 `docker compose down -v` 进行日常重启。
+**首次能访问初始化页面的人可以创建管理员。** 默认端口只绑定 `127.0.0.1`；远程服务器应先通过 SSH 隧道完成初始化，再开放公共 HTTPS 反向代理，见[访问说明](docs/OPERATIONS.md#https-与访问)。不需要额外的初始化令牌或必填环境变量。
 
-升级时下载目标版本的发布 Compose，或修改其中的固定镜像版本，再执行 `docker compose pull` 和 `docker compose up -d --wait`。保留原项目名、`app-data` 卷及 `DATA_PATH` 的实际位置；先完成[升级检查](docs/OPERATIONS.md#恢复与升级)。源码开发和本地构建使用独立的 `compose.build.yaml` 覆盖文件，见[贡献指南](CONTRIBUTING.md)。
+这份 Compose 不依赖其他仓库文件。镜像自带非 root 用户 `1000:1000`、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。新面板没有示例资源，添加账号后才会同步云资源。
+
+数据固定挂载为 `./data:/data`：宿主机的 `data` 位于 `compose.yaml` 所在目录，保存数据库和自动生成的 `.master-key`。移动 Compose 文件时必须一起迁移数据，不能把空目录当作原部署。日常只需按需在可选的 `.env` 中设置 `PORT=3001` 等宿主机端口；默认是 `3000`，容器内仍为 `3000`。
+
+**从旧命名卷部署升级**：先在旧配置下停机并完整备份原 `/data`，恢复到新的空 `./data`，核对权限后再切换挂载。直接替换 Compose 并挂载空目录会显示首次初始化页面，不会自动搬迁旧账号。步骤见[数据迁移](docs/OPERATIONS.md#从旧命名卷迁移到-data)。
+
+后续升级下载目标版本的发布 Compose，或修改其中的固定镜像版本，再执行 `docker compose pull` 和 `docker compose up -d --wait`。保留原项目名和实际数据目录，先完成[升级检查](docs/OPERATIONS.md#恢复与升级)。源码开发和本地构建使用独立的 `compose.build.yaml` 覆盖文件，见[贡献指南](CONTRIBUTING.md)。
 
 ## 连接 OCI 账号
 

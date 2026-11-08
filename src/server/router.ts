@@ -13,6 +13,8 @@ import {
   beginMfa,
   confirmMfa,
   disableMfa,
+  administratorSetupStatus,
+  setupAdministrator,
 } from "./auth";
 import { getDatabase, audit } from "./db";
 import { AppError, safeMessage } from "./errors";
@@ -42,6 +44,7 @@ import {
 import { ociAdapter } from "./oci/adapter";
 import { analyticsService } from "./analytics/service";
 import { cpuService } from "./analytics/cpu";
+import { assertInitialAdminSetupAvailable } from "./initial-admin";
 
 const metricsCache = new Map<
   string,
@@ -58,6 +61,21 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       return json({ ok: true, version: process.env.APP_VERSION ?? packageVersion });
     }
     if (!["GET", "HEAD"].includes(method)) assertSameOrigin(request);
+    if (method === "GET" && path === "auth/status") return json(administratorSetupStatus());
+    if (method === "POST" && path === "auth/setup") {
+      assertInitialAdminSetupAvailable(getDatabase());
+      const input = z
+        .object({
+          username: z.string().trim().min(1).max(80),
+          password: z.string().min(12).max(256),
+        })
+        .strict()
+        .parse(await readJson(request));
+      const result = setupAdministrator(input.username, input.password);
+      return json({ user: result.user }, 201, {
+        "Set-Cookie": sessionCookie(result.token, request),
+      });
+    }
     if (method === "POST" && path === "auth/login") {
       const input = z
         .object({

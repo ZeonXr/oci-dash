@@ -6,7 +6,12 @@ import { getDatabase, audit } from "./db";
 import { decryptSecret, encryptSecret, hashPassword, hashToken, verifyPassword } from "./crypto";
 import { AppError } from "./errors";
 import { assertRequestOrigin } from "./request-origin";
-import { clearInitialAdminPassword } from "./initial-admin";
+import {
+  assertInitialAdminSetupAvailable,
+  clearInitialAdminPassword,
+  createInitialAdminSession,
+  initialAdminState,
+} from "./initial-admin";
 
 export const SESSION_COOKIE = "oci_dash_session";
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -86,7 +91,7 @@ function limitLogin(subject: string): void {
         "INSERT INTO login_attempts(subject,count,window_start) VALUES(?,1,?) ON CONFLICT(subject) DO UPDATE SET count=1,window_start=excluded.window_start",
       ).run(subject, now);
     else db.prepare("UPDATE login_attempts SET count=count+1 WHERE subject=?").run(subject);
-  })();
+  }).immediate();
 }
 const totp = (secret: string, username: string) =>
   new OTPAuth.TOTP({
@@ -129,6 +134,24 @@ function verifyFactor(row: UserRow, code: string, consume = true): boolean {
     return true;
   })();
 }
+export function administratorSetupStatus(): { setupRequired: boolean } {
+  return { setupRequired: initialAdminState(getDatabase()) === "required" };
+}
+
+export function setupAdministrator(
+  username: string,
+  password: string,
+): { user: SessionUser; token: string } {
+  const db = getDatabase();
+  assertInitialAdminSetupAvailable(db);
+  // A separate subject bounds setup attempts without calling login after creating the user.
+  limitLogin(hashToken("initial-admin-setup"));
+  const result = createInitialAdminSession(db, username, password, SESSION_SECONDS);
+  if (!clearInitialAdminPassword(db.name))
+    console.warn("Initial administrator password file cleanup failed.");
+  return result;
+}
+
 export function login(
   username: string,
   password: string,
