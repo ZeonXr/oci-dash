@@ -15,14 +15,20 @@
 
 ## 快速部署
 
-只需 Docker Engine 和 Docker Compose，无需安装 Node.js 或创建 `.env`。请保留完整仓库结构：主 `compose.yaml` 自动继承 [deploy/compose.defaults.yaml](deploy/compose.defaults.yaml) 中的运行默认值，不能只复制主 YAML。在项目目录运行：
+只需 Docker Engine、Docker Compose 和一份 [v0.1.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.0`，发布目标平台为 Linux `amd64` 和 `arm64`。
+
+在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-docker compose up -d --build --wait
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml -o compose.yaml
+docker compose pull
+docker compose up -d --wait
 docker compose exec app cat /data/.initial-admin-password
 ```
 
 打开 `http://localhost:3000`，使用 `admin` 和命令显示的初始密码登录，然后在“设置 → 登录安全”修改密码。初始密码文件在成功改密后删除；重启和升级不会重置已有管理员。
+
+这份 Compose 不依赖其他仓库文件。镜像自带非 root 运行用户、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。发布与验证状态见[验证指南](docs/VERIFICATION.md#v010-发布验收)。
 
 新数据库启动后是空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问通过 HTTPS 反向代理，保留浏览器访问的 Host，并启用 WebSocket Upgrade。无需配置域名环境变量，具体示例见[运维说明](docs/OPERATIONS.md#https-与访问)。
 
@@ -34,6 +40,8 @@ docker compose exec app cat /data/.initial-admin-password
 | `DATA_PATH` | `app-data` | 默认命名卷，或仓库之外的宿主目录，例如 `/opt/oci-dash-data`。 |
 
 默认命名卷与已有部署保持一致。自定义目录应位于源码和构建目录之外，避免将持久数据带入构建上下文。Linux 目录需允许容器的 UID/GID `1000:1000` 读写；已有数据必须先按[迁移步骤](docs/OPERATIONS.md#更换数据位置)完整复制，再切换位置。直接指向空目录会显示新面板。不要用 `docker compose down -v` 进行日常重启。
+
+升级时下载目标版本的发布 Compose，或修改其中的固定镜像版本，再执行 `docker compose pull` 和 `docker compose up -d --wait`。保留原项目名、`app-data` 卷及 `DATA_PATH` 的实际位置；先完成[升级检查](docs/OPERATIONS.md#恢复与升级)。源码开发和本地构建使用独立的 `compose.build.yaml` 覆盖文件，见[贡献指南](CONTRIBUTING.md)。
 
 ## 连接 OCI 账号
 
@@ -78,4 +86,4 @@ OCI API 私钥和 MFA 秘密使用 AES-256-GCM 加密，管理员密码使用 sc
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。第三方依赖和素材保留各自的许可证与版权声明；旗帜素材的来源及许可见 [public/flags/README.md](public/flags/README.md)。
+本项目采用 [MIT License](LICENSE)，镜像内包含 `/app/LICENSE`。第三方依赖和素材保留各自的许可证与版权声明，包括采用 [MPL-2.0 的 noVNC](https://github.com/novnc/noVNC/blob/v1.7.0/LICENSE.txt)；其依赖源码与许可随镜像的 `node_modules/@novnc/novnc` 保留。旗帜素材的来源及许可见 [public/flags/README.md](public/flags/README.md)。

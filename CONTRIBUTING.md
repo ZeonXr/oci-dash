@@ -34,6 +34,14 @@ npm run worker
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
+发布用 `compose.yaml` 只拉取固定版本镜像，不包含构建配置。确需从源码启动开发容器时，在独立开发检出目录使用专用覆盖文件：
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
+```
+
+该命令构建 `oci-dash:local`。不要在生产部署目录运行它；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
+
 `scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
 
 PostCSS 插件列表使用静态 `postcss.config.json`，不需要可执行的 JavaScript 配置。
@@ -71,7 +79,7 @@ npm run build
 npm run test:e2e:isolated
 ```
 
-默认构建专用临时镜像。若刚完成 `docker build -t oci-dash:local .`，可用 `npm run test:e2e:isolated -- --no-build` 测试已有的 `oci-dash:local` 镜像。不要用过期镜像验证新源码。
+默认构建专用临时镜像。脚本将发布 Compose 单独复制到测试目录，再显式覆盖测试镜像与随机配置，验证它没有其他仓库文件依赖。若刚完成 `docker build -t oci-dash:local .`，可用 `npm run test:e2e:isolated -- --no-build` 测试已有的 `oci-dash:local` 镜像。不要用过期镜像验证新源码。
 
 运行时和备份检查需要先构建本地镜像。直接调用 Docker，不解析部署用 Compose 环境，也不要求存在 `.env`：
 
@@ -82,6 +90,8 @@ npm run test:backup
 ```
 
 浏览器安装、平台差异、已知基线和验收限制见[验证指南](docs/VERIFICATION.md)。真实 OCI 验收不属于上述自动化测试，必须另行选择隔离账号或资源，并记录操作范围与清理结果。
+
+发布以源码 tag 对应固定镜像版本和同版本的独立 `compose.yaml` 资产。`v0.1.0` 的目标平台为原生 Linux `amd64`、`arm64`；发布前需分别完成构建验证、镜像索引与匿名拉取检查，不能把工作流配置等同于已经通过。当前发布核对项见[发布验收](docs/VERIFICATION.md#v010-发布验收)。
 
 ## 提交与评审
 

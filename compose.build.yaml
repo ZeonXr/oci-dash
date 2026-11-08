@@ -1,0 +1,6 @@
+# Development only: docker compose -f compose.yaml -f compose.build.yaml up -d --build
+services:
+  app:
+    image: oci-dash:local
+    build: .
+    pull_policy: build

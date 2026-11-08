@@ -38,13 +38,13 @@ npm run test:backup
 npm run test:e2e:isolated -- --no-build
 ```
 
-`test:runtime` 为已构建的本地镜像创建独立临时容器和数据卷，不发布端口、禁用外部网络、不注入环境配置，也不传 Docker 的 `--init`。它验证镜像自带的 Tini 作为 PID 1、自动生成密钥和管理员、初始密码登录、文件权限、Web/Worker 故障后的整体重启、数据和密钥保留、失效心跳和正常停止，结束后清理本次资源。
+`test:runtime` 为已构建的本地镜像创建独立临时容器和数据卷，不发布端口、禁用外部网络、不注入环境配置，也不传 Docker 的 `--init` 或额外 `/tmp` 挂载。它检查镜像自带的 Tini 作为 PID 1、`TMPDIR=/dev/shm` 与 tmpfs 文件系统、自动生成密钥和管理员、初始密码登录、文件权限、Web/Worker 故障后的整体重启、数据和密钥保留、失效心跳和正常停止，结束后清理本次资源。
 
 `test:backup` 使用合成数据库验证命名卷及宿主目录的备份恢复，包括隐藏密钥、权限保留、含空格和逗号的路径、归档目标边界、原运行状态恢复和失败清理，不读取生产数据库。它不代替真实环境的异机恢复演练。
 
-`test:e2e:isolated` 使用独立的临时环境配置、Compose 项目、全新空数据卷、随机管理员凭据和随机 loopback 端口。浏览器 UI 样例只在 `tests/` 内拦截请求提供，不向运行中的应用数据库写入示例账号或资源。默认构建专用临时镜像；上例已构建 `oci-dash:local`，因此使用 `--no-build`。退出后清理本次容器、卷、临时配置和报告，以及脚本自行构建的镜像。它不复用部署目录中的生产 `.env` 或默认项目的数据卷。
+`test:e2e:isolated` 将发布用 `compose.yaml` 单独复制到临时目录，验证它无需其他仓库文件。测试再显式覆盖本地镜像和随机配置，使用独立 Compose 项目、全新空数据卷、随机管理员凭据和随机 loopback 端口。浏览器 UI 样例只在 `tests/` 内拦截请求提供，不向运行中的应用数据库写入示例账号或资源。默认构建专用临时镜像；上例已构建 `oci-dash:local`，因此使用 `--no-build`。退出后清理本次容器、卷、临时配置和报告，以及脚本自行构建的镜像。它不复用部署目录中的生产 `.env` 或默认项目的数据卷。
 
-脚本固定测试的 `DATA_PATH=app-data`，并核对主 Compose 继承的停止期限、临时目录、安全限制和日志驱动。自定义目录只进行独立路径的配置解析检查，不挂载或改写个人的数据目录。
+脚本固定测试的 `DATA_PATH=app-data`，并核对独立 Compose 中的停止期限、容器安全限制、日志驱动，以及没有额外 init 或 tmpfs 挂载。自定义目录只进行独立路径的配置解析检查，不挂载或改写个人的数据目录。
 
 清理失败时脚本返回非零并保留本次临时配置，便于根据输出的唯一项目名继续处理。不要用默认项目的 `down -v` 清理这些测试资源。
 
@@ -67,6 +67,17 @@ npm run test:e2e:isolated -- --no-build
 测试实现位于 `tests/`；接口与流程见[架构与 API](IMPLEMENTATION.md)。新增回归应覆盖用户可观察的行为或安全边界，不只重复内部实现。
 
 ## 已有基线
+
+### v0.1.0 发布验收
+
+源码 tag `v0.1.0` 对应固定镜像 `ghcr.io/zeonxr/oci-dash:v0.1.0` 和独立的 [compose.yaml 发布资产](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)。发布验收须独立核对以下证据，不能仅从工作流配置或下方历史基线推断结果：
+
+- 确认源码 tag 对应的提交，分别在原生 Linux `amd64`、`arm64` 环境完成构建及对应检查。
+- 确认镜像索引包含两个目标架构，且固定版本镜像可匿名拉取。
+- 在不含源码及个人配置的目录下载发布资产，执行 `docker compose pull`、`docker compose up -d --wait`，核对空数据初始化、健康状态和数据持久化。
+- 将实际提交、镜像摘要、平台与结果关联到 [GitHub Actions](https://github.com/ZeonXr/oci-dash/actions) 及对应 [GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.1.0)。发布镜像的结果应单独记录，不替代真实 OCI 写入验收。
+
+### 先前提交
 
 提交 [`8c39b07`](https://github.com/ZeonXr/oci-dash/commit/8c39b07) 在 **2026-11-08** 完成自动初始化部署验证，使用 Node.js `26.13.0`：
 

@@ -2,13 +2,17 @@ name: oci-dash
 
 services:
   app:
-    extends: { file: deploy/compose.defaults.yaml, service: app }
-    image: oci-dash:local
-    build: .
+    image: ghcr.io/zeonxr/oci-dash:v0.1.0
+    restart: unless-stopped
+    stop_grace_period: 35s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     ports:
-      - "127.0.0.1:${PORT:-3000}:3000"
+      - "127.0.0.1:${PORT:-3000}:30 00"
     volumes:
       - "${DATA_PATH:-app-data}:/data"
+    logging:
+      driver: local
 
 volumes:
   app-data:

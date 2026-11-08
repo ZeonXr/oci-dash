@@ -56,7 +56,7 @@ const composeFile = join(directory, "compose.json");
 const bindProject = `${project}-bind`;
 const bindComposeFile = join(directory, "bind-compose.json");
 const bindDirectory = join(directory, "bind data, with comma");
-const image = "oci-dash:local";
+const image = process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local";
 const controller = new AbortController();
 const cancel = () => controller.abort(new Error("Backup verification interrupted."));
 process.once("SIGINT", cancel);

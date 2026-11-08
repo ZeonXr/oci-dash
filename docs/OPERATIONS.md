@@ -1,10 +1,20 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，镜像为 `oci-dash:local`，默认数据卷为 `app-data`；可用 `DATA_PATH` 改为宿主目录，容器内数据库始终为 `/data/oci-dash.db`。开发环境说明见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.0`，默认数据卷为 `app-data`；可用 `DATA_PATH` 改为宿主目录，容器内数据库始终为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认无需 `.env`。主 `compose.yaml` 只保留镜像、构建、端口和数据挂载，并通过 `extends` 自动继承随源码分发的 [deploy/compose.defaults.yaml](../deploy/compose.defaults.yaml)。重启策略、停止期限、临时目录、安全设置和日志轮转由该文件提供；部署时保留完整仓库结构，不能只复制主 YAML。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.1.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+
+在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
+
+```sh
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml -o compose.yaml
+docker compose pull
+docker compose up -d --wait
+```
+
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v010-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中；日常仅需按需调整端口和数据位置。
 
 首次启动会生成管理员和加密密钥，后续启动复用已保存的数据：
 
@@ -106,7 +116,7 @@ docker compose logs --tail 100 app
 docker compose exec app node dist/health.mjs
 ```
 
-镜像使用 Tini 作为进程入口，处理信号转发与子进程回收；`node dist/runtime.mjs` 管理独立的 Web 和 Worker 进程，并提供 HTTP/WebSocket 网关。业务进程意外退出时，运行入口停止另一个进程并非零退出，交由继承的 `restart: unless-stopped` 重启容器。
+镜像使用 Tini 作为进程入口，处理信号转发与子进程回收；`node dist/runtime.mjs` 管理独立的 Web 和 Worker 进程，并提供 HTTP/WebSocket 网关。业务进程意外退出时，运行入口停止另一个进程并非零退出，交由 Compose 中的 `restart: unless-stopped` 重启容器。
 
 整体健康检查同时验证 Web、SQLite 和当前 Worker 心跳；`GET /api/health` 只检查 Web 与 SQLite。Docker 的 `unhealthy` 标记本身不会触发 Compose 重启策略。
 
@@ -145,7 +155,7 @@ docker compose up -d app
 
 全站同时一个会话，15 分钟无操作或达到 1 小时上限后断开。关闭页面、登出或服务重启会触发清理。应用仅删除与记录中的账号、实例和会话标签匹配的连接，已有外部控制台不会被删除。
 
-SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道记录本次主机密钥。Compose 将临时文件保存在 `/tmp` 的 tmpfs，正常断开删除，停止容器后不保留。
+SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道记录本次主机密钥。镜像设置 `TMPDIR=/dev/shm`，使用 Docker 默认私有 tmpfs（默认 64 MiB）保存 SSH 临时文件和运行状态；正常断开删除临时密钥，停止容器后内存文件系统不保留。无需额外挂载 `/tmp`。
 
 清理失败时保留全局会话占用和账号锁，并定时重试。404 仍需通过所属实例的连接列表确认消失；权限不足或创建结果不明时不能释放占用。先恢复 OCI 权限，再使用“重试断开”；不要通过删除数据库行绕过清理。
 
@@ -166,13 +176,17 @@ SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道�
 
 备份至少包括 `/data` 对应的完整命名卷或宿主目录、匹配版本的镜像或可重建源码，以及管理员恢复材料。持久数据包含 `.master-key`，应把归档视为可解密的敏感数据；加密存储不保护整个目录或卷泄露、主机失陷。数据库里的资源名称、IP、任务和统计报告不是全库加密。尚未迁移的旧部署还需单独保管原 `MASTER_KEY`。
 
-先结束活动任务和控制台会话。在部署目录运行备份脚本，输出必须是仓库之外、以 `.tar.gz` 结尾的新文件，不覆盖已有归档：
+只下载发布 Compose 的用户可以使用自己的 Docker 卷备份或宿主目录归档工具，不需要 Node.js。先结束活动任务和控制台会话，记录原运行状态，再执行 `docker compose stop app` 并确认已停止。完整归档挂载到 `/data` 的目录内容，包括数据库、WAL 等配套文件、隐藏的 `.master-key` 和仍存在的初始密码文件；保留所有者和权限。备份目标必须在源数据目录之外，同时保存对应版本的 Compose 及自己的可选配置。备份完成后，仅在原来运行时恢复 `docker compose start app`。
+
+源码仓库另提供自动处理停止、归档及原状态恢复的工具；它不包含在单份发布 Compose 中，也不是普通部署的前置条件。额外取得对应版本源码、Node.js `26.13.0` 和 Docker CLI 后，可显式选择已有部署执行，例如：
 
 ```sh
-npm run backup -- /absolute/path/outside-repository/oci-dash-data.tar.gz
+COMPOSE_FILE=/opt/oci-dash/compose.yaml \
+COMPOSE_PROJECT_NAME=oci-dash \
+node /opt/oci-dash-source/scripts/backup.ts /opt/backups/oci-dash-data.tar.gz
 ```
 
-脚本需要符合项目要求的 Node.js（建议 `26.13.0`）和可访问部署 Docker 的 CLI。也可直接运行 `node scripts/backup.ts <输出路径>`。它读取现有 Compose `app` 容器的不可变镜像，支持挂载到 `/data` 的命名卷和宿主目录；自定义容器内数据库路径不在此脚本范围内。使用自定义部署时，先正确设置 `COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`。归档目标须同时位于项目及源数据目录之外。
+将示例路径和项目名替换为实际部署；已有自定义项目名必须保留，不能指向开发项目。工具不需要重新构建或启动新镜像，也可在源码目录通过 `npm run backup -- <输出路径>` 调用，但仍须正确选择部署的 `COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`。它读取现有 `app` 容器的不可变镜像，支持 `/data` 的命名卷和宿主目录；自定义容器内数据库路径不在此工具范围内。输出必须是项目及源数据目录之外、以 `.tar.gz` 结尾的新文件，不覆盖已有归档。
 
 脚本停止应用后，以镜像内的 `node` 用户只读挂载原数据，将归档传给宿主机写入；宿主目录需要与应用运行时相同的读写权限，不通过 root 或自动修改所有者绕过权限。备份前应用正在运行才会在结束后恢复运行，原本停止的应用保持停止。
 
@@ -200,11 +214,13 @@ docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
 
 备份可能早于云操作实际完成时间。核对 OCI 状态、任务检查点和请求标识后，才在对应隔离项目启动完整应用。恢复本地数据不是云资源回滚。完整异机恢复演练的验证状态见[验证指南](VERIFICATION.md)。
 
-升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。完成适用检查后再执行：
+升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。
+
+从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。替换文件前核对并保留原项目名、服务名 `app`、默认 `app-data` 卷，以及原 `PORT`、`DATA_PATH` 和必要的高级覆盖配置；直接覆盖曾手动修改映射的文件可能改挂空数据位置。默认项目名保持 `oci-dash`，升级不要求移动数据或删除卷。完成适用检查后，在原部署目录执行：
 
 ```sh
-docker compose build app
-docker compose up -d app
+docker compose pull app
+docker compose up -d --wait app
 docker compose exec app node dist/health.mjs
 ```
 
@@ -224,7 +240,8 @@ services:
 核对没有待执行任务或活动控制台后，先带原密钥启动新镜像：
 
 ```sh
-docker compose -f compose.yaml -f compose.key-migration.yaml up -d --build --wait app
+docker compose -f compose.yaml -f compose.key-migration.yaml pull app
+docker compose -f compose.yaml -f compose.key-migration.yaml up -d --wait app
 docker compose exec app node dist/health.mjs
 ```
 
@@ -266,7 +283,7 @@ ORDER BY created_at;
 
 1. 先按旧版本支持的方式取得一致性备份；尚无 `app` 服务的旧配置不能直接运行当前备份脚本。
 2. 在旧配置下执行 `docker compose stop web worker`，确认两个服务停止。
-3. 更新代码，保留原项目名、数据卷和主密钥；原环境密钥按[迁移流程](#从环境变量主密钥迁移)显式注入。保留需要的可选覆盖配置，再构建、启动并检查 `app`。
+3. 采用对应版本的发布 Compose，保留原项目名、数据卷和主密钥；原环境密钥按[迁移流程](#从环境变量主密钥迁移)显式注入。保留需要的可选覆盖配置，再拉取镜像、启动并检查 `app`。
 4. 验证成功后执行 `docker compose up -d --remove-orphans app`，移除已停止的旧容器。
 
 默认卷通常名为 `oci-dash_app-data`。曾自定义项目名时必须确认实际卷，避免误连空卷；不要用 `down -v` 迁移。

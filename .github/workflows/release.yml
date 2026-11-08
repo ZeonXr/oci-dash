@@ -1,0 +1,308 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Serialize promotions so two releases cannot update latest at the same time.
+concurrency:
+  group: release-ghcr
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/zeonxr/oci-dash
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - name: Validate version and standalone deployment file
+        id: check
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const tag = process.env.RELEASE_TAG;
+          assert.match(tag, /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'Release tags must use vMAJOR.MINOR.PATCH');
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          assert.equal(tag, `v${pkg.version}`, 'Tag and package version must match');
+          assert.equal(lock.version, pkg.version, 'Lockfile version must match');
+          assert.equal(lock.packages[''].version, pkg.version, 'Lockfile root version must match');
+          const source = readFileSync('compose.yaml', 'utf8');
+          assert.doesNotMatch(source, /^\s*(?:build|extends|include|env_file)\s*:/m, 'Published Compose must work as a single downloaded file');
+          const env = { ...process.env, PORT: '3000', DATA_PATH: 'app-data', COMPOSE_PROJECT_NAME: 'oci-dash-release-check' };
+          delete env.COMPOSE_ENV_FILES;
+          delete env.COMPOSE_FILE;
+          const config = JSON.parse(execFileSync('docker', ['compose', '--env-file', '/dev/null', '--file', 'compose.yaml', 'config', '--format', 'json'], { encoding: 'utf8', env }));
+          assert.deepEqual(Object.keys(config.services), ['app']);
+          assert.equal(config.services.app.image, `${process.env.IMAGE}:${tag}`, 'Compose must pin this release image');
+          assert.equal(config.services.app.build, undefined);
+          assert.equal(config.services.app.environment?.PORT, undefined, 'Host port must not change the container listener');
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+          NODE
+
+  verify:
+    needs: metadata
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  images:
+    needs: [metadata, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+      OCI_DASH_TEST_IMAGE: oci-dash:release-test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - name: Build on the native architecture
+        run: |
+          docker build --pull --platform "$PLATFORM" --provenance=false \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+            --tag "$OCI_DASH_TEST_IMAGE" .
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OCI_DASH_TEST_IMAGE")" = "$PLATFORM"
+      - name: Verify this image before pushing it
+        run: npm run test:runtime
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push only the tested candidate and record its digest
+        run: |
+          candidate="$IMAGE:candidate-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          docker tag "$OCI_DASH_TEST_IMAGE" "$candidate"
+          docker push "$candidate"
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$candidate")"
+          [[ "$digest" =~ ^ghcr\.io/zeonxr/oci-dash@sha256:[a-f0-9]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/release-digests"
+          docker buildx imagetools inspect "$candidate" --raw > "$RUNNER_TEMP/candidate-manifest.json"
+          CANDIDATE_DIGEST="$digest" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const manifest = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'candidate-manifest.json'), 'utf8'));
+          let digest = process.env.CANDIDATE_DIGEST.split('@')[1];
+          if (manifest.manifests) {
+            // Some Docker image stores wrap even one platform in an OCI index.
+            assert.equal(manifest.manifests.length, 1);
+            const platform = manifest.manifests[0];
+            assert.equal(platform.platform?.os, 'linux');
+            assert.equal(platform.platform?.architecture, process.env.ARCH);
+            digest = platform.digest;
+          }
+          assert.match(digest, /^sha256:[a-f0-9]{64}$/);
+          writeFileSync(join(process.env.RUNNER_TEMP, 'release-digests', `${process.env.ARCH}.txt`), `${process.env.IMAGE}@${digest}\n`);
+          NODE
+          printf 'Tested candidate: `%s` (`%s`).\n' "$candidate" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release-digests/${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    needs: [metadata, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: write
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-digest-*
+          path: ${{ runner.temp }}/release-digests
+          merge-multiple: true
+      - name: Assemble and validate a candidate multi-architecture index
+        id: index
+        run: |
+          amd64="$(cat "$RUNNER_TEMP/release-digests/amd64.txt")"
+          arm64="$(cat "$RUNNER_TEMP/release-digests/arm64.txt")"
+          [[ "$amd64" =~ ^ghcr\.io/zeonxr/oci-dash@sha256:[a-f0-9]{64}$ ]]
+          [[ "$arm64" =~ ^ghcr\.io/zeonxr/oci-dash@sha256:[a-f0-9]{64}$ ]]
+          candidate_index="$IMAGE:candidate-index-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx imagetools create --tag "$candidate_index" "$amd64" "$arm64"
+          docker buildx imagetools inspect "$candidate_index" --raw > "$RUNNER_TEMP/release-index.json"
+          docker buildx imagetools inspect "$candidate_index" --format '{{json .Manifest}}' > "$RUNNER_TEMP/release-index-descriptor.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const index = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'release-index.json'), 'utf8'));
+          assert.equal(index.manifests.length, 2, 'Release must contain exactly the two tested architectures');
+          for (const arch of ['amd64', 'arm64']) {
+            const expected = readFileSync(join(process.env.RUNNER_TEMP, 'release-digests', `${arch}.txt`), 'utf8').trim().split('@')[1];
+            const entry = index.manifests.find(item => item.platform?.os === 'linux' && item.platform?.architecture === arch);
+            assert.equal(entry?.digest, expected, `${arch} must reference the image that passed runtime verification`);
+          }
+          const descriptor = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'release-index-descriptor.json'), 'utf8'));
+          assert.match(descriptor.digest, /^sha256:[a-f0-9]{64}$/);
+          appendFileSync(process.env.GITHUB_OUTPUT, `digest=${descriptor.digest}\n`);
+          NODE
+          printf 'Validated candidate index: `%s`.\n' "$candidate_index" >> "$GITHUB_STEP_SUMMARY"
+      - name: Decide whether this version may become latest
+        id: latest
+        run: |
+          status=unknown
+          if docker buildx imagetools inspect "$IMAGE:latest" --raw > "$RUNNER_TEMP/latest-index.json" 2> "$RUNNER_TEMP/latest-error.txt"; then
+            if docker pull --platform linux/amd64 "$IMAGE:latest" > /dev/null 2> "$RUNNER_TEMP/latest-error.txt"; then
+              if docker image inspect "$IMAGE:latest" --format '{{json .Config.Labels}}' > "$RUNNER_TEMP/latest-labels.json" 2> "$RUNNER_TEMP/latest-error.txt"; then
+                status=present
+              fi
+            fi
+          elif grep -Eq 'manifest unknown|no such manifest' "$RUNNER_TEMP/latest-error.txt" || grep -Fq "$IMAGE:latest: not found" "$RUNNER_TEMP/latest-error.txt"; then
+            status=absent
+          fi
+          LATEST_STATUS="$status" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          function version(value) {
+            if (typeof value !== 'string') return undefined;
+            const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
+            return match?.slice(1).map(value => BigInt(value));
+          }
+          const incoming = version(process.env.RELEASE_TAG);
+          assert.ok(incoming);
+          let promote = process.env.LATEST_STATUS === 'absent';
+          let reason = promote ? 'First release: latest does not exist.' : 'Existing latest version could not be determined; preserving latest.';
+          if (process.env.LATEST_STATUS === 'present') {
+            let previous;
+            try {
+              previous = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'latest-labels.json'), 'utf8'))?.['org.opencontainers.image.version'];
+            } catch { /* An unreadable version never authorizes replacing latest. */ }
+            const current = version(previous);
+            if (current) {
+              const differing = incoming.findIndex((value, index) => value !== current[index]);
+              promote = differing === -1 || incoming[differing] > current[differing];
+              reason = promote ? `${process.env.RELEASE_TAG} is at least ${previous}.` : `${process.env.RELEASE_TAG} is older than ${previous}; preserving latest.`;
+            }
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `promote=${promote}\n`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Latest promotion: ${promote}. ${reason}\n`);
+          console.log(`${promote ? '::notice::' : '::warning::'}${reason}`);
+          NODE
+      - name: Publish the validated immutable version
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" > "$RUNNER_TEMP/existing-version.txt" 2> "$RUNNER_TEMP/version-error.txt"; then
+            echo "::error::The versioned image already exists. Publish a new version instead of replacing it."
+            exit 1
+          fi
+          if ! grep -Eq 'manifest unknown|no such manifest' "$RUNNER_TEMP/version-error.txt" && ! grep -Fq "$IMAGE:$RELEASE_TAG: not found" "$RUNNER_TEMP/version-error.txt"; then
+            cat "$RUNNER_TEMP/version-error.txt" >&2
+            exit 1
+          fi
+          [[ "$INDEX_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker buildx imagetools create --tag "$IMAGE:$RELEASE_TAG" "$IMAGE@$INDEX_DIGEST"
+      - name: Publish the single-file deployment asset
+        env:
+          PROMOTE_LATEST: ${{ steps.latest.outputs.promote }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          提供 linux/amd64 和 linux/arm64 镜像，两种架构均已通过容器运行验证。
+
+          下载附件 compose.yaml，放入独立部署目录后运行 docker compose up -d。文件固定使用本版本镜像，不需要下载源码或其他 Compose 文件。
+
+          发布前已完成类型检查、单元测试、容器生命周期、备份恢复和浏览器检查。
+          NOTES
+          gh release create "$RELEASE_TAG" compose.yaml \
+            --verify-tag --title "OCI Dash $RELEASE_TAG" \
+            --latest="$PROMOTE_LATEST" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: Promote the verified version to latest
+        if: steps.latest.outputs.promote == 'true'
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$INDEX_DIGEST"
+      - name: Record candidate images for deliberate cleanup
+        if: always()
+        run: |
+          {
+            echo '### Candidate image cleanup'
+            echo 'No package versions are deleted automatically. Released multi-architecture indexes reference these platform digests: deleting a candidate package version can break a released image, even when that version only displays a candidate tag. Review only failed or unpublished candidates for deliberate cleanup, after checking that no release references them.'
+            echo 'Published candidate digests:'
+            for arch in amd64 arm64; do
+              if [[ -f "$RUNNER_TEMP/release-digests/$arch.txt" ]]; then
+                cat "$RUNNER_TEMP/release-digests/$arch.txt"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-public:
+    needs: [metadata, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      OCI_DASH_RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - name: Verify the public image and downloaded standalone deployment
+        run: npm run test:release

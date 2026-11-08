@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const runId = randomUUID();
 const name = `oci-dash-runtime-test-${runId}`;
 const volume = `${name}-data`;
-const image = "oci-dash:local";
+const image = process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local";
 
 function docker(...args: string[]): string {
   return execFileSync("docker", args, {
@@ -58,7 +58,9 @@ function inspect(): ContainerState {
 const restarts = (): number => Number(docker("inspect", "--format", "{{.RestartCount}}", name));
 function runtime(): RuntimeIdentity {
   const value = parseObject(
-    execute("console.log(require('node:fs').readFileSync('/tmp/oci-dash-runtime.json','utf8'))"),
+    execute(
+      "console.log(require('node:fs').readFileSync(require('node:path').join(require('node:os').tmpdir(),'oci-dash-runtime.json'),'utf8'))",
+    ),
     "Runtime identity",
   );
   assert.ok(positiveInteger(value.webPid), "Runtime Web PID must be a positive integer");
@@ -123,8 +125,6 @@ try {
     "unless-stopped",
     "--stop-timeout",
     "35",
-    "--tmpfs",
-    "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
     "--security-opt",
     "no-new-privileges:true",
     "--cap-drop",
@@ -139,6 +139,13 @@ try {
     execute("console.log(require('node:fs').readFileSync('/proc/1/comm','utf8').trim())"),
     "tini",
     "The image must provide its own PID 1 without Docker's --init flag",
+  );
+  assert.equal(
+    execute(
+      "const a=require('node:assert/strict'),f=require('node:fs'),o=require('node:os');a.equal(o.tmpdir(),'/dev/shm');a.equal(Number(f.statfsSync(o.tmpdir()).type),0x01021994);console.log('ok')",
+    ),
+    "ok",
+    "Temporary runtime and SSH files must use the container's built-in memory filesystem",
   );
   const admin = accountIdentity();
   const initialization = initializationIdentity();

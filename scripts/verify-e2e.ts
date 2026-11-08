@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,9 @@ interface VerificationEnvironment {
 }
 
 interface ResolvedComposeService {
+  image?: string;
+  build?: unknown;
+  extends?: unknown;
   init?: boolean;
   restart?: string;
   stop_grace_period?: string;
@@ -62,10 +65,11 @@ if (args.includes("--help")) {
 const noBuild = args.includes("--no-build");
 const testArgs = args.filter((arg) => arg !== "--no-build" && arg !== "--");
 const project = `oci-dash-e2e-${randomUUID()}`;
-const image = noBuild ? "oci-dash:local" : `${project}:local`;
+const image = noBuild ? process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local" : `${project}:local`;
 mkdirSync(base, { recursive: true });
 const directory = mkdtempSync(join(base, "e2e-"));
 const envFile = join(directory, "test.env");
+const composeFile = join(directory, "compose.yaml");
 const override = join(directory, "compose.json");
 
 async function unusedPort(): Promise<number> {
@@ -91,6 +95,8 @@ let compose: ComposeCommand | undefined;
 let started = false;
 let failure: unknown;
 try {
+  // A copied deployment file must work without adjacent source or inherited files.
+  copyFileSync(join(repository, "compose.yaml"), composeFile);
   const port = await unusedPort();
   const values: VerificationEnvironment = {
     ADMIN_USERNAME: project.slice("oci-dash-".length),
@@ -115,6 +121,8 @@ try {
       services: {
         app: {
           image,
+          ...(noBuild ? {} : { build: { context: repository } }),
+          pull_policy: "never",
           restart: "no",
           environment: {
             ADMIN_USERNAME: values.ADMIN_USERNAME,
@@ -136,18 +144,18 @@ try {
     E2E_ISOLATED_RUN: project,
     E2E_OUTPUT_DIR: join(directory, "results"),
   };
-  // Explicit files, environment and project avoid loading a checkout's personal .env
-  // or Compose overrides. The base service definition remains the one shipped to users.
+  // Explicit files, environment and project avoid the checkout's personal .env
+  // or overrides. Only the release Compose is copied into the isolated directory.
   const prefix = [
     "compose",
     "--project-directory",
-    repository,
+    directory,
     "--env-file",
     envFile,
     "--project-name",
     project,
     "--file",
-    join(repository, "compose.yaml"),
+    composeFile,
     "--file",
     override,
   ];
@@ -180,7 +188,7 @@ try {
     service.environment?.DATA_PATH !== undefined ||
     service.init === true ||
     service.stop_grace_period !== "35s" ||
-    !service.tmpfs?.includes("/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777") ||
+    (service.tmpfs?.length ?? 0) !== 0 ||
     !service.security_opt?.includes("no-new-privileges:true") ||
     !service.cap_drop?.includes("ALL") ||
     service.logging?.driver !== "local" ||
