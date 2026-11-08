@@ -449,6 +449,66 @@ test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
   await capture(page, testInfo, "instance-overview");
 });
 
+test("实例监控摘要分别采用有效采样并按区间计算网络平均速率", async ({ page }) => {
+  const timestamp = (minute: number) => new Date(Date.UTC(2026, 10, 9, 12, minute)).toISOString();
+  await page.route("**/api/instances/fixture-instance-1/metrics?**", async (route) => {
+    const range = new URL(route.request().url()).searchParams.get("range");
+    await route.fulfill({
+      json: {
+        available: true,
+        source: "oci",
+        intervalSeconds: range === "24h" ? 300 : range === "7d" ? 3600 : 60,
+        points: [
+          { timestamp: timestamp(0), cpu: 15, receivedBytes: null, sentBytes: null },
+          { timestamp: timestamp(1), cpu: null, receivedBytes: 75_000_000, sentBytes: null },
+          { timestamp: timestamp(2), cpu: null, receivedBytes: null, sentBytes: 150_000_000 },
+        ],
+      },
+    });
+  });
+  await instancePage(page);
+  const card = (label: string) =>
+    page.locator(".metric-card").filter({ has: page.getByText(label, { exact: true }) });
+  await expect(card("CPU 使用率").locator(".metric-value")).toHaveText("15%");
+  await expect(card("网络接收").locator(".metric-value")).toHaveText("10 Mbps");
+  await expect(card("网络发送").locator(".metric-value")).toHaveText("20 Mbps");
+  await expect(card("网络接收").locator(".metric-note")).toContainText("1 分钟平均");
+  await page.getByLabel("监控时间范围").selectOption("24h");
+  await expect(card("CPU 使用率").locator(".metric-value")).toHaveText("15%");
+  await expect(card("网络接收").locator(".metric-value")).toHaveText("2 Mbps");
+  await expect(card("网络发送").locator(".metric-value")).toHaveText("4 Mbps");
+  await expect(card("网络接收").locator(".metric-note")).toContainText("5 分钟平均");
+});
+
+test("离开实例监控时取消无人使用的查询", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requested = false,
+    aborted = false;
+  const path = "/api/instances/fixture-instance-1/metrics";
+  page.on("requestfailed", (request) => {
+    if (new URL(request.url()).pathname === path) aborted = true;
+  });
+  await page.route(`**${path}?**`, async (route) => {
+    requested = true;
+    await gate;
+    await route.fulfill({
+      json: { points: [], intervalSeconds: 60, available: false, source: "oci" },
+    });
+  });
+  try {
+    await instancePage(page);
+    await expect.poll(() => requested).toBe(true);
+    await page.getByRole("tab", { name: "网络", exact: true }).click();
+    await expect.poll(() => aborted).toBe(true);
+    await expect(page.getByRole("tabpanel")).toBeVisible();
+  } finally {
+    release();
+  }
+});
+
 test("公网地址保护", async ({ page }, testInfo) => {
   await instancePage(page);
   await test.step("网络详情展示完整绑定与保护标记", async () => {

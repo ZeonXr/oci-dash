@@ -1,6 +1,7 @@
 import type {
   AccountSummary,
   CreateOptions,
+  CreateOptionsSelection,
   InstanceSummary,
   InventoryDetailCoverage,
   InventoryResult,
@@ -369,23 +370,37 @@ export async function getCreateOptions(
   clients: OciClients,
   credentials: OciCredentials,
   requestedCompartment?: string,
+  requested: CreateOptionsSelection = {},
 ): Promise<CreateOptions> {
   const available = await compartments(clients, credentials);
   const compartmentId = requestedCompartment ?? credentials.tenancyId;
   requireCompartment(compartmentId, available);
-  const [domains, shapes, images, subnets] = await Promise.all([
+  const [domains, subnets] = await Promise.all([
     allPages(clients.identity, "listAvailabilityDomains", { compartmentId: credentials.tenancyId }),
-    allPages(clients.compute, "listShapes", { compartmentId }),
-    allPages(clients.compute, "listImages", {
-      compartmentId,
-      lifecycleState: "AVAILABLE",
-      sortBy: "TIMECREATED",
-      sortOrder: "DESC",
-    }),
     allPages(clients.network, "listSubnets", { compartmentId, lifecycleState: "AVAILABLE" }),
   ]);
+  const availabilityDomains = domains.map((domain) => domain.name as string);
+  const availabilityDomain = requested.availabilityDomain ?? availabilityDomains[0] ?? "";
+  if (availabilityDomain && !availabilityDomains.includes(availabilityDomain))
+    throw new CloudError("该区域不存在所选可用域", "VALIDATION_ERROR");
+  const shapes = availabilityDomain
+    ? await allPages(clients.compute, "listShapes", { compartmentId, availabilityDomain })
+    : [];
+  const shape = requested.shape ?? shapes[0]?.shape ?? "";
+  if (shape && !shapes.some((candidate) => candidate.shape === shape))
+    throw new CloudError("该可用域不支持所选实例规格", "VALIDATION_ERROR");
+  const images = shape
+    ? await allPages(clients.compute, "listImages", {
+        compartmentId,
+        shape,
+        lifecycleState: "AVAILABLE",
+        sortBy: "TIMECREATED",
+        sortOrder: "DESC",
+      })
+    : [];
   return {
-    availabilityDomains: domains.map((d) => d.name),
+    selection: { compartmentId, availabilityDomain, shape },
+    availabilityDomains,
     compartments: available,
     shapes: [...new Map(shapes.map((s) => [s.shape, s])).values()].map((s) => ({
       name: s.shape,
@@ -401,7 +416,11 @@ export async function getCreateOptions(
       id: i.id,
       name: i.displayName ?? `${i.operatingSystem} ${i.operatingSystemVersion}`,
     })),
-    subnets: subnets.map((s) => ({ id: s.id, name: `${s.displayName ?? s.id} (${s.cidrBlock})` })),
+    subnets: subnets
+      .filter(
+        (subnet) => !subnet.availabilityDomain || subnet.availabilityDomain === availabilityDomain,
+      )
+      .map((s) => ({ id: s.id, name: `${s.displayName ?? s.id} (${s.cidrBlock})` })),
   };
 }
 
@@ -467,15 +486,24 @@ export async function getMetrics(
   snapshot: InstanceSummary,
   range: "1h" | "24h" | "7d",
   now: number,
+  signal?: AbortSignal,
 ): Promise<MetricsResult> {
-  const { instance } = await invoke(clients.compute, "getInstance", {
-    instanceId: ocid(snapshot.id, "instance"),
-  });
-  requireCompartment(instance.compartmentId, await compartments(clients, credentials));
+  const [response, available] = await Promise.allSettled([
+    invoke(clients.compute, "getInstance", { instanceId: ocid(snapshot.id, "instance") }),
+    compartments(clients, credentials),
+  ]);
+  if (response.status === "rejected") throw response.reason;
+  if (available.status === "rejected") throw available.reason;
+  const instance = response.value.instance;
+  if (!instance || instance.id !== snapshot.id)
+    throw new CloudError("实例监控归属不一致", "RESOURCE_MISMATCH");
+  requireCompartment(instance.compartmentId, available.value);
   const duration = { "1h": 3600000, "24h": 86400000, "7d": 604800000 }[range];
   if (!duration) throw new CloudError("指标时间范围不正确", "VALIDATION_ERROR");
   const interval = range === "1h" ? "1m" : range === "24h" ? "5m" : "1h";
+  const intervalSeconds = range === "1h" ? 60 : range === "24h" ? 300 : 3600;
   const points = new Map<string, MetricPoint>();
+  const networkCoverage = new Map<string, { receivedBytes: Set<string>; sentBytes: Set<string> }>();
   const notes = new Set<string>();
   const collect = async (
     namespace: string,
@@ -511,43 +539,75 @@ export async function getMetrics(
           };
           point[field] = additive ? (point[field] ?? 0) + sample.value : sample.value;
           points.set(timestamp, point);
+          if (field !== "cpu") {
+            const coverage = networkCoverage.get(timestamp) ?? {
+              receivedBytes: new Set<string>(),
+              sentBytes: new Set<string>(),
+            };
+            coverage[field].add(id);
+            networkCoverage.set(timestamp, coverage);
+          }
           count++;
         }
       return count;
     } catch {
+      if (signal?.aborted) throw new CloudError("指标查询已取消", "CANCELLED");
       notes.add("部分 OCI 指标不可读或尚未提供数据");
       return 0;
     }
   };
-  const cpuCount = await collect(
-    "oci_computeagent",
-    "CpuUtilization",
-    instance.id,
-    "cpu",
-    instance.compartmentId,
-  );
-  if (!cpuCount) notes.add("CPU 指标需要实例的 OCI 监控代理提供数据");
   // VNIC counters come from OCI networking; no host agent or fabricated memory percentage is needed.
   const vnics = await attachedVnics(clients, instance);
-  for (const vnic of vnics) {
-    await collect(
-      "oci_vcn",
-      "VnicFromNetworkBytes",
-      vnic.id,
-      "receivedBytes",
-      vnic.compartmentId ?? instance.compartmentId,
-      true,
-    );
-    await collect(
-      "oci_vcn",
-      "VnicToNetworkBytes",
-      vnic.id,
-      "sentBytes",
-      vnic.compartmentId ?? instance.compartmentId,
-      true,
-    );
+  await mapInventory(
+    [
+      async () => {
+        const count = await collect(
+          "oci_computeagent",
+          "CpuUtilization",
+          instance.id,
+          "cpu",
+          instance.compartmentId,
+        );
+        if (!count) notes.add("CPU 指标需要实例的 OCI 监控代理提供数据");
+      },
+      ...vnics.flatMap((vnic) => [
+        () =>
+          collect(
+            "oci_vcn",
+            "VnicFromNetworkBytes",
+            vnic.id,
+            "receivedBytes",
+            vnic.compartmentId ?? instance.compartmentId,
+            true,
+          ),
+        () =>
+          collect(
+            "oci_vcn",
+            "VnicToNetworkBytes",
+            vnic.id,
+            "sentBytes",
+            vnic.compartmentId ?? instance.compartmentId,
+            true,
+          ),
+      ]),
+    ],
+    4,
+    async (read) => {
+      await read();
+    },
+    signal,
+  );
+  for (const point of points.values()) {
+    const coverage = networkCoverage.get(point.timestamp);
+    for (const field of ["receivedBytes", "sentBytes"] as const) {
+      if (point[field] !== null && coverage?.[field].size !== vnics.length) {
+        point[field] = null;
+        notes.add("部分网卡采样缺失，未将不完整的网络合计视作完整流量");
+      }
+    }
   }
   return {
+    intervalSeconds,
     points: [...points.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
     available: points.size > 0,
     source: "oci",

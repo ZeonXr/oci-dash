@@ -269,7 +269,8 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
       if (method === "GET" && detail) {
         const instance = state.rows.find((row) => row.id === decodeURIComponent(detail[1]));
         if (!instance) return json({ error: "Fixture instance not found" }, 404);
-        if (detail[2] === "metrics") return json({ points: [], available: false, source: "oci" });
+        if (detail[2] === "metrics")
+          return json({ points: [], intervalSeconds: 60, available: false, source: "oci" });
         if (detail[2] === "security") return json({ groups: [] });
         return json({ instance });
       }

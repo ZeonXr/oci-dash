@@ -460,6 +460,41 @@ describe("MFA activation, replay and recovery", () => {
     expect(row.mfa_secret).toBeNull();
     expect(JSON.parse(row.recovery_codes)).toEqual([]);
   });
+  it("rejects a TOTP already consumed by login before disabling MFA", async () => {
+    const current = loggedIn(),
+      setup = await beginMfa(current.user, PASSWORD);
+    confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
+    const usedCode = otp(setup.secret);
+    login(USERNAME, PASSWORD, usedCode);
+    expect(() => disableMfa(current.user, PASSWORD, usedCode, hashToken(current.token))).toThrow();
+    expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(true);
+    vi.setSystemTime(new Date(Date.now() + 30000));
+    disableMfa(current.user, PASSWORD, otp(setup.secret), hashToken(current.token));
+    expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
+  });
+  it.each(["totp", "recovery"])(
+    "rolls back %s consumption when MFA session revocation fails",
+    async (factor) => {
+      const current = loggedIn(),
+        setup = await beginMfa(current.user, PASSWORD);
+      const codes = confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
+      const db = getDatabase();
+      const code = factor === "totp" ? otp(setup.secret) : codes[0];
+      const before = db.prepare("SELECT mfa_secret,recovery_codes,last_otp_step FROM users").get();
+      db.exec(`CREATE TRIGGER reject_session_revocation BEFORE DELETE ON sessions
+        BEGIN SELECT RAISE(ABORT, 'synthetic revocation failure'); END`);
+      expect(() => disableMfa(current.user, PASSWORD, code)).toThrow(
+        "synthetic revocation failure",
+      );
+      expect(db.prepare("SELECT mfa_secret,recovery_codes,last_otp_step FROM users").get()).toEqual(
+        before,
+      );
+      expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(true);
+      db.exec("DROP TRIGGER reject_session_revocation");
+      disableMfa(current.user, PASSWORD, code, hashToken(current.token));
+      expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
+    },
+  );
 });
 
 describe("credential storage, account revisions and jobs", () => {

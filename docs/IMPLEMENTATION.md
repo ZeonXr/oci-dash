@@ -13,6 +13,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 | `src/server/oci/`                              | SDK 客户端、范围校验、库存读取和资源操作。       |
 | `src/server/jobs/`                             | 持久队列、租约、资源锁、检查点和 Worker。        |
 | `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。            |
+| `src/server/instance-metrics.ts`               | 单实例监控的共享请求、取消、期限与缓存。         |
 | `src/server/console/`                          | VNC 会话、OCI 控制台、SSH 和 WebSocket。         |
 | `src/runtime.ts`、`src/health.ts`              | 容器进程管理、统一网关和整体健康检查。           |
 | `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。               |
@@ -25,7 +26,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.3.0`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.3.1`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
 
 镜像以 UID/GID `1000:1000` 的 `node` 用户运行，Tini 作为 PID 1；Compose 保留 35 秒停止期限、容器级 `no-new-privileges:true`、`cap_drop: ALL` 和 `local` 日志驱动。Linux 数据目录由部署者预先创建并赋权，Windows Docker Desktop 使用宿主 ACL；入口不以 root 运行或自动更改所有者。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
@@ -69,38 +70,38 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 业务 API 使用 JSON；错误通常为 `{error,code}`。除健康检查、首次初始化状态与提交、登录和允许清除过期会话的注销接口外，均要求登录。首次初始化提交仅在未初始化的空数据库中开放；非 GET/HEAD 请求还要求同源。响应不再包含 `demo` 字段；统计与指标的 `source` 只允许 `oci`。
 
-| 方法与路径                                              | 请求或响应要点                                                                                                                                 |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/health`                                       | Web 与 SQLite 可用性；不代替 Worker 健康检查。                                                                                                 |
-| `GET /api/auth/status`                                  | `{setupRequired}`；只返回是否需要首次初始化，不返回账号或凭据。                                                                                |
-| `POST /api/auth/setup`                                  | `{username,password}`；用户名 1–80 字符、密码 12–256 字符；成功返回 `{user}`、HTTP 201 并设置会话 Cookie。已初始化时拒绝，确认密码由页面校验。 |
-| `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user}` 并设置会话 Cookie。                                                                                 |
-| `GET /api/auth/me`、`POST /api/auth/logout`             | 当前会话；注销会撤销 Cookie 对应会话。                                                                                                         |
-| `GET /api/accounts`                                     | `{accounts,syncJobs}`；每账号当前或最近同步任务。                                                                                              |
-| `POST /api/accounts`                                    | `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}`；原子保存并返回 `{account,job}`，HTTP 201。                                |
-| `PATCH /api/accounts/:id`                               | 修改名称、区域或替换凭据；通常返回 `{account,job?}`。                                                                                          |
-| `DELETE /api/accounts/:id`                              | 移除本地配置，不删除云资源；活动任务或控制台清理可阻止移除。                                                                                   |
-| `POST /api/accounts/:id/sync`                           | 创建或复用持久同步，返回 `{job}`，HTTP 202。                                                                                                   |
-| `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                                                         |
-| `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`；返回 `CreateOptions`。                                                                                         |
-| `GET /api/instances`、`GET /api/instances/:id`          | `{instances}` 或 `{instance}`，ID 需要 URL 编码。                                                                                              |
-| `POST /api/inventory/refresh`                           | `mode` 为 `auto` 或 `manual`，可附 `accountIds` 数组；返回任务和各账号的新鲜度/退避状态。                                                      |
-| `GET /api/instances/:id/metrics`                        | `range` 可选 `1h`、`24h`、`7d`，返回 `MetricsResult`。                                                                                         |
-| `GET /api/instances/:id/security`                       | `{groups}`。                                                                                                                                   |
-| `GET /api/dashboard`                                    | 资源总量和近期活动的 `DashboardData`；图表总览使用下列统计接口。                                                                               |
-| `GET/POST /api/analytics/traffic`                       | 流量报告；POST 刷新相同 URL 查询范围。                                                                                                         |
-| `GET/POST /api/analytics/costs`                         | 费用报告；按币种分开。                                                                                                                         |
-| `GET/POST /api/analytics/cpu`                           | 仅可选 `accountId`，固定最近 24 个完整 UTC 小时。                                                                                              |
-| `POST /api/operations`                                  | `OperationRequest` → `{job}`，HTTP 202。                                                                                                       |
-| `GET /api/jobs`                                         | 分页查询，返回 `{jobs,total,page,pageSize}`；查询参数见下方。                                                                                  |
-| `GET /api/jobs?active=true`                             | `{jobs,recentJobs}`；`jobs` 为全部活动任务及等待后续同步的父任务；`recentJobs` 保留最近 100 条手动任务供实例恢复操作提示。                     |
-| `GET /api/jobs/:id`                                     | `{job,events}`；读取单个持久任务及事件。                                                                                                       |
-| `POST /api/jobs/:id/cancel`、`POST /api/jobs/:id/retry` | 请求取消或继续现有任务。                                                                                                                       |
-| `GET /api/settings`                                     | `{username,mfaEnabled,version,worker}`。                                                                                                       |
-| `POST /api/settings/password`                           | `{currentPassword,newPassword}`；成功后撤销全部登录会话。                                                                                      |
-| `POST /api/settings/mfa/setup`                          | `{password}` → 临时验证器配置。                                                                                                                |
-| `POST /api/settings/mfa/confirm`                        | `{code}` → 一次性展示恢复码，撤销其他登录会话。                                                                                                |
-| `POST /api/settings/mfa/disable`                        | `{password,code}`；需验证密码及验证码/恢复码。                                                                                                 |
+| 方法与路径                                              | 请求或响应要点                                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/health`                                       | Web 与 SQLite 可用性；不代替 Worker 健康检查。                                                                                                   |
+| `GET /api/auth/status`                                  | `{setupRequired}`；只返回是否需要首次初始化，不返回账号或凭据。                                                                                  |
+| `POST /api/auth/setup`                                  | `{username,password}`；用户名 1–80 字符、密码 12–256 字符；成功返回 `{user}`、HTTP 201 并设置会话 Cookie。已初始化时拒绝，确认密码由页面校验。   |
+| `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user}` 并设置会话 Cookie。                                                                                   |
+| `GET /api/auth/me`、`POST /api/auth/logout`             | 当前会话；注销会撤销 Cookie 对应会话。                                                                                                           |
+| `GET /api/accounts`                                     | `{accounts,syncJobs}`；每账号当前或最近同步任务。                                                                                                |
+| `POST /api/accounts`                                    | `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}`；原子保存并返回 `{account,job}`，HTTP 201。                                  |
+| `PATCH /api/accounts/:id`                               | 修改名称、区域或替换凭据；通常返回 `{account,job?}`。                                                                                            |
+| `DELETE /api/accounts/:id`                              | 移除本地配置，不删除云资源；活动任务或控制台清理可阻止移除。                                                                                     |
+| `POST /api/accounts/:id/sync`                           | 创建或复用持久同步，返回 `{job}`，HTTP 202。                                                                                                     |
+| `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                                                           |
+| `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`、`availabilityDomain`、`shape`；按可用域筛选规格、按规格筛选镜像，返回包含已确认 `selection` 的 `CreateOptions`。 |
+| `GET /api/instances`、`GET /api/instances/:id`          | `{instances}` 或 `{instance}`，ID 需要 URL 编码。                                                                                                |
+| `POST /api/inventory/refresh`                           | `mode` 为 `auto` 或 `manual`，可附 `accountIds` 数组；返回任务和各账号的新鲜度/退避状态。                                                        |
+| `GET /api/instances/:id/metrics`                        | `range` 可选 `1h`、`24h`、`7d`，返回含 `intervalSeconds` 的 `MetricsResult`；20 秒总期限，相同查询共享执行。                                     |
+| `GET /api/instances/:id/security`                       | `{groups}`。                                                                                                                                     |
+| `GET /api/dashboard`                                    | 资源总量和近期活动的 `DashboardData`；图表总览使用下列统计接口。                                                                                 |
+| `GET/POST /api/analytics/traffic`                       | 流量报告；POST 刷新相同 URL 查询范围。                                                                                                           |
+| `GET/POST /api/analytics/costs`                         | 费用报告；按币种分开。                                                                                                                           |
+| `GET/POST /api/analytics/cpu`                           | 仅可选 `accountId`，固定最近 24 个完整 UTC 小时。                                                                                                |
+| `POST /api/operations`                                  | `OperationRequest` → `{job}`，HTTP 202。                                                                                                         |
+| `GET /api/jobs`                                         | 分页查询，返回 `{jobs,total,page,pageSize}`；查询参数见下方。                                                                                    |
+| `GET /api/jobs?active=true`                             | `{jobs,recentJobs}`；`jobs` 为全部活动任务及等待后续同步的父任务；`recentJobs` 保留最近 100 条手动任务供实例恢复操作提示。                       |
+| `GET /api/jobs/:id`                                     | `{job,events}`；读取单个持久任务及事件。                                                                                                         |
+| `POST /api/jobs/:id/cancel`、`POST /api/jobs/:id/retry` | 请求取消或继续现有任务。                                                                                                                         |
+| `GET /api/settings`                                     | `{username,mfaEnabled,version,worker}`。                                                                                                         |
+| `POST /api/settings/password`                           | `{currentPassword,newPassword}`；成功后撤销全部登录会话。                                                                                        |
+| `POST /api/settings/mfa/setup`                          | `{password}` → 临时验证器配置。                                                                                                                  |
+| `POST /api/settings/mfa/confirm`                        | `{code}` → 一次性展示恢复码，撤销其他登录会话。                                                                                                  |
+| `POST /api/settings/mfa/disable`                        | `{password,code}`；需验证密码及验证码/恢复码。                                                                                                   |
 
 具体 DTO 与校验以 [contracts.ts](../src/lib/contracts.ts)、[validation.ts](../src/server/validation.ts)、[analytics-contracts.ts](../src/lib/analytics-contracts.ts) 和 [cpu-contracts.ts](../src/lib/cpu-contracts.ts) 为准。统计口径见[统计说明](ANALYTICS.md)。GET 可能更新本地读取缓存，但不会提交实例或网络写操作。
 

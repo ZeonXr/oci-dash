@@ -10,7 +10,13 @@ export class ApiError extends Error {
     super(message);
   }
 }
-const reads = new Map<string, Promise<unknown>>();
+interface ResourceRead {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  subscribers: number;
+  settled: boolean;
+}
+const reads = new Map<string, ResourceRead>();
 export async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...options,
@@ -35,7 +41,9 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
     ].includes(url)
   ) {
     // A new login must never subscribe to an earlier login's pending request.
+    const previous = [...reads.values()];
     reads.clear();
+    for (const read of previous) read.controller.abort();
   }
   return body as T;
 }
@@ -44,19 +52,48 @@ export const send = <T>(url: string, body: unknown = {}, method = "POST") =>
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "请求未完成，请稍后重试。";
 
-/** Coalesce concurrent reads across components; retain no response after completion. */
-function readResource<T>(url: string): Promise<T> {
-  let request = reads.get(url);
-  if (!request) {
-    request = api<T>(url, { signal: AbortSignal.timeout(30_000), cache: "no-store" });
-    reads.set(url, request);
-    void request
-      .finally(() => {
-        if (reads.get(url) === request) reads.delete(url);
+/** Share pending reads; abort only when the last consumer leaves and retain no completed response. */
+export function readResource<T>(url: string) {
+  let read = reads.get(url);
+  if (!read) {
+    const controller = new AbortController();
+    const created: ResourceRead = {
+      controller,
+      subscribers: 0,
+      settled: false,
+      promise: api<unknown>(url, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+        cache: "no-store",
       })
-      .catch(() => undefined);
+        .then((value) => {
+          controller.signal.throwIfAborted();
+          return value;
+        })
+        .finally(() => {
+          created.settled = true;
+          if (reads.get(url) === created) reads.delete(url);
+        }),
+    };
+    void created.promise.catch(() => undefined);
+    reads.set(url, created);
+    read = created;
   }
-  return request as Promise<T>;
+  const entry = read;
+  entry.subscribers++;
+  let released = false;
+  return {
+    promise: entry.promise as Promise<T>,
+    signal: entry.controller.signal,
+    release() {
+      if (released) return;
+      released = true;
+      entry.subscribers--;
+      if (!entry.subscribers && !entry.settled) {
+        if (reads.get(url) === entry) reads.delete(url);
+        entry.controller.abort();
+      }
+    },
+  };
 }
 
 /** Keep rows during refresh; polling never aborts a slow read or changes page/filter state. */
@@ -72,6 +109,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
   useEffect(() => {
     let disposed = false;
     let pending: Promise<void> | null = null;
+    let releaseRead: (() => void) | undefined;
     let lastStarted = 0;
     if (lastUrl.current !== url) {
       setData(undefined);
@@ -91,14 +129,16 @@ export function useResource<T>(url: string | null, pollMs = 0) {
       if (pending) return pending;
       lastStarted = Date.now();
       setRefreshing(true);
-      pending = readResource<T>(url)
+      const read = readResource<T>(url);
+      releaseRead = read.release;
+      pending = read.promise
         .then((value) => {
-          if (disposed) return;
+          if (disposed || read.signal.aborted) return;
           setData(value);
           setError(null);
         })
         .catch((reason) => {
-          if (disposed) return;
+          if (disposed || read.signal.aborted) return;
           if (
             reason instanceof ApiError &&
             reason.status === 401 &&
@@ -110,6 +150,8 @@ export function useResource<T>(url: string | null, pollMs = 0) {
           setError(errorMessage(reason));
         })
         .finally(() => {
+          read.release();
+          if (releaseRead === read.release) releaseRead = undefined;
           pending = null;
           if (!disposed) {
             setLoading(false);
@@ -120,7 +162,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
     };
     // A deliberate refresh after a mutation must read again even if an older GET is pending.
     const refresh = () => {
-      const current = pending ?? reads.get(url);
+      const current = pending ?? reads.get(url)?.promise;
       return current ? current.catch(() => undefined).then(run) : run();
     };
     loader.current = refresh;
@@ -135,6 +177,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
     window.addEventListener("online", resume);
     return () => {
       disposed = true;
+      releaseRead?.();
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("focus", resume);
       window.removeEventListener("online", resume);

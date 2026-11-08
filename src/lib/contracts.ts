@@ -77,6 +77,8 @@ export interface MetricPoint {
 }
 export interface MetricsResult {
   points: MetricPoint[];
+  /** Width of each OCI aggregation bucket, used to convert byte sums into average rates. */
+  intervalSeconds: number;
   available: boolean;
   note?: string;
   source: "oci";
@@ -111,11 +113,16 @@ export interface ShapeOption {
   maxMemoryGb?: number;
 }
 export interface CreateOptions {
+  selection: { compartmentId: string; availabilityDomain: string; shape: string };
   availabilityDomains: string[];
   compartments: SelectOption[];
   shapes: ShapeOption[];
   images: SelectOption[];
   subnets: SelectOption[];
+}
+export interface CreateOptionsSelection {
+  availabilityDomain?: string;
+  shape?: string;
 }
 export interface SecurityRule {
   id: string;

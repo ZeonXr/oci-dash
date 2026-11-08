@@ -584,6 +584,87 @@ describe("OCI inventory and client boundaries", () => {
     expect(f.factory.mock.calls.map((call) => call[1])).toEqual(["ap-test-1", "eu-test-1"]);
     expect(credentials.region).toBe("ap-test-1");
   });
+  it("links default create options to one domain, compatible images and eligible subnets", async () => {
+    const f = fixture();
+    f.handlers.listAvailabilityDomains = () => ({ items: [{ name: "AD-1" }, { name: "AD-2" }] });
+    f.handlers.listSubnets = () => ({
+      items: [
+        { id: "regional", displayName: "Regional", cidrBlock: "10.0.0.0/24" },
+        { id: "one", displayName: "One", cidrBlock: "10.0.1.0/24", availabilityDomain: "AD-1" },
+        { id: "two", displayName: "Two", cidrBlock: "10.0.2.0/24", availabilityDomain: "AD-2" },
+      ],
+    });
+    const result = await f.adapter.createOptions(credentials);
+    expect(result.selection).toEqual({
+      compartmentId: ids.tenancy,
+      availabilityDomain: "AD-1",
+      shape: "VM.Standard.E2.1.Micro",
+    });
+    expect(result.subnets.map((subnet) => subnet.id)).toEqual(["regional", "one"]);
+    expect(f.calls.find((call) => call.operation === "listShapes")?.request).toMatchObject({
+      compartmentId: ids.tenancy,
+      availabilityDomain: "AD-1",
+    });
+    expect(f.calls.find((call) => call.operation === "listImages")?.request).toMatchObject({
+      compartmentId: ids.tenancy,
+      shape: "VM.Standard.E2.1.Micro",
+    });
+    expect(f.calls.filter((call) => call.operation === "listImages")).toHaveLength(1);
+    expect(f.writes()).toEqual([]);
+  });
+  it("reloads compatible images for the selected shape and refuses stale domain or shape choices", async () => {
+    const f = fixture();
+    f.handlers.listAvailabilityDomains = () => ({ items: [{ name: "AD-1" }, { name: "AD-2" }] });
+    f.handlers.listShapes = (request) => ({
+      items: [
+        {
+          shape:
+            request.availabilityDomain === "AD-2"
+              ? "VM.Standard.A1.Flex"
+              : "VM.Standard.E2.1.Micro",
+        },
+      ],
+    });
+    f.handlers.listImages = (request) => ({
+      items: [
+        { id: request.shape === "VM.Standard.A1.Flex" ? "arm" : "x86", displayName: request.shape },
+      ],
+    });
+    const result = await f.adapter.createOptions(credentials, undefined, {
+      availabilityDomain: "AD-2",
+      shape: "VM.Standard.A1.Flex",
+    });
+    expect(result.selection.availabilityDomain).toBe("AD-2");
+    expect(result.images.map((image) => image.id)).toEqual(["arm"]);
+    await expect(
+      f.adapter.createOptions(credentials, undefined, {
+        availabilityDomain: "AD-gone",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    await expect(
+      f.adapter.createOptions(credentials, undefined, {
+        availabilityDomain: "AD-1",
+        shape: "VM.Standard.A1.Flex",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(f.calls.filter((call) => call.operation === "listImages")).toHaveLength(1);
+    expect(f.writes()).toEqual([]);
+  });
+  it("returns empty create choices without querying images when no domain or shape is available", async () => {
+    const f = fixture();
+    f.handlers.listAvailabilityDomains = () => ({ items: [] });
+    const missingDomain = await f.adapter.createOptions(credentials);
+    expect(missingDomain.selection.availabilityDomain).toBe("");
+    expect(missingDomain.shapes).toEqual([]);
+    expect(missingDomain.images).toEqual([]);
+    expect(
+      f.calls.some((call) => call.operation === "listShapes" || call.operation === "listImages"),
+    ).toBe(false);
+    f.handlers.listAvailabilityDomains = () => ({ items: [{ name: "AD-1" }] });
+    f.handlers.listShapes = () => ({ items: [] });
+    expect((await f.adapter.createOptions(credentials)).images).toEqual([]);
+    expect(f.calls.some((call) => call.operation === "listImages")).toBe(false);
+  });
   it("keeps create options and mutation image checks fresh after inventory warms its cache", async () => {
     const f = fixture();
     await f.adapter.inventory(credentials, account, ["ap-test-1"]);

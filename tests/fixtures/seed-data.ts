@@ -111,10 +111,10 @@ export function fixtureInstances(): InstanceSummary[] {
         },
       ],
       metrics: {
-        cpuPercent: running ? [24, 11, 8, 16, 32, 18, 9, 4][index]! : null,
+        cpuPercent: null,
         memoryPercent: null,
-        receivedMbps: running ? 3.2 : null,
-        sentMbps: running ? 8.6 : null,
+        receivedMbps: null,
+        sentMbps: null,
       },
     };
   });
@@ -124,6 +124,7 @@ export function fixtureMetrics(range: "1h" | "24h" | "7d"): MetricsResult {
     now = Date.now();
   return {
     source: "oci",
+    intervalSeconds: range === "1h" ? 60 : range === "24h" ? 300 : 3600,
     available: true,
     note: "测试指标，不代表真实服务器状态",
     points: Array.from({ length: 24 }, (_, i) => ({

@@ -16,6 +16,7 @@ let directory: string, base: string, token: string;
 let privateKey: string, fingerprint: string;
 let account: AccountSummary, instance: InstanceSummary;
 const result = (cpu: number): MetricsResult => ({
+  intervalSeconds: 60,
   points: [{ timestamp: "2026-11-08T01:00:00Z", cpu, receivedBytes: 1, sentBytes: 2 }],
   available: true,
   source: "oci",
@@ -95,26 +96,44 @@ afterEach(() => {
 function persist() {
   saveInventory(account.id, { instances: [instance], warnings: [], regions: ["uk-london-1"] });
 }
-function read() {
+function read(signal?: AbortSignal) {
   const path = `instances/${instance.id}/metrics`;
   return handleApi(
-    new Request(`${origin}/api/${path}`, { headers: { cookie: `${SESSION_COOKIE}=${token}` } }),
+    new Request(`${origin}/api/${path}`, {
+      signal,
+      headers: { cookie: `${SESSION_COOKIE}=${token}` },
+    }),
     path.split("/"),
   );
 }
-async function delayed() {
+async function delayed(signal?: AbortSignal) {
   let release!: (value: MetricsResult) => void;
   cloud.metrics.mockReturnValueOnce(
     new Promise<MetricsResult>((resolve) => {
       release = resolve;
     }),
   );
-  const response = read();
+  const response = read(signal);
   await vi.waitFor(() => expect(cloud.metrics).toHaveBeenCalledTimes(1));
   return { response, release };
 }
 
 describe("single-instance metrics credential and inventory scope", () => {
+  it("forwards HTTP cancellation to the sole underlying metrics subscriber", async () => {
+    const caller = new AbortController();
+    const pending = await delayed(caller.signal);
+    const signal = cloud.metrics.mock.calls[0][3] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    caller.abort();
+    const response = await pending.response;
+    expect(response.status).toBe(499);
+    expect(await response.json()).toMatchObject({ code: "METRICS_CANCELLED" });
+    expect(signal.aborted).toBe(true);
+    pending.release(result(99));
+    cloud.metrics.mockResolvedValue(result(12));
+    expect((await (await read()).json()).points[0].cpu).toBe(12);
+    expect(cloud.metrics).toHaveBeenCalledTimes(2);
+  });
   it("checks enabled region before serving a cache hit", async () => {
     expect((await read()).status).toBe(200);
     updateAccount(account.id, { regions: ["ap-tokyo-1"] }, "test");

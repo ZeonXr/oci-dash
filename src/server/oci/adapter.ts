@@ -7,6 +7,7 @@ import {
   sdkClientFactory,
   type OciClientFactory,
   type OciClients,
+  type ClientPort,
 } from "./sdk";
 import { ocid, regionName } from "./helpers";
 import {
@@ -17,7 +18,7 @@ import {
   verifyAccount,
 } from "./read";
 import { executeOperation } from "./operations";
-import { createInventoryReader, mapInventory } from "./inventory-performance";
+import { createInventoryReader, createReadLimiter, mapInventory } from "./inventory-performance";
 
 export interface OciAdapterOptions {
   clientFactory?: OciClientFactory;
@@ -29,17 +30,19 @@ export function createOciAdapter(options: OciAdapterOptions = {}): OciAdapter {
   const factory = options.clientFactory ?? sdkClientFactory;
   const now = options.now ?? Date.now;
   const inventoryReader = createInventoryReader(factory, now);
+  const metricsRpc = createReadLimiter(4);
   const scoped = async <T>(
     credentials: OciCredentials,
     region: string,
     work: (clients: OciClients) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> => {
     regionName(region);
     ocid(credentials.tenancyId, "tenancy");
     ocid(credentials.userId, "user");
     let clients: OciClients | undefined;
     try {
-      clients = await factory({ ...credentials, region }, region);
+      clients = await factory({ ...credentials, region }, region, signal);
       return await work(clients);
     } catch (error) {
       throw cloudError(error);
@@ -114,13 +117,35 @@ export function createOciAdapter(options: OciAdapterOptions = {}): OciAdapter {
       checkCancelled(context);
       return result;
     },
-    metrics: (credentials, instance, range) =>
-      scoped(credentials, instance.region, (clients) =>
-        getMetrics(clients, credentials, instance, range, now()),
+    metrics: (credentials, instance, range, signal) =>
+      scoped(
+        credentials,
+        instance.region,
+        (clients) => {
+          const wrap = (client: ClientPort): ClientPort => ({
+            call: (operation, request) => metricsRpc(() => client.call(operation, request), signal),
+            close: () => undefined,
+          });
+          return getMetrics(
+            {
+              identity: wrap(clients.identity),
+              compute: wrap(clients.compute),
+              network: wrap(clients.network),
+              storage: wrap(clients.storage),
+              monitoring: wrap(clients.monitoring),
+            },
+            credentials,
+            instance,
+            range,
+            now(),
+            signal,
+          );
+        },
+        signal,
       ),
-    createOptions: (credentials, compartmentId) =>
+    createOptions: (credentials, compartmentId, selection) =>
       scoped(credentials, credentials.region, (clients) =>
-        getCreateOptions(clients, credentials, compartmentId),
+        getCreateOptions(clients, credentials, compartmentId, selection),
       ),
     securityGroups: (credentials, instance) =>
       scoped(credentials, instance.region, (clients) =>

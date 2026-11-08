@@ -1,6 +1,7 @@
 import type {
   AccountSummary,
   CreateOptions,
+  CreateOptionsSelection,
   InstanceSummary,
   InventoryResult,
   MetricsResult,
@@ -41,8 +42,13 @@ export interface OciAdapter {
     credentials: OciCredentials,
     instance: InstanceSummary,
     range: "1h" | "24h" | "7d",
+    signal?: AbortSignal,
   ): Promise<MetricsResult>;
-  createOptions(credentials: OciCredentials, compartmentId?: string): Promise<CreateOptions>;
+  createOptions(
+    credentials: OciCredentials,
+    compartmentId?: string,
+    selection?: CreateOptionsSelection,
+  ): Promise<CreateOptions>;
   securityGroups(credentials: OciCredentials, instance: InstanceSummary): Promise<SecurityGroup[]>;
   execute(
     credentials: OciCredentials,

@@ -203,7 +203,7 @@ async function setup(
     if (path === `/api/instances/${instance.id}` && method === "GET")
       return json({ instance: { ...instance, state: options.instanceState ?? instance.state } });
     if (path === `/api/instances/${instance.id}/metrics` && method === "GET")
-      return json({ points: [], available: false, source: "oci" });
+      return json({ points: [], intervalSeconds: 60, available: false, source: "oci" });
     if (path === "/api/jobs" && method === "GET") return json({ jobs: [], recentJobs: [] });
     if (path === "/api/console/session" && method === "GET")
       return json({ session: fixture.session });

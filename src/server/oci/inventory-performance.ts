@@ -10,7 +10,7 @@ function checkSignal(signal?: AbortSignal): void {
 }
 
 /** Cancel queued work, but keep a slot until an already dispatched operation actually settles. */
-function limiter(limit: number) {
+export function createReadLimiter(limit: number) {
   let active = 0;
   const queue: { start(): void; cancel(): void; signal?: AbortSignal }[] = [];
   const advance = () => {
@@ -101,8 +101,8 @@ export type InventoryImageReader = (imageId: string) => Promise<string>;
 
 /** One adapter owns this quota/cache; mutation, console and create-option clients never enter it. */
 export function createInventoryReader(factory: OciClientFactory, now: () => number = Date.now) {
-  const rpc = limiter(4);
-  const regions = limiter(2);
+  const rpc = createReadLimiter(4);
+  const regions = createReadLimiter(2);
   // The key is an identity/credential digest and an image OCID. Values contain only an OS label.
   const images = new Map<string, { os: string; expires: number }>();
   return {

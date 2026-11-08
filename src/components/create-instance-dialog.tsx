@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, type SubmitEvent } from "react";
 import { Upload } from "lucide-react";
-import type { CreateOptions, JobSummary } from "@/lib/contracts";
+import type { CreateOptions, CreateOptionsSelection, JobSummary } from "@/lib/contracts";
 import { useApp } from "./app-provider";
 import { send, useAction, useResource } from "./api";
 import { regionName, taskHref } from "./format";
@@ -13,6 +13,8 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
   const account = accounts.find((a) => a.id === accountId);
   const [region, setRegion] = useState(account?.homeRegion || "");
   const [compartment, setCompartment] = useState("");
+  const [selection, setSelection] = useState<CreateOptionsSelection>({});
+  const [lastOptions, setLastOptions] = useState<CreateOptions>();
   const [form, setForm] = useState({
     displayName: "",
     availabilityDomain: "",
@@ -28,23 +30,37 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const query = new URLSearchParams({ region });
+  if (compartment) query.set("compartmentId", compartment);
+  if (selection.availabilityDomain) query.set("availabilityDomain", selection.availabilityDomain);
+  if (selection.shape) query.set("shape", selection.shape);
   const url =
     accountId && region
-      ? `/api/accounts/${encodeURIComponent(accountId)}/create-options?region=${encodeURIComponent(region)}${compartment ? `&compartmentId=${encodeURIComponent(compartment)}` : ""}`
+      ? `/api/accounts/${encodeURIComponent(accountId)}/create-options?${query}`
       : null;
   const options = useResource<CreateOptions>(url);
-  const shape = options.data?.shapes.find((s) => s.name === form.shape);
+  const data = options.data ?? lastOptions;
+  const updating = options.loading || options.refreshing;
+  const shape = data?.shapes.find((s) => s.name === form.shape);
+  const ready = Boolean(
+    options.data &&
+    !updating &&
+    !options.error &&
+    form.availabilityDomain &&
+    form.availabilityDomain === options.data.selection.availabilityDomain &&
+    form.shape &&
+    form.shape === options.data.selection.shape &&
+    options.data.images.some((image) => image.id === form.imageId) &&
+    options.data.subnets.some((subnet) => subnet.id === form.subnetId),
+  );
   useEffect(() => {
     const data = options.data;
     if (!data) return;
+    setLastOptions(data);
     setForm((current) => ({
       ...current,
-      availabilityDomain: data.availabilityDomains.includes(current.availabilityDomain)
-        ? current.availabilityDomain
-        : data.availabilityDomains[0] || "",
-      shape: data.shapes.some((s) => s.name === current.shape)
-        ? current.shape
-        : data.shapes[0]?.name || "",
+      availabilityDomain: data.selection.availabilityDomain,
+      shape: data.selection.shape,
       imageId: data.images.some((i) => i.id === current.imageId)
         ? current.imageId
         : data.images[0]?.id || "",
@@ -56,14 +72,26 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (shape) setForm((current) => ({ ...current, ocpus: shape.ocpus, memoryGb: shape.memoryGb }));
   }, [shape?.name]);
+  const resetChoices = () => {
+    setSelection({});
+    setAcknowledged(false);
+    setForm((current) => ({
+      ...current,
+      availabilityDomain: "",
+      shape: "",
+      imageId: "",
+      subnetId: "",
+    }));
+  };
   const changeAccount = (id: string) => {
     setAccountId(id);
     setRegion(accounts.find((a) => a.id === id)?.homeRegion || "");
     setCompartment("");
+    resetChoices();
   };
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!acknowledged || !options.data) return;
+    if (!acknowledged || !ready || !options.data) return;
     const response = await action.run(() =>
       send<{ job: JobSummary }>("/api/operations", {
         kind: "instance-create",
@@ -71,7 +99,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
         region,
         payload: {
           ...form,
-          compartmentId: compartment || options.data!.compartments[0]?.id || account?.tenancyId,
+          compartmentId: options.data!.selection.compartmentId,
           ocpus: shape?.flexible ? form.ocpus : undefined,
           memoryGb: shape?.flexible ? form.memoryGb : undefined,
         },
@@ -101,13 +129,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
             form="create-instance-form"
             variant="primary"
             loading={action.pending}
-            disabled={
-              !acknowledged ||
-              !options.data ||
-              options.refreshing ||
-              !form.imageId ||
-              !form.subnetId
-            }
+            disabled={!acknowledged || !ready}
           >
             创建实例
           </Button>
@@ -131,6 +153,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
               onChange={(e) => {
                 setRegion(e.target.value);
                 setCompartment("");
+                resetChoices();
               }}
             >
               {Array.from(new Set([account?.homeRegion, ...(account?.regions || [])]))
@@ -144,10 +167,10 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
           </Field>
         </div>
         {options.error && <ErrorState message={options.error} retry={options.reload} />}
-        {options.loading ? (
+        {options.loading && !data ? (
           <LoadingState label="正在读取可用规格、镜像与网络…" />
         ) : (
-          options.data && (
+          data && (
             <>
               <div className="form-grid">
                 <Field label="实例名称" required>
@@ -161,10 +184,14 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 </Field>
                 <Field label="区间 (Compartment)" required>
                   <Select
-                    value={compartment || options.data.compartments[0]?.id || ""}
-                    onChange={(e) => setCompartment(e.target.value)}
+                    value={compartment || data.selection.compartmentId}
+                    disabled={updating || !options.data}
+                    onChange={(e) => {
+                      setCompartment(e.target.value);
+                      resetChoices();
+                    }}
                   >
-                    {options.data.compartments.map((c) => (
+                    {data.compartments.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
@@ -174,9 +201,22 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 <Field label="可用域" required>
                   <Select
                     value={form.availabilityDomain}
-                    onChange={(e) => setForm({ ...form, availabilityDomain: e.target.value })}
+                    disabled={updating || !options.data}
+                    onChange={(e) => {
+                      const availabilityDomain = e.target.value;
+                      setSelection({ availabilityDomain });
+                      setAcknowledged(false);
+                      setForm((current) => ({
+                        ...current,
+                        availabilityDomain,
+                        shape: "",
+                        imageId: "",
+                        subnetId: "",
+                      }));
+                    }}
                   >
-                    {options.data.availabilityDomains.map((ad) => (
+                    {!data.availabilityDomains.length && <option value="">该区域暂无可用域</option>}
+                    {data.availabilityDomains.map((ad) => (
                       <option key={ad}>{ad}</option>
                     ))}
                   </Select>
@@ -184,9 +224,16 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 <Field label="实例规格" required>
                   <Select
                     value={form.shape}
-                    onChange={(e) => setForm({ ...form, shape: e.target.value })}
+                    disabled={updating || !options.data}
+                    onChange={(e) => {
+                      const shape = e.target.value;
+                      setSelection({ availabilityDomain: form.availabilityDomain, shape });
+                      setAcknowledged(false);
+                      setForm((current) => ({ ...current, shape, imageId: "" }));
+                    }}
                   >
-                    {options.data.shapes.map((s) => (
+                    {!data.shapes.length && <option value="">该可用域暂无可用规格</option>}
+                    {data.shapes.map((s) => (
                       <option key={s.name} value={s.name}>
                         {s.name}
                       </option>
@@ -221,10 +268,11 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 <Field label="系统镜像" required className="span-2">
                   <Select
                     value={form.imageId}
+                    disabled={updating || !options.data}
                     onChange={(e) => setForm({ ...form, imageId: e.target.value })}
                   >
-                    {!options.data.images.length && <option value="">该区域暂无可用镜像</option>}
-                    {options.data.images.map((image) => (
+                    {!data.images.length && <option value="">该规格暂无兼容镜像</option>}
+                    {data.images.map((image) => (
                       <option key={image.id} value={image.id}>
                         {image.name}
                       </option>
@@ -234,10 +282,11 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 <Field label="子网" required>
                   <Select
                     value={form.subnetId}
+                    disabled={updating || !options.data}
                     onChange={(e) => setForm({ ...form, subnetId: e.target.value })}
                   >
-                    {!options.data.subnets.length && <option value="">该区间暂无子网</option>}
-                    {options.data.subnets.map((subnet) => (
+                    {!data.subnets.length && <option value="">该可用域暂无可用子网</option>}
+                    {data.subnets.map((subnet) => (
                       <option key={subnet.id} value={subnet.id}>
                         {subnet.name}
                       </option>

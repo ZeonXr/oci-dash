@@ -17,9 +17,10 @@ export interface OciClients {
 export type OciClientFactory = (
   credentials: OciCredentials,
   region: string,
+  signal?: AbortSignal,
 ) => Promise<OciClients> | OciClients;
 
-export const sdkClientFactory: OciClientFactory = async (credentials, region) => {
+export const sdkClientFactory: OciClientFactory = async (credentials, region, signal) => {
   const [common, core, identity, monitoring] = await Promise.all([
     import("oci-common"),
     import("oci-core"),
@@ -40,7 +41,8 @@ export const sdkClientFactory: OciClientFactory = async (credentials, region) =>
     // OCI's fetch transport spreads httpOptions for every request, so each RPC gets its own deadline.
     httpOptions: {
       get signal() {
-        return AbortSignal.timeout(30_000);
+        const deadline = AbortSignal.timeout(30_000);
+        return signal ? AbortSignal.any([signal, deadline]) : deadline;
       },
     },
   });

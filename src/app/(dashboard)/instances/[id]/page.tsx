@@ -47,6 +47,7 @@ import {
   taskHref,
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
+import { instanceMetrics, metricSampleNote } from "@/components/instance-metrics";
 import { UpdatedAt } from "@/components/updated-at";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
@@ -199,12 +200,13 @@ export default function InstanceDetailPage() {
             : {},
       },
     });
+  const latestMetrics = instanceMetrics(metrics.data);
   const metricCards = (
     <div className="metrics-grid">
       <MetricCard
         label="CPU 使用率"
-        value={percent(instance.metrics?.cpuPercent ?? metrics.data?.points.at(-1)?.cpu)}
-        note="最近一次可用采样"
+        value={percent(latestMetrics.cpu?.value)}
+        note={metricSampleNote(latestMetrics.cpu, metrics.data?.intervalSeconds)}
       />
       <MetricCard
         label="内存使用率"
@@ -215,19 +217,13 @@ export default function InstanceDetailPage() {
       />
       <MetricCard
         label="网络接收"
-        value={
-          instance.metrics?.receivedMbps == null
-            ? "—"
-            : `${number(instance.metrics.receivedMbps, 1)} Mbps`
-        }
-        note="最近一次可用采样"
+        value={latestMetrics.received ? `${number(latestMetrics.received.value, 1)} Mbps` : "—"}
+        note={metricSampleNote(latestMetrics.received, metrics.data?.intervalSeconds)}
       />
       <MetricCard
         label="网络发送"
-        value={
-          instance.metrics?.sentMbps == null ? "—" : `${number(instance.metrics.sentMbps, 1)} Mbps`
-        }
-        note="最近一次可用采样"
+        value={latestMetrics.sent ? `${number(latestMetrics.sent.value, 1)} Mbps` : "—"}
+        note={metricSampleNote(latestMetrics.sent, metrics.data?.intervalSeconds)}
       />
     </div>
   );

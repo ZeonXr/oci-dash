@@ -102,7 +102,7 @@ const totp = (secret: string, username: string) =>
     period: 30,
     secret: OTPAuth.Secret.fromBase32(secret),
   });
-function verifyFactor(row: UserRow, code: string, consume = true): boolean {
+function verifyFactor(row: UserRow, code: string): boolean {
   if (!row.mfa_secret) return false;
   if (/^\d{6}$/.test(code)) {
     const delta = totp(decryptSecret(row.mfa_secret), row.username).validate({
@@ -111,7 +111,6 @@ function verifyFactor(row: UserRow, code: string, consume = true): boolean {
     });
     if (delta === null) return false;
     const step = Math.floor(Date.now() / 30000) + delta;
-    if (!consume) return true;
     return (
       getDatabase()
         .prepare("UPDATE users SET last_otp_step=? WHERE id=? AND last_otp_step<?")
@@ -126,11 +125,10 @@ function verifyFactor(row: UserRow, code: string, consume = true): boolean {
     const fresh = userRow(row.id),
       codes = JSON.parse(fresh.recovery_codes) as string[];
     if (!codes.includes(key)) return false;
-    if (consume)
-      db.prepare("UPDATE users SET recovery_codes=? WHERE id=?").run(
-        JSON.stringify(codes.filter((x) => x !== key)),
-        row.id,
-      );
+    db.prepare("UPDATE users SET recovery_codes=? WHERE id=?").run(
+      JSON.stringify(codes.filter((x) => x !== key)),
+      row.id,
+    );
     return true;
   })();
 }
@@ -250,20 +248,22 @@ export function disableMfa(
   code: string,
   keepSessionHash?: string,
 ): void {
-  const row = userRow(user.id);
-  if (!verifyPassword(password, row.password_hash) || !verifyFactor(row, code, false))
-    throw new AppError("密码或验证码不正确", 403);
-  getDatabase().transaction(() => {
-    getDatabase()
-      .prepare(
-        "UPDATE users SET mfa_secret=NULL,mfa_pending=NULL,mfa_pending_expires=NULL,recovery_codes='[]',last_otp_step=-1 WHERE id=?",
-      )
-      .run(user.id);
+  const db = getDatabase(),
+    row = userRow(user.id);
+  if (!verifyPassword(password, row.password_hash)) throw new AppError("密码或验证码不正确", 403);
+  db.transaction(() => {
+    const current = userRow(user.id);
+    if (current.password_hash !== row.password_hash || !verifyFactor(current, code))
+      throw new AppError("密码或验证码无效或已使用", 403);
+    db.prepare(
+      "UPDATE users SET mfa_secret=NULL,mfa_pending=NULL,mfa_pending_expires=NULL,recovery_codes='[]',last_otp_step=-1 WHERE id=?",
+    ).run(user.id);
     if (keepSessionHash)
-      getDatabase()
-        .prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?")
-        .run(user.id, keepSessionHash);
-    else getDatabase().prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
-  })();
+      db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(
+        user.id,
+        keepSessionHash,
+      );
+    else db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
+  }).immediate();
   audit(user.username, "auth.mfa-disable", "account", "MFA 已关闭");
 }

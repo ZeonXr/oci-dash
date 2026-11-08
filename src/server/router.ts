@@ -47,12 +47,8 @@ import {
 import { ociAdapter } from "./oci/adapter";
 import { analyticsService } from "./analytics/service";
 import { cpuService } from "./analytics/cpu";
+import { instanceMetricsService } from "./instance-metrics";
 import { assertInitialAdminSetupAvailable } from "./initial-admin";
-
-const metricsCache = new Map<
-  string,
-  { expires: number; value: Awaited<ReturnType<typeof ociAdapter.metrics>> }
->();
 
 export async function handleApi(request: Request, segments: string[]): Promise<Response> {
   try {
@@ -204,7 +200,22 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         const compartmentId = url.searchParams.get("compartmentId") ?? undefined;
         if (compartmentId && !/^ocid1\.(tenancy|compartment)\.[A-Za-z0-9._-]+$/.test(compartmentId))
           throw new AppError("区间 OCID 不正确");
-        return json(await ociAdapter.createOptions(getCredentials(id, region), compartmentId));
+        const choice = z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .regex(/^[^\p{Cc}\p{Cf}]+$/u);
+        const availabilityDomain = choice
+          .optional()
+          .parse(url.searchParams.get("availabilityDomain") ?? undefined);
+        const shape = choice.optional().parse(url.searchParams.get("shape") ?? undefined);
+        return json(
+          await ociAdapter.createOptions(getCredentials(id, region), compartmentId, {
+            availabilityDomain,
+            shape,
+          }),
+        );
       }
     }
     if (method === "GET" && path === "instances") return json({ instances: listInstances() });
@@ -221,35 +232,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         });
       if (segments.length === 3 && segments[2] === "metrics") {
         const range = z.enum(["1h", "24h", "7d"]).parse(url.searchParams.get("range") ?? "1h");
-        // Validate the current account's enabled region before consulting a prior snapshot.
-        const snapshot = getCredentialSnapshot(instance.accountId, instance.region);
-        const scopeOf = (value: typeof instance) =>
-          JSON.stringify([
-            value.accountId,
-            value.id,
-            value.region,
-            value.compartmentId,
-            value.vnics.map((vnic) => vnic.id).sort(),
-          ]);
-        const scope = scopeOf(instance);
-        const key = JSON.stringify([
-          scope,
-          snapshot.revision,
-          snapshot.credentials.tenancyId,
-          snapshot.credentials.userId,
-          range,
-        ]);
-        const cached = metricsCache.get(key);
-        if (cached && cached.expires > Date.now()) return json(cached.value);
-        const value = await ociAdapter.metrics(snapshot.credentials, instance, range);
-        const current = getCredentialSnapshot(instance.accountId, instance.region);
-        if (current.revision !== snapshot.revision)
-          throw new AppError("账号配置已变更，请重新读取监控", 409, "ACCOUNT_CHANGED");
-        if (scopeOf(getInstance(instance.id)) !== scope)
-          throw new AppError("实例监控范围已变更，请重新读取", 409, "RESOURCE_CHANGED");
-        if (metricsCache.size >= 100) metricsCache.delete(metricsCache.keys().next().value!);
-        metricsCache.set(key, { expires: Date.now() + 60000, value });
-        return json(value);
+        return json(await instanceMetricsService.query(instance, range, request.signal));
       }
     }
     if (method === "POST" && path === "operations") {
