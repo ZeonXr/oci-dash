@@ -2,21 +2,13 @@ name: oci-dash
 
 services:
   app:
+    extends: { file: deploy/compose.defaults.yaml, service: app }
     image: oci-dash:local
     build: .
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 35s
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
     volumes:
-      - app-data:/data
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    logging:
-      driver: local
+      - "${DATA_PATH:-app-data}:/data"
 
 volumes:
   app-data:

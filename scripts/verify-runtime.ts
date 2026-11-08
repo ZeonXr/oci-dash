@@ -119,7 +119,6 @@ try {
     `oci-dash.test-run=${runId}`,
     "--network",
     "none",
-    "--init",
     "--restart",
     "unless-stopped",
     "--stop-timeout",
@@ -136,6 +135,11 @@ try {
   );
   containerCreated = true;
   await waitFor(healthy, "initial Web and worker health");
+  assert.equal(
+    execute("console.log(require('node:fs').readFileSync('/proc/1/comm','utf8').trim())"),
+    "tini",
+    "The image must provide its own PID 1 without Docker's --init flag",
+  );
   const admin = accountIdentity();
   const initialization = initializationIdentity();
   assert.ok(admin);

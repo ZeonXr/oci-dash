@@ -13,10 +13,18 @@ interface VerificationEnvironment {
   APP_ORIGIN: string;
   DATABASE_PATH: string;
   PORT: string;
+  DATA_PATH: string;
   NEXT_TELEMETRY_DISABLED: string;
 }
 
 interface ResolvedComposeService {
+  init?: boolean;
+  restart?: string;
+  stop_grace_period?: string;
+  tmpfs?: string[];
+  security_opt?: string[];
+  cap_drop?: string[];
+  logging?: { driver?: string };
   environment?: Record<string, string | number | boolean | null>;
   volumes?: { type?: string; source?: string; target?: string }[];
   ports?: { host_ip?: string; published?: string | number; target?: number }[];
@@ -91,6 +99,7 @@ try {
     APP_ORIGIN: `http://127.0.0.1:${port}`,
     DATABASE_PATH: "/data/oci-dash.db",
     PORT: String(port),
+    DATA_PATH: "app-data",
     NEXT_TELEMETRY_DISABLED: "1",
   };
   writeFileSync(
@@ -168,12 +177,36 @@ try {
     service.environment?.APP_ORIGIN !== values.APP_ORIGIN ||
     service.environment?.DATABASE_PATH !== "/data/oci-dash.db" ||
     service.environment?.PORT !== undefined ||
+    service.environment?.DATA_PATH !== undefined ||
+    service.init === true ||
+    service.stop_grace_period !== "35s" ||
+    !service.tmpfs?.includes("/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777") ||
+    !service.security_opt?.includes("no-new-privileges:true") ||
+    !service.cap_drop?.includes("ALL") ||
+    service.logging?.driver !== "local" ||
     ports?.length !== 1 ||
     ports[0].host_ip !== "127.0.0.1" ||
     Number(ports[0].published) !== port ||
     ports[0].target !== 3000
   )
     throw new Error("Refusing to start: the resolved Compose configuration is not isolated.");
+  // Check custom storage resolution without starting a service or touching that path.
+  const previewPath = join(directory, "data-preview");
+  const preview = JSON.parse(
+    await runProcess("docker", [...prefix, "config", "--format", "json"], {
+      cwd: repository,
+      env: { ...env, DATA_PATH: previewPath },
+    }),
+  ) as ResolvedComposeConfiguration;
+  const previewMounts = preview.services?.app.volumes;
+  if (
+    previewMounts?.length !== 1 ||
+    previewMounts[0].type !== "bind" ||
+    !previewMounts[0].source ||
+    resolve(previewMounts[0].source) !== resolve(previewPath) ||
+    previewMounts[0].target !== "/data"
+  )
+    throw new Error("Custom storage did not resolve to the requested isolated directory.");
   controller.signal.throwIfAborted();
   started = true;
   await compose(

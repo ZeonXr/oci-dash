@@ -10,7 +10,17 @@ import {
   realpathSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+  sep,
+  win32,
+} from "node:path";
 import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -22,6 +32,82 @@ export interface BackupOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+}
+
+export interface BackupDataMount {
+  type: "volume" | "bind";
+  source: string;
+  argument: string;
+}
+
+function windowsAbsolute(path: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+)/.test(path) && win32.isAbsolute(path);
+}
+
+/** Use the daemon's mounted source; it need not exist in the CLI host's filesystem. */
+export function dataMountForBackup(mounts: unknown): BackupDataMount {
+  if (!Array.isArray(mounts)) throw new Error("Docker returned invalid container mounts.");
+  const candidates = mounts.filter(
+    (mount: unknown) =>
+      typeof mount === "object" &&
+      mount !== null &&
+      "Destination" in mount &&
+      mount.Destination === "/data",
+  );
+  if (candidates.length !== 1) throw new Error("Expected exactly one /data mount.");
+  const data: unknown = candidates[0];
+  if (typeof data !== "object" || data === null || !("Type" in data))
+    throw new Error("Docker returned an invalid /data mount.");
+  let type: BackupDataMount["type"];
+  let source: string;
+  if (
+    data.Type === "volume" &&
+    "Name" in data &&
+    typeof data.Name === "string" &&
+    /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(data.Name)
+  ) {
+    type = "volume";
+    source = data.Name;
+  } else if (
+    data.Type === "bind" &&
+    "Source" in data &&
+    typeof data.Source === "string" &&
+    !/[\u0000-\u001f\u007f]/.test(data.Source) &&
+    (posix.isAbsolute(data.Source) || windowsAbsolute(data.Source))
+  ) {
+    type = "bind";
+    source = data.Source;
+  } else {
+    throw new Error("Backup requires a named volume or an absolute bind source mounted at /data.");
+  }
+  // Docker --mount uses CSV. Quote the whole field, preserving commas and quotes
+  // in a bind directory without allowing them to add mount options.
+  const sourceField = `"source=${source.replaceAll('"', '""')}"`;
+  return { type, source, argument: `type=${type},${sourceField},target=/data,readonly` };
+}
+
+/** Compare only recognizable path spaces; a remote daemon source is not a local realpath. */
+export function assertDestinationOutsideData(data: BackupDataMount, destination: string): void {
+  if (data.type !== "bind") return;
+  const candidates = [
+    resolve(destination),
+    join(realpathSync(dirname(destination)), basename(destination)),
+  ];
+  for (const candidate of candidates) {
+    const paths =
+      windowsAbsolute(data.source) && windowsAbsolute(candidate)
+        ? win32
+        : posix.isAbsolute(data.source) && posix.isAbsolute(candidate)
+          ? posix
+          : undefined;
+    if (!paths) continue;
+    const compared = paths.relative(data.source, candidate);
+    if (
+      compared === "" ||
+      (!compared.startsWith(`..${paths.sep}`) && compared !== ".." && !paths.isAbsolute(compared))
+    )
+      throw new Error("Backups must be stored outside the mounted /data directory.");
+  }
 }
 
 const repository = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
@@ -70,26 +156,10 @@ export async function backup({
   if (!["running", "exited", "created"].includes(state))
     throw new Error(`Cannot back up an app in state ${state}; wait until it is stable.`);
   const mounts: unknown = JSON.parse(await docker(["inspect", "--format", "{{json .Mounts}}", id]));
-  if (!Array.isArray(mounts)) throw new Error("Docker returned invalid container mounts.");
-  const data: unknown = mounts.find(
-    (mount: unknown) =>
-      typeof mount === "object" &&
-      mount !== null &&
-      "Destination" in mount &&
-      mount.Destination === "/data",
-  );
-  if (
-    typeof data !== "object" ||
-    data === null ||
-    !("Type" in data) ||
-    data.Type !== "volume" ||
-    !("Name" in data) ||
-    typeof data.Name !== "string" ||
-    !data.Name
-  )
-    throw new Error("This backup command requires the default named /data volume.");
+  const data = dataMountForBackup(mounts);
+  assertDestinationOutsideData(data, path);
   const image = await docker(["inspect", "--format", "{{.Image}}", id]);
-  const mount = `type=volume,source=${data.Name},target=/data,readonly`;
+  const mount = data.argument;
   const wasRunning = state === "running";
   let fd: number | undefined;
   let failure: unknown;
@@ -127,6 +197,7 @@ export async function backup({
         "/data",
         "-czf",
         "-",
+        `--exclude=*.partial-${runId}`,
         ".",
       ],
       { outputFd: fd, timeoutMs: 10 * 60_000, signal },
@@ -195,7 +266,7 @@ export async function backup({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.includes("--help")) {
     console.log(
-      "Usage: npm run backup -- /path/outside/project/backup.tar.gz\nBriefly stops a running app, saves its complete data volume, then restores its running state.\nUses the current Docker Compose project selection. Protect the archive: it includes the stored encryption key. Legacy deployments may still require a separate MASTER_KEY backup.",
+      "Usage: npm run backup -- /path/outside/project/backup.tar.gz\nBriefly stops a running app, saves its complete /data named volume or bind directory, then restores its running state. Store the archive outside both the project and the data directory.\nUses the current Docker Compose project selection. Protect the archive: it includes the stored encryption key. Legacy deployments may still require a separate MASTER_KEY backup.",
     );
   } else if (process.argv.length !== 3) {
     console.error("Usage: npm run backup -- /path/outside/project/backup.tar.gz");

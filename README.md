@@ -15,7 +15,7 @@
 
 ## 快速部署
 
-只需 Docker Engine 和 Docker Compose，无需安装 Node.js 或创建 `.env`。在项目目录运行：
+只需 Docker Engine 和 Docker Compose，无需安装 Node.js 或创建 `.env`。请保留完整仓库结构：主 `compose.yaml` 自动继承 [deploy/compose.defaults.yaml](deploy/compose.defaults.yaml) 中的运行默认值，不能只复制主 YAML。在项目目录运行：
 
 ```sh
 docker compose up -d --build --wait
@@ -26,7 +26,14 @@ docker compose exec app cat /data/.initial-admin-password
 
 新数据库启动后是空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问通过 HTTPS 反向代理，保留浏览器访问的 Host，并启用 WebSocket Upgrade。无需配置域名环境变量，具体示例见[运维说明](docs/OPERATIONS.md#https-与访问)。
 
-Compose 服务为 `app`，数据库保存在 `app-data` 卷内的 `/data/oci-dash.db`。不要用 `docker compose down -v` 进行日常重启。
+日常只需按需调整端口和数据位置，可直接修改主 `compose.yaml` 的映射，也可使用可选的 `.env`：
+
+| 设置        | 默认值     | 用途                                                          |
+| ----------- | ---------- | ------------------------------------------------------------- |
+| `PORT`      | `3000`     | 宿主机端口；容器内仍使用 3000。                               |
+| `DATA_PATH` | `app-data` | 默认命名卷，或仓库之外的宿主目录，例如 `/opt/oci-dash-data`。 |
+
+默认命名卷与已有部署保持一致。自定义目录应位于源码和构建目录之外，避免将持久数据带入构建上下文。Linux 目录需允许容器的 UID/GID `1000:1000` 读写；已有数据必须先按[迁移步骤](docs/OPERATIONS.md#更换数据位置)完整复制，再切换位置。直接指向空目录会显示新面板。不要用 `docker compose down -v` 进行日常重启。
 
 ## 连接 OCI 账号
 
@@ -40,7 +47,7 @@ Compose 服务为 `app`，数据库保存在 `app-data` 卷内的 `/data/oci-das
 
 OCI API 私钥和 MFA 秘密使用 AES-256-GCM 加密，管理员密码使用 scrypt，登录令牌和恢复码以散列形式保存。数据库中的资源名称、IP、任务和统计报告并非全库加密。
 
-加密密钥在首次启动时自动生成，保存在数据卷的 `.master-key` 中，无需手动填写 `MASTER_KEY`。备份和恢复整个数据卷，不能只保留数据库或删除密钥文件。完整备份包含解密材料，应限制访问；它不能抵御整个数据卷泄露或主机失陷。备份、恢复和升级请按[运维说明](docs/OPERATIONS.md)操作。
+加密密钥在首次启动时自动生成，保存在 `/data` 对应的持久数据中的 `.master-key`，无需手动填写 `MASTER_KEY`。无论使用命名卷还是宿主目录，都应完整备份和恢复，不能只保留数据库或删除密钥文件。完整备份包含解密材料，应限制访问；它不能抵御整个数据目录泄露或主机失陷。备份、恢复和升级请按[运维说明](docs/OPERATIONS.md)操作。
 
 **旧版本升级**：此前在 `.env` 中使用 `MASTER_KEY` 的部署，先按[旧密钥迁移步骤](docs/OPERATIONS.md#从环境变量主密钥迁移)保存原密钥，再采用简化后的 Compose。新 Compose 不会自动把 `.env` 中的应用变量传入容器。
 
