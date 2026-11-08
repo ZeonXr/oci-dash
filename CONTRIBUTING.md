@@ -4,7 +4,19 @@
 
 ## 开发环境
 
-需要 Node.js `>=24 <27` 和 npm，推荐使用与 Docker 镜像相同的 Node.js 24。原生依赖在没有对应预编译包的平台上可能需要本机编译工具。
+需要 Node.js `>=26.13 <27` 和 npm，开发、Docker 镜像和 CI 统一使用 Node.js `26.13.0`。原生依赖在没有对应预编译包的平台上可能需要本机编译工具。
+
+可选使用 [mise](https://mise.jdx.dev/) 管理项目环境。仓库的 `mise.toml` 固定 Node.js `26.13.0`；安装 mise 后，在项目目录执行：
+
+```sh
+mise trust
+mise install node@26.13.0
+mise exec -- npm ci
+mise exec -- npm run bootstrap
+mise exec -- npm run dev
+```
+
+版本选择只作用于本项目，不修改全局默认版本。第二个终端可用 `mise exec -- npm run worker` 启动 Worker；下文的检查命令也可加上 `mise exec --` 前缀。已有符合要求的 Node.js 时，可直接使用下面的 npm 命令。
 
 使用独立的开发检出目录和空数据库：
 
@@ -24,6 +36,10 @@ bootstrap 不覆盖已有 `.env`。新数据库只初始化管理员，启动的
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
+`scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行。初始化可在安装依赖前执行 `node scripts/bootstrap.ts`，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
+
+PostCSS 插件列表使用静态 `postcss.config.json`，不需要可执行的 JavaScript 配置。
+
 ## 变更与测试
 
 先用最小复现说明问题，再围绕最终行为提交变更。代码修改应保持公共 DTO、服务端校验和页面行为一致；涉及接口或运行方式时同步更新文档。
@@ -34,6 +50,8 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+`npm run typecheck` 分别检查应用和工具脚本：应用使用 `tsconfig.json`，工具脚本使用独立的严格配置 `tsconfig.scripts.json`。Node.js 执行脚本时不进行类型检查，提交前应运行该命令。`dist/*.mjs` 是运行时 TypeScript 的构建产物，部署命令保留这些文件名。
 
 使用 `npm run format` 修正格式。项目的 Prettier、EditorConfig 和忽略规则决定格式与扫描范围，不要格式化环境文件、私钥、数据库或构建产物。
 

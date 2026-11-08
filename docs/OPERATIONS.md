@@ -14,7 +14,7 @@
 | `DATABASE_PATH`           | 本地默认 `data/oci-dash.db`；Compose 固定为 `/data/oci-dash.db`。        |
 | `NEXT_TELEMETRY_DISABLED` | 示例配置为 `1`，关闭 Next.js 遥测。                                      |
 
-`node scripts/bootstrap.mjs` 只创建不存在的 `.env`，不会修补已有文件中的空值。首次部署见 [README](../README.md#快速部署)。修改环境变量后需要重新创建容器：
+项目要求 Node.js `>=26.13 <27`，与镜像一致的版本为 `26.13.0`。`node scripts/bootstrap.ts` 使用原生类型移除运行，无需先安装项目依赖；它只创建不存在的 `.env`，不会修补已有文件中的空值。首次部署见 [README](../README.md#快速部署)。修改环境变量后需要重新创建容器：
 
 ```sh
 docker compose up -d --force-recreate app
@@ -116,7 +116,7 @@ SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道�
 npm run backup -- /absolute/path/outside-repository/oci-dash-data.tar.gz
 ```
 
-脚本需要 Node.js 和可访问部署 Docker 的 CLI。也可直接运行 `node scripts/backup.mjs <输出路径>`。它读取现有 Compose `app` 容器的不可变镜像，只支持挂载到 `/data` 的命名卷；自定义 bind mount 或数据库路径不在此脚本范围内。使用自定义部署时，先正确设置 `COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`。
+脚本需要符合项目要求的 Node.js（建议 `26.13.0`）和可访问部署 Docker 的 CLI。也可直接运行 `node scripts/backup.ts <输出路径>`。它读取现有 Compose `app` 容器的不可变镜像，只支持挂载到 `/data` 的命名卷；自定义 bind mount 或数据库路径不在此脚本范围内。使用自定义部署时，先正确设置 `COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`。
 
 脚本停止应用后，以镜像内的 `node` 用户只读挂载数据卷，将归档传给宿主机写入；不需要更改数据库所有者，也不依赖受限 root 读取 `0600` 文件。备份前应用正在运行才会在结束后恢复运行，原本停止的应用保持停止。
 

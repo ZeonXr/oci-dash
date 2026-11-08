@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
+
 if (existsSync(".env")) {
   console.log(".env already exists; existing configuration was preserved.");
   process.exit(0);

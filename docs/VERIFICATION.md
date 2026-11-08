@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-- 使用 `package.json` 支持的 Node.js（`>=24 <27`，推荐与镜像一致的 Node.js 24）和 npm。
+- 使用 `package.json` 支持的 Node.js（`>=26.13 <27`）和 npm；开发、镜像及 CI 统一为 Node.js `26.13.0`。
 - 容器检查需要可运行的 Docker Engine 与 Docker Compose。
 - 浏览器检查使用 Playwright。Windows 默认使用已安装的 Edge，其他平台默认 Chromium；可用 `E2E_BROWSER_CHANNEL` 选择已安装的浏览器通道。
 - Linux 首次使用 Playwright Chromium 时，可运行 `npx playwright install --with-deps chromium` 安装浏览器及系统依赖；使用已有 Chrome 的 CI 无需额外下载 Chromium。
@@ -22,6 +22,8 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+`npm run typecheck` 使用 `tsc` 依次检查应用的 `tsconfig.json` 和工具脚本的严格配置 `tsconfig.scripts.json`。脚本由 Node.js `26.13.0` 原生移除类型后运行，只使用可移除的类型语法；运行时不做类型检查，也不代替上述静态检查。`dist/*.mjs` 是构建生成的运行文件，验证命令继续使用这些产物。
 
 类型检查和单元测试无需真实 OCI 账号。Unix 信号相关测试在 Windows 可按平台条件跳过；需要 Linux 环境才能覆盖对应进程生命周期行为。
 

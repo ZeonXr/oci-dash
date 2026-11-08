@@ -14,8 +14,28 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { backup, prepareDestination } from "./backup.mjs";
-import { runProcess } from "./lib/process.mjs";
+import { backup, prepareDestination } from "./backup.ts";
+import type { BackupOptions } from "./backup.ts";
+import { runProcess } from "./lib/process.ts";
+import type { RunProcessOptions } from "./lib/process.ts";
+
+interface BackupFixtureCompose {
+  name: string;
+  services: {
+    app: {
+      image: string;
+      user: string;
+      command: string[];
+      network_mode: "none";
+      cap_drop: string[];
+      security_opt: string[];
+      restart: "no";
+      volumes: string[];
+      healthcheck: { test: string[]; interval: string; timeout: string; retries: number };
+    };
+  };
+  volumes: { "app-data": Record<string, never> };
+}
 
 const repository = fileURLToPath(new URL("..", import.meta.url));
 const base = resolve(repository, ".test-tmp");
@@ -29,7 +49,11 @@ const controller = new AbortController();
 const cancel = () => controller.abort(new Error("Backup verification interrupted."));
 process.once("SIGINT", cancel);
 process.once("SIGTERM", cancel);
-const env = { ...process.env, COMPOSE_PROJECT_NAME: project, COMPOSE_FILE: composeFile };
+const env: NodeJS.ProcessEnv = {
+  ...process.env,
+  COMPOSE_PROJECT_NAME: project,
+  COMPOSE_FILE: composeFile,
+};
 delete env.COMPOSE_ENV_FILES;
 const fixture = `
 const fs = require('node:fs');
@@ -42,39 +66,37 @@ fs.chmodSync('/data/backup-fixture.db', 0o600);
 fs.writeFileSync('/data/ready', 'ready', {mode: 0o600});
 setInterval(() => {}, 1000);
 `;
-writeFileSync(
-  composeFile,
-  JSON.stringify({
-    name: project,
-    services: {
-      app: {
-        image,
-        user: "node",
-        command: ["node", "-e", fixture],
-        network_mode: "none",
-        cap_drop: ["ALL"],
-        security_opt: ["no-new-privileges:true"],
-        restart: "no",
-        volumes: ["app-data:/data"],
-        healthcheck: {
-          test: [
-            "CMD",
-            "node",
-            "-e",
-            "process.exit(require('node:fs').existsSync('/data/ready') ? 0 : 1)",
-          ],
-          interval: "1s",
-          timeout: "3s",
-          retries: 15,
-        },
+const composeConfiguration: BackupFixtureCompose = {
+  name: project,
+  services: {
+    app: {
+      image,
+      user: "node",
+      command: ["node", "-e", fixture],
+      network_mode: "none",
+      cap_drop: ["ALL"],
+      security_opt: ["no-new-privileges:true"],
+      restart: "no",
+      volumes: ["app-data:/data"],
+      healthcheck: {
+        test: [
+          "CMD",
+          "node",
+          "-e",
+          "process.exit(require('node:fs').existsSync('/data/ready') ? 0 : 1)",
+        ],
+        interval: "1s",
+        timeout: "3s",
+        retries: 15,
       },
     },
-    volumes: { "app-data": {} },
-  }),
-);
-const docker = (args, options = {}) =>
+  },
+  volumes: { "app-data": {} },
+};
+writeFileSync(composeFile, JSON.stringify(composeConfiguration));
+const docker = (args: string[], options: RunProcessOptions = {}): Promise<string> =>
   runProcess("docker", args, { cwd: directory, env, signal: controller.signal, ...options });
-const compose = (...args) =>
+const compose = (...args: string[]): Promise<string> =>
   docker(["compose", "--project-name", project, "--file", composeFile, ...args]);
 let started = false;
 try {
@@ -82,9 +104,15 @@ try {
   started = true;
   await compose("up", "--detach", "--wait", "--wait-timeout", "30");
   const id = await compose("ps", "--quiet", "app");
-  const state = () => docker(["inspect", "--format", "{{.State.Running}}", id]);
+  const state = (): Promise<string> => docker(["inspect", "--format", "{{.State.Running}}", id]);
   const destination = join(archives, "running.tar.gz");
-  await backup({ destination, cwd: directory, env, signal: controller.signal });
+  const backupOptions: BackupOptions = {
+    destination,
+    cwd: directory,
+    env,
+    signal: controller.signal,
+  };
+  await backup(backupOptions);
   assert.equal(await state(), "true", "A previously running app must restart after backup.");
   if (process.platform !== "win32") assert.equal(statSync(destination).mode & 0o777, 0o600);
   const fd = openSync(destination, "r");

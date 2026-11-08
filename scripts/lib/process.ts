@@ -1,8 +1,23 @@
 import { spawn } from "node:child_process";
 
+export interface RunProcessOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  inherit?: boolean;
+  inputFd?: number;
+  outputFd?: number;
+  timeoutMs?: number;
+  killGraceMs?: number;
+}
+
 // Arguments are passed directly to the executable, never interpolated into a shell.
-export function runProcess(file, args, options = {}) {
-  return new Promise((resolve, reject) => {
+export function runProcess(
+  file: string,
+  args: readonly string[],
+  options: RunProcessOptions = {},
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     if (options.signal?.aborted) {
       reject(options.signal.reason ?? new Error("Process cancelled."));
       return;
@@ -20,8 +35,8 @@ export function runProcess(file, args, options = {}) {
     let stderr = "";
     let timedOut = false;
     let cancelled = false;
-    let spawnError;
-    let forceTimer;
+    let spawnError: Error | undefined;
+    let forceTimer: ReturnType<typeof setTimeout> | undefined;
     function stop(force = false) {
       if (!child.pid) return;
       if (process.platform === "win32") {
@@ -34,7 +49,8 @@ export function runProcess(file, args, options = {}) {
         try {
           process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
         } catch (error) {
-          if (error.code !== "ESRCH") child.kill(force ? "SIGKILL" : "SIGTERM");
+          if (!(error instanceof Error && "code" in error && error.code === "ESRCH"))
+            child.kill(force ? "SIGKILL" : "SIGTERM");
         }
       }
     }
@@ -67,7 +83,7 @@ export function runProcess(file, args, options = {}) {
       options.signal?.removeEventListener("abort", onAbort);
       // Cleanup starts only after the process and its output streams have closed.
       if (spawnError) reject(spawnError);
-      else if (cancelled) reject(options.signal.reason ?? new Error("Process cancelled."));
+      else if (cancelled) reject(options.signal?.reason ?? new Error("Process cancelled."));
       else if (code === 0 && !timedOut) resolve(stdout.trim());
       else
         reject(

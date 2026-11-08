@@ -14,8 +14,11 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI T
 | `src/server/analytics/`                      | 流量、费用、CPU、查询期限与有界缓存。      |
 | `src/server/console/`                        | VNC 会话、OCI 控制台、SSH 和 WebSocket。   |
 | `src/runtime.ts`、`src/health.ts`            | 容器进程管理、统一网关和整体健康检查。     |
+| `scripts/`                                   | 初始化、备份及隔离验证的 TypeScript 工具。 |
 
 主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
+
+工具脚本通过 Node.js `26.13.0` 原生类型移除执行，只使用可移除的类型语法。Node.js 不执行类型检查；独立的严格配置 `tsconfig.scripts.json` 由 `tsc` 检查，`npm run typecheck` 同时覆盖应用与脚本。运行入口等服务端 TypeScript 经构建输出为 `dist/*.mjs`；这些是部署产物，不是单独维护的 JavaScript 源码。
 
 ## 运行与存储
 

@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { runProcess } from "../scripts/lib/process.mjs";
+import { runProcess } from "../scripts/lib/process.ts";
 
 const directories: string[] = [];
 const controllers: AbortController[] = [];
 const pending: Promise<unknown>[] = [];
-const fixture = resolve("tests/fixtures/deployment-child.mjs");
+const fixture = resolve("tests/fixtures/deployment-child.ts");
 
 function directory() {
   const base = resolve(".test-tmp");
@@ -42,7 +42,7 @@ describe("deployment command cleanup", () => {
       signal: controller.signal,
       timeoutMs: 8000,
       killGraceMs: 1000,
-    }).catch((error: Error) => error);
+    }).catch((error: unknown) => error);
     pending.push(result);
     const parent = await pid(path, "tree");
     const descendant = await pid(path, "descendant");
@@ -60,7 +60,7 @@ describe("deployment command cleanup", () => {
     const result = runProcess(process.execPath, [fixture, path, "ignore"], {
       timeoutMs: 1500,
       killGraceMs: 100,
-    }).catch((error: Error) => error);
+    }).catch((error: unknown) => error);
     pending.push(result);
     const child = await pid(path, "ignore");
     expect(await result).toBeInstanceOf(Error);

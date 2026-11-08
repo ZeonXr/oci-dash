@@ -2,8 +2,10 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [role, mode, directory, requestedExit = "0", delay = "20"] = process.argv.slice(2);
+if (!role || !mode || !directory)
+  throw new Error("Runtime fixture requires role, mode and directory.");
 let stopping = false;
-function stop(signal) {
+function stop(signal: "SIGTERM" | "SIGINT"): void {
   writeFileSync(join(directory, `${role}.signal`), signal);
   if (mode === "ignore" || stopping) return;
   stopping = true;

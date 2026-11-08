@@ -3,7 +3,44 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runProcess } from "./lib/process.mjs";
+import { runProcess } from "./lib/process.ts";
+import type { RunProcessOptions } from "./lib/process.ts";
+
+interface VerificationEnvironment {
+  ADMIN_USERNAME: string;
+  ADMIN_PASSWORD: string;
+  MASTER_KEY: string;
+  APP_ORIGIN: string;
+  DATABASE_PATH: string;
+  PORT: string;
+  NEXT_TELEMETRY_DISABLED: string;
+}
+
+interface ResolvedComposeService {
+  environment?: Record<string, string | number | boolean | null>;
+  volumes?: { type?: string; source?: string; target?: string }[];
+  ports?: { host_ip?: string; published?: string | number; target?: number }[];
+}
+
+interface ResolvedComposeConfiguration {
+  name?: string;
+  services?: Record<string, ResolvedComposeService>;
+  volumes?: Record<string, { name?: string; external?: boolean }>;
+}
+
+type ComposeCommand = (command: string[], options?: RunProcessOptions) => Promise<string>;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function connectionFailure(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (cause && typeof cause === "object" && "code" in cause) {
+    if (typeof cause.code === "string" || typeof cause.code === "number") return String(cause.code);
+  }
+  return errorMessage(error);
+}
 
 const repository = fileURLToPath(new URL("..", import.meta.url));
 const base = resolve(repository, ".test-tmp");
@@ -23,29 +60,31 @@ const directory = mkdtempSync(join(base, "e2e-"));
 const envFile = join(directory, "test.env");
 const override = join(directory, "compose.json");
 
-async function unusedPort() {
+async function unusedPort(): Promise<number> {
   const server = createServer();
-  await new Promise((accept, reject) => {
+  await new Promise<void>((accept, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", accept);
   });
-  const port = server.address().port;
-  await new Promise((accept, reject) =>
+  const address = server.address();
+  await new Promise<void>((accept, reject) =>
     server.close((error) => (error ? reject(error) : accept())),
   );
-  return port;
+  if (!address || typeof address === "string")
+    throw new Error("The temporary listener did not receive a TCP port.");
+  return address.port;
 }
 
 const controller = new AbortController();
 const cancel = () => controller.abort(new Error("Browser verification interrupted."));
 process.once("SIGINT", cancel);
 process.once("SIGTERM", cancel);
-let compose;
+let compose: ComposeCommand | undefined;
 let started = false;
-let failure;
+let failure: unknown;
 try {
   const port = await unusedPort();
-  const values = {
+  const values: VerificationEnvironment = {
     ADMIN_USERNAME: project.slice("oci-dash-".length),
     ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
     MASTER_KEY: randomBytes(32).toString("base64"),
@@ -67,7 +106,7 @@ try {
       services: { app: { image, restart: "no" } },
     }),
   );
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...values,
     COMPOSE_PROJECT_NAME: project,
@@ -93,16 +132,20 @@ try {
   ];
   compose = (command, options = {}) =>
     runProcess("docker", [...prefix, ...command], { cwd: repository, env, ...options });
-  const config = JSON.parse(await compose(["config", "--format", "json"]));
+  const config = JSON.parse(
+    await compose(["config", "--format", "json"]),
+  ) as ResolvedComposeConfiguration;
   const service = config.services?.app;
+  const dataVolume = config.volumes?.["app-data"];
   const volumes = service?.volumes;
   const ports = service?.ports;
   if (
     config.name !== project ||
+    !service ||
     Object.keys(config.services ?? {}).length !== 1 ||
     Object.keys(config.volumes ?? {}).length !== 1 ||
-    config.volumes?.["app-data"]?.name !== `${project}_app-data` ||
-    config.volumes["app-data"].external ||
+    dataVolume?.name !== `${project}_app-data` ||
+    dataVolume.external ||
     volumes?.length !== 1 ||
     volumes[0].type !== "volume" ||
     volumes[0].source !== "app-data" ||
@@ -139,7 +182,7 @@ try {
     if (!health.ok) throw new Error(`HTTP ${health.status}`);
   } catch (error) {
     throw new Error(
-      `The isolated app is not reachable from the browser host: ${error.cause?.code ?? error.message}`,
+      `The isolated app is not reachable from the browser host: ${connectionFailure(error)}`,
     );
   }
   await runProcess(
@@ -155,15 +198,15 @@ try {
   );
 } catch (error) {
   failure = error;
-  if (started) {
+  if (started && compose) {
     const logs = await compose(["logs", "--tail", "50", "app"]).catch(
       () => "Could not read isolated app logs.",
     );
     console.error(logs);
   }
 } finally {
-  const cleanupErrors = [];
-  if (started) {
+  const cleanupErrors: unknown[] = [];
+  if (started && compose) {
     try {
       await compose(["down", "--volumes", "--remove-orphans", "--timeout", "35"], {
         timeoutMs: 60_000,
@@ -192,8 +235,8 @@ try {
   process.removeListener("SIGINT", cancel);
   process.removeListener("SIGTERM", cancel);
   if (failure || cleanupErrors.length) {
-    if (failure) console.error(failure.message);
-    for (const error of cleanupErrors) console.error(error.message);
+    if (failure) console.error(errorMessage(failure));
+    for (const error of cleanupErrors) console.error(errorMessage(error));
     process.exitCode = 1;
   }
 }

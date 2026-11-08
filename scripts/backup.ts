@@ -15,16 +15,23 @@ import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createGunzip } from "node:zlib";
-import { runProcess } from "./lib/process.mjs";
+import { runProcess, type RunProcessOptions } from "./lib/process.ts";
+
+export interface BackupOptions {
+  destination: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+}
 
 const repository = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 
-function inside(parent, candidate) {
+function inside(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
   return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
 }
 
-export function prepareDestination(destination, projectDirectory = repository) {
+export function prepareDestination(destination: string, projectDirectory = repository): string {
   if (!destination || !destination.endsWith(".tar.gz"))
     throw new Error("Provide a new .tar.gz destination outside the project directory.");
   const path = resolve(destination);
@@ -39,12 +46,18 @@ export function prepareDestination(destination, projectDirectory = repository) {
 }
 
 /** Back up an existing Compose app without changing its image or initial running state. */
-export async function backup({ destination, cwd = repository, env = process.env, signal } = {}) {
+export async function backup({
+  destination,
+  cwd = repository,
+  env = process.env,
+  signal,
+}: BackupOptions): Promise<string> {
   const path = prepareDestination(destination, repository);
   const runId = randomUUID();
   const helper = `oci-dash-backup-${runId}`;
   const partial = `${path}.partial-${runId}`;
-  const docker = (args, options = {}) => runProcess("docker", args, { cwd, env, ...options });
+  const docker = (args: string[], options: RunProcessOptions = {}) =>
+    runProcess("docker", args, { cwd, env, ...options });
   const ids = (await docker(["compose", "ps", "--all", "--quiet", "app"]))
     .split(/\s+/)
     .filter(Boolean);
@@ -56,15 +69,30 @@ export async function backup({ destination, cwd = repository, env = process.env,
   const state = await docker(["inspect", "--format", "{{.State.Status}}", id]);
   if (!["running", "exited", "created"].includes(state))
     throw new Error(`Cannot back up an app in state ${state}; wait until it is stable.`);
-  const mounts = JSON.parse(await docker(["inspect", "--format", "{{json .Mounts}}", id]));
-  const data = mounts.find((mount) => mount.Destination === "/data");
-  if (!data || data.Type !== "volume")
+  const mounts: unknown = JSON.parse(await docker(["inspect", "--format", "{{json .Mounts}}", id]));
+  if (!Array.isArray(mounts)) throw new Error("Docker returned invalid container mounts.");
+  const data: unknown = mounts.find(
+    (mount: unknown) =>
+      typeof mount === "object" &&
+      mount !== null &&
+      "Destination" in mount &&
+      mount.Destination === "/data",
+  );
+  if (
+    typeof data !== "object" ||
+    data === null ||
+    !("Type" in data) ||
+    data.Type !== "volume" ||
+    !("Name" in data) ||
+    typeof data.Name !== "string" ||
+    !data.Name
+  )
     throw new Error("This backup command requires the default named /data volume.");
   const image = await docker(["inspect", "--format", "{{.Image}}", id]);
   const mount = `type=volume,source=${data.Name},target=/data,readonly`;
   const wasRunning = state === "running";
-  let fd;
-  let failure;
+  let fd: number | undefined;
+  let failure: unknown;
   let archiveComplete = false;
   try {
     fd = openSync(partial, "wx", 0o600);
@@ -122,7 +150,7 @@ export async function backup({ destination, cwd = repository, env = process.env,
   } catch (error) {
     failure = error;
   } finally {
-    const cleanupErrors = [];
+    const cleanupErrors: unknown[] = [];
     try {
       if (fd !== undefined) closeSync(fd);
     } catch (error) {
@@ -183,9 +211,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         `Backup saved: ${path}\nKeep the matching MASTER_KEY separately. The original app running state was restored.`,
       );
     } catch (error) {
-      console.error(error.message);
+      console.error(error instanceof Error ? error.message : "Backup failed.");
       if (error instanceof AggregateError)
-        for (const cause of error.errors) console.error(cause.message);
+        for (const cause of error.errors as unknown[])
+          console.error(cause instanceof Error ? cause.message : "Backup cleanup failed.");
       process.exitCode = 1;
     } finally {
       process.removeListener("SIGINT", cancel);

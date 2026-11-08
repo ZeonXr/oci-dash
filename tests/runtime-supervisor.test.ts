@@ -22,7 +22,7 @@ import {
 } from "@/server/runtime/supervisor";
 import { clearRuntimeState, writeRuntimeState, type RuntimeState } from "@/server/runtime/state";
 
-const fixturePath = fileURLToPath(new URL("./fixtures/runtime-child.mjs", import.meta.url));
+const fixturePath = fileURLToPath(new URL("./fixtures/runtime-child.ts", import.meta.url));
 const directories: { directory: string; base: string }[] = [];
 const supervisors: RuntimeSupervisor[] = [];
 function directory(): string {

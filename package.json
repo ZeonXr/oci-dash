@@ -6,7 +6,7 @@
   "type": "module",
   "description": "A self-hosted OCI management console built with Next.js and TypeScript.",
   "engines": {
-    "node": ">=24 <27"
+    "node": ">=26.13 <27"
   },
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
@@ -16,15 +16,15 @@
     "worker": "tsx --env-file=.env src/worker.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.scripts.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:isolated": "node scripts/verify-e2e.mjs",
-    "test:runtime": "node scripts/verify-runtime.mjs",
-    "test:backup": "node scripts/verify-backup.mjs",
-    "backup": "node scripts/backup.mjs",
-    "bootstrap": "node scripts/bootstrap.mjs"
+    "test:e2e:isolated": "node scripts/verify-e2e.ts",
+    "test:runtime": "node scripts/verify-runtime.ts",
+    "test:backup": "node scripts/verify-backup.ts",
+    "backup": "node scripts/backup.ts",
+    "bootstrap": "node scripts/bootstrap.ts"
   },
   "dependencies": {
     "@novnc/novnc": "1.7.0",
@@ -52,7 +52,7 @@
     "@playwright/test": "1.65.0",
     "@tailwindcss/postcss": "4.3.5",
     "@types/better-sqlite3": "9.6.0",
-    "@types/node": "24",
+    "@types/node": "26.6.6",
     "@types/novnc__novnc": "1.6.0",
     "@types/qrcode": "1.5.6",
     "@types/react": "19.3.0",

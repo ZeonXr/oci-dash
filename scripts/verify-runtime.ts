@@ -28,7 +28,7 @@ writeFileSync(
   { mode: 0o600 },
 );
 
-function docker(...args) {
+function docker(...args: string[]): string {
   return execFileSync("docker", args, {
     encoding: "utf8",
     windowsHide: true,
@@ -36,14 +36,64 @@ function docker(...args) {
     timeout: 45_000,
   }).trim();
 }
-const execute = (code) => docker("exec", name, "node", "-e", code);
-const inspect = () => JSON.parse(docker("inspect", "--format", "{{json .State}}", name));
-const restarts = () => Number(docker("inspect", "--format", "{{.RestartCount}}", name));
-const runtime = () =>
-  JSON.parse(
-    execute("console.log(require('node:fs').readFileSync('/tmp/oci-dash-runtime.json','utf8'))"),
+const execute = (code: string): string => docker("exec", name, "node", "-e", code);
+interface ContainerState {
+  Running: boolean;
+  ExitCode: number;
+}
+interface RuntimeIdentity {
+  webPid: number;
+  workerPid: number;
+  workerId: string;
+}
+interface ShutdownProbe {
+  stopped: boolean;
+  users: string;
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseObject(text: string, description: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(text);
+  assert.ok(isRecord(value), `${description} must be a JSON object`);
+  return value;
+}
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function inspect(): ContainerState {
+  const value = parseObject(
+    docker("inspect", "--format", "{{json .State}}", name),
+    "Container state",
   );
-function healthy() {
+  assert.ok(typeof value.Running === "boolean", "Container running state must be boolean");
+  assert.ok(
+    typeof value.ExitCode === "number" && Number.isSafeInteger(value.ExitCode),
+    "Container exit code must be an integer",
+  );
+  return { Running: value.Running, ExitCode: value.ExitCode };
+}
+const restarts = (): number => Number(docker("inspect", "--format", "{{.RestartCount}}", name));
+function runtime(): RuntimeIdentity {
+  const value = parseObject(
+    execute("console.log(require('node:fs').readFileSync('/tmp/oci-dash-runtime.json','utf8'))"),
+    "Runtime identity",
+  );
+  assert.ok(positiveInteger(value.webPid), "Runtime Web PID must be a positive integer");
+  assert.ok(positiveInteger(value.workerPid), "Runtime worker PID must be a positive integer");
+  assert.ok(
+    typeof value.workerId === "string" && value.workerId.length > 0,
+    "Runtime worker identity must be a nonempty string",
+  );
+  return { webPid: value.webPid, workerPid: value.workerPid, workerId: value.workerId };
+}
+function shutdownProbe(text: string): ShutdownProbe {
+  const value = parseObject(text, "Shutdown probe");
+  assert.ok(typeof value.stopped === "boolean", "Shutdown status must be boolean");
+  assert.ok(typeof value.users === "string", "Shutdown users must be a string");
+  return { stopped: value.stopped, users: value.users };
+}
+function healthy(): boolean {
   return (
     spawnSync("docker", ["exec", name, "node", "dist/health.mjs"], {
       windowsHide: true,
@@ -52,7 +102,7 @@ function healthy() {
     }).status === 0
   );
 }
-async function waitFor(check, description, timeout = 60_000) {
+async function waitFor(check: () => boolean, description: string, timeout = 60_000): Promise<void> {
   const until = Date.now() + timeout;
   do {
     try {
@@ -64,7 +114,7 @@ async function waitFor(check, description, timeout = 60_000) {
   } while (Date.now() < until);
   throw new Error(`Timed out: ${description}`);
 }
-const accountIdentity = () =>
+const accountIdentity = (): string =>
   execute(
     "const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});console.log(d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(','));d.close();",
   );
@@ -106,7 +156,7 @@ try {
   assert.ok(admin);
   console.log("PASS: isolated single container starts with Web and worker healthy");
 
-  for (const role of ["worker", "web"]) {
+  for (const role of ["worker", "web"] as const) {
     const before = runtime();
     const previousRestarts = restarts();
     execute(`process.kill(${before[`${role}Pid`]}, 'SIGKILL')`);
@@ -159,7 +209,7 @@ try {
     "-e",
     `require('node:fs').cpSync('/source','/data',{recursive:true});const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});const w=d.prepare('SELECT stopped_at FROM job_workers WHERE id=?').get(${JSON.stringify(beforeStop.workerId)});console.log(JSON.stringify({stopped:Boolean(w?.stopped_at),users:d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(',')}));d.close();`,
   );
-  const result = JSON.parse(probe);
+  const result = shutdownProbe(probe);
   assert.equal(result.stopped, true, "Worker must record its graceful shutdown");
   assert.equal(result.users, admin);
   console.log("PASS: SIGTERM shuts down both processes cleanly and records the stopped worker");
@@ -178,7 +228,7 @@ try {
   }
   throw error;
 } finally {
-  const cleanupErrors = [];
+  const cleanupErrors: string[] = [];
   // A failed docker run can still leave a created container. Only remove it if
   // its label proves that this invocation created it.
   if (!containerCreated) {
@@ -197,7 +247,7 @@ try {
     try {
       docker(...args);
     } catch {
-      cleanupErrors.push(args.at(-1));
+      cleanupErrors.push(args.at(-1) ?? "unknown test resource");
     }
   }
   if (!resolve(directory).startsWith(base + sep)) throw new Error("Invalid test cleanup path");

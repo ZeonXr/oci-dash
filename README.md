@@ -18,15 +18,15 @@
 需要 Docker Engine 和 Docker Compose。在项目目录中生成初始配置：
 
 ```sh
-node scripts/bootstrap.mjs
+node scripts/bootstrap.ts
 ```
 
-该命令需要 Node.js。只有 Docker 的 Linux 主机可以改用：
+项目要求 Node.js `>=26.13 <27`，开发与镜像统一使用 `26.13.0`。该脚本由 Node.js 原生移除类型后运行，无需先安装项目依赖。只有 Docker 的 Linux 主机可以改用：
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" \
-  -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim \
-  node scripts/bootstrap.mjs
+  -v "$PWD:/workspace" -w /workspace node:26.13.0-bookworm-slim \
+  node scripts/bootstrap.ts
 ```
 
 脚本只在 `.env` 不存在时生成随机管理员密码和主密钥，不会打印秘密或覆盖已有配置。不要先复制一个必填项为空的 `.env`；已有文件需要自行补全。
