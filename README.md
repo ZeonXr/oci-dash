@@ -15,12 +15,12 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.1.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.0`，发布目标平台为 Linux `amd64` 和 `arm64`。
+只需 Docker Engine、Docker Compose 和一份 [v0.1.1 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.1`，发布目标平台为 Linux `amd64` 和 `arm64`。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml -o compose.yaml
 docker compose pull
 docker compose up -d --wait
 docker compose exec app cat /data/.initial-admin-password
@@ -28,7 +28,7 @@ docker compose exec app cat /data/.initial-admin-password
 
 打开 `http://localhost:3000`，使用 `admin` 和命令显示的初始密码登录，然后在“设置 → 登录安全”修改密码。初始密码文件在成功改密后删除；重启和升级不会重置已有管理员。
 
-这份 Compose 不依赖其他仓库文件。镜像自带非 root 运行用户、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。发布与验证状态见[验证指南](docs/VERIFICATION.md#v010-发布验收)。
+这份 Compose 不依赖其他仓库文件。镜像自带非 root 运行用户、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。发布与验证状态见[验证指南](docs/VERIFICATION.md#v011-发布验收)。
 
 新数据库启动后是空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问通过 HTTPS 反向代理，保留浏览器访问的 Host，并启用 WebSocket Upgrade。无需配置域名环境变量，具体示例见[运维说明](docs/OPERATIONS.md#https-与访问)。
 

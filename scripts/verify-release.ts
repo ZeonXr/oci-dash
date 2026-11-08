@@ -1,8 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { runProcess, type RunProcessOptions } from "./lib/process.ts";
@@ -347,6 +356,43 @@ async function localDockerEndpoint(): Promise<string> {
   return endpoint;
 }
 
+async function installedComposeDirectory(
+  endpoint: string,
+  isolatedEnvironment: NodeJS.ProcessEnv,
+): Promise<string> {
+  // Query only Docker's plugin-path metadata. Never open or copy its auth configuration.
+  const environment = { ...isolatedEnvironment };
+  delete environment.DOCKER_CONFIG;
+  if (process.env.DOCKER_CONFIG) environment.DOCKER_CONFIG = process.env.DOCKER_CONFIG;
+  let executable: string;
+  try {
+    executable = await runProcess(
+      "docker",
+      [
+        "--host",
+        endpoint,
+        "info",
+        "--format",
+        '{{range .ClientInfo.Plugins}}{{if eq .Name "compose"}}{{.Path}}{{end}}{{end}}',
+      ],
+      { env: environment, timeoutMs: 30_000 },
+    );
+    check(isAbsolute(executable) && !/[\r\n\0]/.test(executable), "Invalid Compose plugin path.");
+    check(
+      basename(executable).toLowerCase() ===
+        (process.platform === "win32" ? "docker-compose.exe" : "docker-compose"),
+      "Unexpected Compose plugin executable.",
+    );
+    check(statSync(executable).isFile(), "Compose plugin is not a regular executable file.");
+    accessSync(executable, constants.X_OK);
+  } catch {
+    throw new Error(
+      "Could not locate the installed Compose plugin without copying Docker credentials.",
+    );
+  }
+  return dirname(executable);
+}
+
 const containerProbe = String.raw`
 (async () => {
   const f = require('node:fs'), c = require('node:crypto'), o = require('node:os');
@@ -457,6 +503,17 @@ async function main(): Promise<void> {
         );
       }
     };
+    try {
+      await docker(["compose", "version"]);
+    } catch {
+      const pluginDirectory = await installedComposeDirectory(endpoint, env);
+      writeFileSync(
+        join(configDirectory, "config.json"),
+        JSON.stringify({ auths: { "ghcr.io": {} }, cliPluginsExtraDirs: [pluginDirectory] }),
+        { mode: 0o600 },
+      );
+      await docker(["compose", "version"]);
+    }
     const composePrefix = [
       "compose",
       "--project-directory",
@@ -539,9 +596,10 @@ async function main(): Promise<void> {
       redirect: "error",
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
     });
+    const healthBody = json(await health.text());
     check(
-      health.ok && json(await health.text()).ok === true,
-      "Published loopback endpoint is not healthy.",
+      health.ok && healthBody.ok === true && healthBody.version === tag.slice(1),
+      "Published loopback endpoint is unhealthy or reports an unexpected version.",
     );
     console.log(
       "PASS: anonymous pull starts a healthy non-root application with Tini, tmpfs and generated admin login",

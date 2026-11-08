@@ -17,6 +17,8 @@ jobs:
       E2E_BROWSER_CHANNEL: chrome
     steps:
       - uses: actions/checkout@v4
+      - name: Validate the standalone deployment file
+        run: docker compose --env-file /dev/null -f compose.yaml config --quiet
       - uses: actions/setup-node@v4
         with:
           node-version: "26.13.0"

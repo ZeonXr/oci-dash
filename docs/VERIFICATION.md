@@ -68,14 +68,14 @@ npm run test:e2e:isolated -- --no-build
 
 ## 已有基线
 
-### v0.1.0 发布验收
+### v0.1.1 发布验收
 
-源码 tag `v0.1.0` 对应固定镜像 `ghcr.io/zeonxr/oci-dash:v0.1.0` 和独立的 [compose.yaml 发布资产](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)。发布验收须独立核对以下证据，不能仅从工作流配置或下方历史基线推断结果：
+源码 tag `v0.1.1` 对应固定镜像 `ghcr.io/zeonxr/oci-dash:v0.1.1` 和独立的 [compose.yaml 发布资产](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)。发布验收须独立核对以下证据，不能仅从工作流配置或下方历史基线推断结果：
 
 - 确认源码 tag 对应的提交，分别在原生 Linux `amd64`、`arm64` 环境完成构建及对应检查。
 - 确认镜像索引包含两个目标架构，且固定版本镜像可匿名拉取。
 - 在不含源码及个人配置的目录下载发布资产，执行 `docker compose pull`、`docker compose up -d --wait`，核对空数据初始化、健康状态和数据持久化。
-- 将实际提交、镜像摘要、平台与结果关联到 [GitHub Actions](https://github.com/ZeonXr/oci-dash/actions) 及对应 [GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.1.0)。发布镜像的结果应单独记录，不替代真实 OCI 写入验收。
+- 将实际提交、镜像摘要、平台与结果关联到 [GitHub Actions](https://github.com/ZeonXr/oci-dash/actions) 及对应 [GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.1.1)。发布镜像的结果应单独记录，不替代真实 OCI 写入验收。
 
 ### 先前提交
 

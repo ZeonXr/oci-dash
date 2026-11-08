@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { version as packageVersion } from "../../package.json";
 import type { DashboardData, OperationRequest } from "@/lib/contracts";
 import { isJobPending } from "@/lib/job-state";
 import {
@@ -54,7 +55,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       url = new URL(request.url);
     if (method === "GET" && path === "health") {
       getDatabase().prepare("SELECT 1").get();
-      return json({ ok: true, version: process.env.APP_VERSION ?? "0.1.0" });
+      return json({ ok: true, version: process.env.APP_VERSION ?? packageVersion });
     }
     if (!["GET", "HEAD"].includes(method)) assertSameOrigin(request);
     if (method === "POST" && path === "auth/login") {
@@ -270,7 +271,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       return json({
         username: user.username,
         mfaEnabled: user.mfaEnabled,
-        version: process.env.APP_VERSION ?? "0.1.0",
+        version: process.env.APP_VERSION ?? packageVersion,
         worker: {
           alive: worker.online,
           lastSeenAt: worker.lastHeartbeatAt,

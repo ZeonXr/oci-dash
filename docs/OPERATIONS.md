@@ -1,20 +1,20 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.0`，默认数据卷为 `app-data`；可用 `DATA_PATH` 改为宿主目录，容器内数据库始终为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.1`，默认数据卷为 `app-data`；可用 `DATA_PATH` 改为宿主目录，容器内数据库始终为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.1.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.1.1 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml -o compose.yaml
 docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v010-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中；日常仅需按需调整端口和数据位置。
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v011-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中；日常仅需按需调整端口和数据位置。
 
 首次启动会生成管理员和加密密钥，后续启动复用已保存的数据：
 
