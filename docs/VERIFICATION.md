@@ -70,12 +70,25 @@ npm run test:e2e:isolated -- --no-build
 
 ### v0.1.1 发布验收
 
-源码 tag `v0.1.1` 对应固定镜像 `ghcr.io/zeonxr/oci-dash:v0.1.1` 和独立的 [compose.yaml 发布资产](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)。发布验收须独立核对以下证据，不能仅从工作流配置或下方历史基线推断结果：
+**2026-11-09** 完成 `v0.1.1` 的公开发布验收。源码为 [`2f208a7`](https://github.com/ZeonXr/oci-dash/commit/2f208a77bc8106f5dd5d382c8132f531af966c6a)，[GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.1.1) 提供独立的 [compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)。
 
-- 确认源码 tag 对应的提交，分别在原生 Linux `amd64`、`arm64` 环境完成构建及对应检查。
-- 确认镜像索引包含两个目标架构，且固定版本镜像可匿名拉取。
-- 在不含源码及个人配置的目录下载发布资产，执行 `docker compose pull`、`docker compose up -d --wait`，核对空数据初始化、健康状态和数据持久化。
-- 将实际提交、镜像摘要、平台与结果关联到 [GitHub Actions](https://github.com/ZeonXr/oci-dash/actions) 及对应 [GitHub Release](https://github.com/ZeonXr/oci-dash/releases/tag/v0.1.1)。发布镜像的结果应单独记录，不替代真实 OCI 写入验收。
+| 项目           | 结果与证据                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 源码 CI        | [通过](https://github.com/ZeonXr/oci-dash/actions/runs/42502969470)：格式、类型、离线测试、生产构建、容器生命周期、备份恢复和浏览器检查。                |
+| 原生平台       | [发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42502969324) 的 `amd64`、`arm64` 构建及容器运行任务均通过。                                   |
+| 公开部署       | [独立验收通过](https://github.com/ZeonXr/oci-dash/actions/runs/42504492769)，本机 Windows Docker Desktop 的同项检查也通过。                              |
+| 单文件与持久化 | 在不含源码、个人 `.env` 或注册表凭据的目录下载发布资产，匿名拉取并启动；初始管理员登录、健康检查、重启及重建后的数据和密钥一致性通过，临时项目清理完成。 |
+
+镜像 `ghcr.io/zeonxr/oci-dash:v0.1.1` 的索引摘要为 `sha256:b7bcf588fe03e26a3e2300b1342f101188b7a0f24a9c568e39dcd9d167372a7b`：
+
+| 平台          | 已验证的平台摘要                                                          |
+| ------------- | ------------------------------------------------------------------------- |
+| `linux/amd64` | `sha256:906469c97f6e3de18f9029c3e314cd2f797e31bdc94b984f836d241d11cf2e70` |
+| `linux/arm64` | `sha256:e0eadeacc2ab90ec8d3cfaa535fcc6ab8869c85bce74235a9b3f75150355c739` |
+
+首次发布流程的末尾验收误判了 Compose 自动补充的空默认字段。验证器在 [`6b73b3a`](https://github.com/ZeonXr/oci-dash/commit/6b73b3a) 修复后，对同一镜像摘要完成了上述独立复验；未覆盖源码标签或发布镜像。复验可从 Actions 的 **Verify published release** 工作流指定版本执行。
+
+这些检查使用空数据库和合成身份，不替代真实 OCI 写入验收。
 
 ### 先前提交
 

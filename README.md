@@ -15,7 +15,7 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.1.1 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.1`，发布目标平台为 Linux `amd64` 和 `arm64`。
+只需 Docker Engine、Docker Compose 和一份 [v0.1.1 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.1.1/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.1.1`，支持 Linux `amd64` 和 `arm64`。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
