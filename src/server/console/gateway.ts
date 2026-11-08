@@ -11,6 +11,7 @@ import { currentSessionHash, requireUser } from "../auth";
 import { audit } from "../db";
 import { AppError } from "../errors";
 import { errorResponse, json } from "../http";
+import { assertRequestOrigin, configuredOrigin, gatewayRequestUrl } from "../request-origin";
 import type { ConsoleManager } from "./manager";
 import type { ConsoleActor } from "./types";
 
@@ -71,9 +72,7 @@ async function respond(response: ServerResponse, result: Response): Promise<void
 
 /** A single public HTTP/WSS entry; the generated Next server remains a loopback upstream. */
 export function createConsoleGateway(options: GatewayOptions) {
-  const expectedOrigin = new URL(
-    options.origin ?? process.env.APP_ORIGIN ?? "http://localhost:3000",
-  ).origin;
+  const expectedOrigin = configuredOrigin(options.origin ?? process.env.APP_ORIGIN);
   const authenticate = options.authenticate ?? actorFor;
   const recordEvent =
     options.recordEvent ??
@@ -94,19 +93,19 @@ export function createConsoleGateway(options: GatewayOptions) {
     handleProtocols: (protocols) => (protocols.has("oci-console") ? "oci-console" : false),
   });
   const toRequest = (request: IncomingMessage) => {
-    const url = new URL(request.url ?? "/", expectedOrigin);
-    if (url.origin !== expectedOrigin) throw new AppError("请求地址无效", 400);
+    const url = gatewayRequestUrl(
+      request.url ?? "/",
+      request.headers.host ?? "",
+      request.headers.origin,
+      expectedOrigin,
+    );
     return new Request(url, {
       method: request.method,
       headers: headersFrom(request),
     });
   };
   function assertOrigin(request: Request) {
-    if (
-      request.headers.get("origin") !== expectedOrigin ||
-      request.headers.get("sec-fetch-site") === "cross-site"
-    )
-      throw new AppError("请求来源不匹配，请从面板页面操作", 403, "ORIGIN_MISMATCH");
+    assertRequestOrigin(request, expectedOrigin);
   }
 
   async function consoleApi(request: IncomingMessage, response: ServerResponse, path: string) {
@@ -159,10 +158,11 @@ export function createConsoleGateway(options: GatewayOptions) {
     }
     let url: URL;
     try {
-      url = new URL(request.url ?? "/", expectedOrigin);
-      if (url.origin !== expectedOrigin) throw new Error("Unexpected request target");
-    } catch {
-      response.writeHead(400).end();
+      const normalized = toRequest(request);
+      url = new URL(normalized.url);
+      if (!["GET", "HEAD"].includes(request.method ?? "GET")) assertOrigin(normalized);
+    } catch (error) {
+      response.writeHead(error instanceof AppError ? error.status : 400).end();
       return;
     }
     if (url.pathname === "/api/console" || url.pathname.startsWith("/api/console/")) {
@@ -174,6 +174,10 @@ export function createConsoleGateway(options: GatewayOptions) {
     delete headers.upgrade;
     delete headers["proxy-authorization"];
     delete headers["proxy-connection"];
+    // Preserve Host, but do not let caller-supplied forwarding headers replace
+    // it in Next's request URL construction. HTTPS is determined by checked Origin.
+    delete headers["x-forwarded-host"];
+    delete headers["x-forwarded-proto"];
     const upstream = httpRequest(
       {
         hostname: "127.0.0.1",

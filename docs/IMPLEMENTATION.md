@@ -4,17 +4,18 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI T
 
 ## 模块
 
-| 路径                                         | 职责                                       |
-| -------------------------------------------- | ------------------------------------------ |
-| `src/app/`、`src/components/`                | 页面、交互、筛选、渐进刷新和确认界面。     |
-| `src/server/router.ts`、`auth.ts`、`http.ts` | 业务 API、会话、MFA、同源检查和请求边界。  |
-| `src/server/accounts.ts`、`inventory.ts`     | 加密凭据、账号版本、库存合并和资源归属。   |
-| `src/server/oci/`                            | SDK 客户端、范围校验、库存读取和资源操作。 |
-| `src/server/jobs/`                           | 持久队列、租约、资源锁、检查点和 Worker。  |
-| `src/server/analytics/`                      | 流量、费用、CPU、查询期限与有界缓存。      |
-| `src/server/console/`                        | VNC 会话、OCI 控制台、SSH 和 WebSocket。   |
-| `src/runtime.ts`、`src/health.ts`            | 容器进程管理、统一网关和整体健康检查。     |
-| `scripts/`                                   | 初始化、备份及隔离验证的 TypeScript 工具。 |
+| 路径                                           | 职责                                             |
+| ---------------------------------------------- | ------------------------------------------------ |
+| `src/app/`、`src/components/`                  | 页面、交互、筛选、渐进刷新和确认界面。           |
+| `src/server/router.ts`、`auth.ts`、`http.ts`   | 业务 API、会话、MFA、同源检查和请求边界。        |
+| `src/server/accounts.ts`、`inventory.ts`       | 加密凭据、账号版本、库存合并和资源归属。         |
+| `src/server/master-key.ts`、`initial-admin.ts` | 原子持久化主密钥、旧密钥验证及首次管理员初始化。 |
+| `src/server/oci/`                              | SDK 客户端、范围校验、库存读取和资源操作。       |
+| `src/server/jobs/`                             | 持久队列、租约、资源锁、检查点和 Worker。        |
+| `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。            |
+| `src/server/console/`                          | VNC 会话、OCI 控制台、SSH 和 WebSocket。         |
+| `src/runtime.ts`、`src/health.ts`              | 容器进程管理、统一网关和整体健康检查。           |
+| `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。               |
 
 主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
 
@@ -27,6 +28,8 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI T
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
 空数据库只初始化管理员，不生成账号、实例或指标样例。运行代码不读取旧 `DEMO_MODE`，不存在演示开关或假数据分支；测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
+
+默认启动无需 `.env`。主密钥和自动生成的初始密码分别保存为数据库目录中的 `.master-key` 和 `.initial-admin-password`；完整数据卷备份同时包含数据库与解密材料。初始化用 SQLite 写事务串行化，先原子发布文件，再提交对应记录；已有管理员不重置。旧环境密钥只有通过全部已有凭据及 MFA 的解密验证后才持久化，有加密数据或指纹绑定却缺少原密钥时拒绝生成替代密钥。
 
 正常读取使用服务端凭据；账号读取 API 不返回密钥。账号配置版本用于阻止异步读取结果或缓存跨越凭据和范围变化。部署、停止期限和恢复流程见[运维说明](OPERATIONS.md)。
 

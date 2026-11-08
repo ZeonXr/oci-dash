@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 // Every destructive check targets resources created here. No host .env, existing
@@ -11,22 +9,6 @@ const runId = randomUUID();
 const name = `oci-dash-runtime-test-${runId}`;
 const volume = `${name}-data`;
 const image = "oci-dash:local";
-const base = resolve(".test-tmp");
-mkdirSync(base, { recursive: true });
-const directory = mkdtempSync(join(base, "runtime-container-"));
-const envFile = join(directory, "test.env");
-writeFileSync(
-  envFile,
-  [
-    "ADMIN_USERNAME=runtime-test",
-    `ADMIN_PASSWORD=${randomBytes(24).toString("base64url")}`,
-    `MASTER_KEY=${randomBytes(32).toString("base64")}`,
-    "APP_ORIGIN=http://localhost:3000",
-    "DATABASE_PATH=/data/oci-dash.db",
-    "",
-  ].join("\n"),
-  { mode: 0o600 },
-);
 
 function docker(...args: string[]): string {
   return execFileSync("docker", args, {
@@ -118,6 +100,10 @@ const accountIdentity = (): string =>
   execute(
     "const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});console.log(d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(','));d.close();",
   );
+const initializationIdentity = (): string =>
+  execute(
+    "const f=require('node:fs');const c=require('node:crypto');const a=require('node:assert/strict');const files=['/data/.master-key','/data/.initial-admin-password'];for(const p of files)a.equal(f.statSync(p).mode&0o777,0o600);a.equal(f.readFileSync(files[0]).length,32);console.log(c.createHash('sha256').update(f.readFileSync(files[0])).update(f.readFileSync(files[1])).digest('hex'));",
+  );
 
 let containerCreated = false;
 let volumeCreated = false;
@@ -144,8 +130,6 @@ try {
     "no-new-privileges:true",
     "--cap-drop",
     "ALL",
-    "--env-file",
-    envFile,
     "--mount",
     `type=volume,src=${volume},dst=/data`,
     image,
@@ -153,8 +137,17 @@ try {
   containerCreated = true;
   await waitFor(healthy, "initial Web and worker health");
   const admin = accountIdentity();
+  const initialization = initializationIdentity();
   assert.ok(admin);
-  console.log("PASS: isolated single container starts with Web and worker healthy");
+  assert.equal(
+    execute(
+      "const a=require('node:assert/strict');const password=require('node:fs').readFileSync('/data/.initial-admin-password','utf8').trim();fetch('http://127.0.0.1:3000/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://127.0.0.1:3000'},body:JSON.stringify({username:'admin',password})}).then(async r=>{a.equal(r.status,200);a.ok(r.headers.get('set-cookie')?.includes('HttpOnly'));console.log('ok')});",
+    ),
+    "ok",
+  );
+  console.log(
+    "PASS: container initializes and accepts its generated administrator without environment configuration",
+  );
 
   for (const role of ["worker", "web"] as const) {
     const before = runtime();
@@ -168,6 +161,11 @@ try {
       accountIdentity(),
       admin,
       "Administrator identity must survive container restarts",
+    );
+    assert.equal(
+      initializationIdentity(),
+      initialization,
+      "Generated secrets must survive restarts",
     );
     console.log(
       `PASS: ${role} failure restarts the complete application and preserves its database`,
@@ -250,8 +248,6 @@ try {
       cleanupErrors.push(args.at(-1) ?? "unknown test resource");
     }
   }
-  if (!resolve(directory).startsWith(base + sep)) throw new Error("Invalid test cleanup path");
-  rmSync(directory, { recursive: true, force: true });
   if (cleanupErrors.length)
     throw new Error(`Could not remove test resources: ${cleanupErrors.join(", ")}`);
 }

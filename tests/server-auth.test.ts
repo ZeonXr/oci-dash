@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import * as OTPAuth from "otpauth";
 import type { InstanceSummary } from "@/lib/contracts";
@@ -96,6 +96,7 @@ function request(
   return new Request(ORIGIN + "/api/" + path, {
     method,
     headers: {
+      host: new URL(ORIGIN).host,
       ...(options.token ? { cookie: `${SESSION_COOKIE}=${options.token}` } : {}),
       ...(options.origin === null ? {} : { origin: options.origin ?? ORIGIN }),
       ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
@@ -146,6 +147,98 @@ function instance(accountId: string, suffix: string, state = "RUNNING"): Instanc
 }
 
 describe("session and request boundaries", () => {
+  it.each([
+    ["http://localhost:3000", "localhost:3000", false],
+    ["http://127.0.0.1:8827", "127.0.0.1:8827", false],
+    ["https://panel.example", "panel.example:443", true],
+  ])(
+    "logs in and removes cookies using validated Origin %s without APP_ORIGIN",
+    async (origin, host, secure) => {
+      vi.stubEnv("APP_ORIGIN", undefined);
+      const make = (path: string, token?: string, body?: unknown) =>
+        new Request(`http://127.0.0.1:49231/api/${path}`, {
+          method: "POST",
+          headers: {
+            origin,
+            host,
+            "content-type": "application/json",
+            "x-forwarded-host": "untrusted.example",
+            "x-forwarded-proto": "http",
+            ...(token ? { cookie: `${SESSION_COOKIE}=${token}` } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+      const result = await handleApi(
+        make("auth/login", undefined, { username: USERNAME, password: PASSWORD }),
+        ["auth", "login"],
+      );
+      expect(result.status).toBe(200);
+      const cookie = result.headers.get("set-cookie")!;
+      expect(cookie.includes("; Secure")).toBe(secure);
+      const token = cookie.match(/oci_dash_session=([^;]+)/)![1];
+      const removed = await handleApi(make("auth/logout", token), ["auth", "logout"]);
+      expect(removed.status).toBe(200);
+      expect(removed.headers.get("set-cookie")).toContain("Max-Age=0");
+      expect(removed.headers.get("set-cookie")!.includes("; Secure")).toBe(secure);
+      expect(() => requireUser(request("auth/me", { token }))).toThrow();
+    },
+  );
+
+  it("rejects a forged forwarded host and never issues a cookie for an unvalidated origin", async () => {
+    vi.stubEnv("APP_ORIGIN", undefined);
+    const incoming = new Request("http://127.0.0.1:49231/api/auth/login", {
+      method: "POST",
+      headers: {
+        host: "panel.example",
+        origin: "https://other.example",
+        "x-forwarded-host": "other.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+    });
+    const result = await handleApi(incoming, ["auth", "login"]);
+    expect(result.status).toBe(403);
+    expect(result.headers.has("set-cookie")).toBe(false);
+    expect(() => sessionCookie("not-issued", incoming)).toThrow();
+    expect(getDatabase().prepare("SELECT count(*) FROM login_attempts").pluck().get()).toBe(0);
+  });
+
+  it("removes the generated initial password only after a successful password change", () => {
+    getDatabase().prepare("DELETE FROM users").run();
+    closeDatabase();
+    vi.stubEnv("ADMIN_PASSWORD", undefined);
+    const db = getDatabase();
+    const path = join(dirname(db.name), ".initial-admin-password");
+    const generated = readFileSync(path, "utf8").trim();
+    const current = login(USERNAME, generated);
+    expect(() =>
+      changePassword(current.user, "wrong-password", "replacement-password-901"),
+    ).toThrow();
+    expect(existsSync(path)).toBe(true);
+    changePassword(current.user, generated, "replacement-password-901");
+    expect(existsSync(path)).toBe(false);
+    expect(() => requireUser(request("auth/me", { token: current.token }))).toThrow();
+    expect(login(USERNAME, "replacement-password-901").user.id).toBe(current.user.id);
+    closeDatabase();
+    getDatabase();
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("keeps a committed password change successful when initial-password cleanup fails", () => {
+    const current = loggedIn();
+    mkdirSync(join(dirname(getDatabase().name), ".initial-admin-password"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        changePassword(current.user, PASSWORD, "replacement-password-901"),
+      ).not.toThrow();
+      expect(login(USERNAME, "replacement-password-901").user.id).toBe(current.user.id);
+      expect(warn.mock.calls).toEqual([["Initial administrator password file cleanup failed."]]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("returns empty persisted resources on a fresh database without querying OCI", async () => {
     const { token } = loggedIn();
     for (const [path, expected] of [

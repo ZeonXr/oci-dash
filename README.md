@@ -15,31 +15,16 @@
 
 ## 快速部署
 
-需要 Docker Engine 和 Docker Compose。在项目目录中生成初始配置：
+只需 Docker Engine 和 Docker Compose，无需安装 Node.js 或创建 `.env`。在项目目录运行：
 
 ```sh
-node scripts/bootstrap.ts
+docker compose up -d --build --wait
+docker compose exec app cat /data/.initial-admin-password
 ```
 
-项目要求 Node.js `>=26.13 <27`，开发与镜像统一使用 `26.13.0`。该脚本由 Node.js 原生移除类型后运行，无需先安装项目依赖。只有 Docker 的 Linux 主机可以改用：
+打开 `http://localhost:3000`，使用 `admin` 和命令显示的初始密码登录，然后在“设置 → 登录安全”修改密码。初始密码文件在成功改密后删除；重启和升级不会重置已有管理员。
 
-```sh
-docker run --rm --user "$(id -u):$(id -g)" \
-  -v "$PWD:/workspace" -w /workspace node:26.13.0-bookworm-slim \
-  node scripts/bootstrap.ts
-```
-
-脚本只在 `.env` 不存在时生成随机管理员密码和主密钥，不会打印秘密或覆盖已有配置。不要先复制一个必填项为空的 `.env`；已有文件需要自行补全。
-
-检查 `.env` 中的 `APP_ORIGIN` 和 `PORT`，然后启动：
-
-```sh
-docker compose up -d --build app
-docker compose ps app
-docker compose exec app node dist/health.mjs
-```
-
-默认访问地址为 `http://localhost:3000`，用户名为 `admin`，初始密码保存在 `.env` 的 `ADMIN_PASSWORD` 中。新数据库启动后是普通空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问应通过 HTTPS 反向代理，`APP_ORIGIN` 必须与浏览器使用的源地址一致。VNC 还需要代理支持 WebSocket Upgrade。
+新数据库启动后是空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问通过 HTTPS 反向代理，保留浏览器访问的 Host，并启用 WebSocket Upgrade。无需配置域名环境变量，具体示例见[运维说明](docs/OPERATIONS.md#https-与访问)。
 
 Compose 服务为 `app`，数据库保存在 `app-data` 卷内的 `/data/oci-dash.db`。不要用 `docker compose down -v` 进行日常重启。
 
@@ -55,7 +40,9 @@ Compose 服务为 `app`，数据库保存在 `app-data` 卷内的 `/data/oci-das
 
 OCI API 私钥和 MFA 秘密使用 AES-256-GCM 加密，管理员密码使用 scrypt，登录令牌和恢复码以散列形式保存。数据库中的资源名称、IP、任务和统计报告并非全库加密。
 
-必须同时保留数据库备份和对应的原 `MASTER_KEY`，并分别受控存放。更换主密钥不会自动重加密数据；修改 `.env` 中的初始化密码也不会重置已有管理员。备份、恢复和升级请按[运维说明](docs/OPERATIONS.md)操作。
+加密密钥在首次启动时自动生成，保存在数据卷的 `.master-key` 中，无需手动填写 `MASTER_KEY`。备份和恢复整个数据卷，不能只保留数据库或删除密钥文件。完整备份包含解密材料，应限制访问；它不能抵御整个数据卷泄露或主机失陷。备份、恢复和升级请按[运维说明](docs/OPERATIONS.md)操作。
+
+**旧版本升级**：此前在 `.env` 中使用 `MASTER_KEY` 的部署，先按[旧密钥迁移步骤](docs/OPERATIONS.md#从环境变量主密钥迁移)保存原密钥，再采用简化后的 Compose。新 Compose 不会自动把 `.env` 中的应用变量传入容器。
 
 旧 `DEMO_MODE` 配置已不再读取。曾用 `DEMO_MODE=true` 暂停任务或控制台恢复的部署，升级后会按正常规则继续处理已有记录；启动新版本前请按[升级检查流程](docs/OPERATIONS.md#从旧-demo_mode-配置升级)停止并核对。停止应用不会撤销 OCI 已接受的操作。
 

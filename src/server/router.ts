@@ -67,12 +67,12 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         .parse(await readJson(request));
       const result = login(input.username, input.password, input.code);
       return json({ user: result.user }, 200, {
-        "Set-Cookie": sessionCookie(result.token),
+        "Set-Cookie": sessionCookie(result.token, request),
       });
     }
     if (method === "POST" && path === "auth/logout") {
       logout(request);
-      return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", true) });
+      return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", request, true) });
     }
     const user = requireUser(request);
     if (method === "GET" && path === "auth/me") return json({ user });
@@ -288,7 +288,9 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
           })
           .parse(value);
         changePassword(user, input.currentPassword, input.newPassword);
-        return json({ ok: true, relogin: true }, 200, { "Set-Cookie": sessionCookie("", true) });
+        return json({ ok: true, relogin: true }, 200, {
+          "Set-Cookie": sessionCookie("", request, true),
+        });
       }
       if (path === "settings/mfa/setup") {
         const input = z.object({ password: z.string().max(256) }).parse(value);

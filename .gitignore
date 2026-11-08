@@ -6,6 +6,8 @@ data/
 !.env.example
 *.pem
 *.key
+.master-key
+.initial-admin-password
 *.sqlite*
 *.db*
 .oci/

@@ -12,7 +12,6 @@
 mise trust
 mise install node@26.13.0
 mise exec -- npm ci
-mise exec -- npm run bootstrap
 mise exec -- npm run dev
 ```
 
@@ -22,7 +21,6 @@ mise exec -- npm run dev
 
 ```sh
 npm ci
-npm run bootstrap
 npm run dev
 ```
 
@@ -32,11 +30,11 @@ npm run dev
 npm run worker
 ```
 
-bootstrap 不覆盖已有 `.env`。新数据库只初始化管理员，启动的是普通空面板；应用不读取旧 `DEMO_MODE` 变量，也不生成示例账号。不要把生产环境配置复制到开发目录；初始管理员密码只从本地生成文件读取，不应出现在提交或截图中。开发脚本默认监听 `0.0.0.0`；仅本机使用时可运行 `npx --no-install next dev --hostname 127.0.0.1`。
+无需 `.env`。首次访问应用后，从 `data/.initial-admin-password` 读取 `admin` 的初始密码，密钥同样自动保存到 `data/`。新数据库是空面板，不生成示例账号。可选的本地 `.env` 可覆盖应用变量，见[运维说明](docs/OPERATIONS.md#可选配置)。不要把生产环境配置复制到开发目录；初始密码不应出现在提交或截图中。开发脚本默认监听 `0.0.0.0`；仅本机使用时可运行 `npx --no-install next dev --hostname 127.0.0.1`。
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
-`scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行。初始化可在安装依赖前执行 `node scripts/bootstrap.ts`，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
+`scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
 
 PostCSS 插件列表使用静态 `postcss.config.json`，不需要可执行的 JavaScript 配置。
 

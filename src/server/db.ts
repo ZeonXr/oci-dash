@@ -2,9 +2,9 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
 import * as schema from "./schema";
-import { hashPassword } from "./crypto";
+import { initializeMasterKey } from "./master-key";
+import { ensureInitialAdmin } from "./initial-admin";
 
 let connection: Database.Database | undefined;
 let currentPath: string | undefined;
@@ -43,34 +43,28 @@ export function getDatabase(): Database.Database {
   const path = resolve(/* turbopackIgnore: true */ process.env.DATABASE_PATH ?? "data/oci-dash.db");
   if (connection && path === currentPath) return connection;
   connection?.close();
+  connection = undefined;
+  currentPath = undefined;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
-  db.pragma("busy_timeout = 10000");
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.transaction(() => {
-    db.exec(migration);
-    const columns = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
-    if (!columns.some((column) => column.name === "revision"))
-      db.exec("ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
-    db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(
-      new Date().toISOString(),
-    );
-  }).immediate();
-  if (process.env.ADMIN_PASSWORD && !db.prepare("SELECT id FROM users LIMIT 1").get()) {
-    if (process.env.ADMIN_PASSWORD.length < 12) {
-      db.close();
-      throw new Error("ADMIN_PASSWORD must contain at least 12 characters");
-    }
-    const passwordHash = hashPassword(process.env.ADMIN_PASSWORD);
-    db.prepare(
-      "INSERT OR IGNORE INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)",
-    ).run(
-      randomUUID(),
-      process.env.ADMIN_USERNAME ?? "admin",
-      passwordHash,
-      new Date().toISOString(),
-    );
+  try {
+    db.pragma("busy_timeout = 10000");
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    db.transaction(() => {
+      db.exec(migration);
+      const columns = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
+      if (!columns.some((column) => column.name === "revision"))
+        db.exec("ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
+      db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(
+        new Date().toISOString(),
+      );
+    }).immediate();
+    initializeMasterKey(db, path);
+    ensureInitialAdmin(db, path);
+  } catch (error) {
+    db.close();
+    throw error;
   }
   try {
     chmodSync(path, 0o600);

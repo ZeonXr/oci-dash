@@ -13,7 +13,7 @@
     "build": "next build && npm run build:runtime",
     "build:runtime": "esbuild src/runtime.ts src/health.ts src/worker.ts src/worker-health.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --out-extension:.js=.mjs",
     "start": "next start --hostname 0.0.0.0",
-    "worker": "tsx --env-file=.env src/worker.ts",
+    "worker": "tsx --env-file-if-exists=.env src/worker.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit && tsc --project scripts/tsconfig.json",
@@ -23,8 +23,7 @@
     "test:e2e:isolated": "node scripts/verify-e2e.ts",
     "test:runtime": "node scripts/verify-runtime.ts",
     "test:backup": "node scripts/verify-backup.ts",
-    "backup": "node scripts/backup.ts",
-    "bootstrap": "node scripts/bootstrap.ts"
+    "backup": "node scripts/backup.ts"
   },
   "dependencies": {
     "@novnc/novnc": "1.7.0",

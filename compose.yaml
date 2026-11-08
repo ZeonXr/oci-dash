@@ -9,26 +9,14 @@ services:
     stop_grace_period: 35s
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
-    environment:
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run npm run bootstrap to create .env first}
-      MASTER_KEY: ${MASTER_KEY:?Run npm run bootstrap to create .env first}
-      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
-      DATABASE_PATH: /data/oci-dash.db
-      NEXT_TELEMETRY_DISABLED: "1"
     volumes:
       - app-data:/data
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: "3"
+      driver: local
 
 volumes:
   app-data:

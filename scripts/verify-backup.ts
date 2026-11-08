@@ -63,6 +63,8 @@ db.pragma('journal_mode = WAL');
 db.exec('CREATE TABLE IF NOT EXISTS proof (value TEXT); DELETE FROM proof');
 db.prepare('INSERT INTO proof VALUES (?)').run('backup-fixture');
 fs.chmodSync('/data/backup-fixture.db', 0o600);
+fs.writeFileSync('/data/.master-key', Buffer.alloc(32, 0x5a), {mode: 0o600});
+fs.chmodSync('/data/.master-key', 0o600);
 fs.writeFileSync('/data/ready', 'ready', {mode: 0o600});
 setInterval(() => {}, 1000);
 `;
@@ -135,7 +137,17 @@ try {
         "node",
         image,
         "-e",
-        "require('node:child_process').execFileSync('tar',['-xzf','-','-C','/restore'],{stdio:['inherit','ignore','inherit']});const D=require('better-sqlite3');const d=new D('/restore/backup-fixture.db',{readonly:true});console.log(d.prepare('SELECT value FROM proof').pluck().get());d.close();",
+        `
+require('node:child_process').execFileSync('tar',['-xzf','-','-C','/restore'],{stdio:['inherit','ignore','inherit']});
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+assert.ok(fs.readFileSync('/restore/.master-key').equals(Buffer.alloc(32, 0x5a)), 'The full-volume archive must preserve the hidden master key.');
+assert.equal(fs.statSync('/restore/.master-key').mode & 0o777, 0o600, 'The restored master key must retain 0600 permissions.');
+const D = require('better-sqlite3');
+const d = new D('/restore/backup-fixture.db', {readonly:true});
+console.log(d.prepare('SELECT value FROM proof').pluck().get());
+d.close();
+`,
       ],
       { inputFd: fd },
     );
@@ -149,7 +161,7 @@ try {
   }
   await assert.rejects(backup({ destination, cwd: directory, env }), /already exists/);
   console.log(
-    "PASS: an unprivileged backup restores the database, preserves 0600 permissions and restarts only the original app",
+    "PASS: an unprivileged backup restores the database and hidden master key, preserves 0600 permissions and restarts only the original app",
   );
 
   await compose("stop", "app");

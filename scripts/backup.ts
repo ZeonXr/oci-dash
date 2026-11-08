@@ -195,7 +195,7 @@ export async function backup({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.includes("--help")) {
     console.log(
-      "Usage: npm run backup -- /path/outside/project/backup.tar.gz\nBriefly stops a running app, saves its complete data volume, then restores its running state.\nUses the current Docker Compose project selection. Keep the matching MASTER_KEY separately.",
+      "Usage: npm run backup -- /path/outside/project/backup.tar.gz\nBriefly stops a running app, saves its complete data volume, then restores its running state.\nUses the current Docker Compose project selection. Protect the archive: it includes the stored encryption key. Legacy deployments may still require a separate MASTER_KEY backup.",
     );
   } else if (process.argv.length !== 3) {
     console.error("Usage: npm run backup -- /path/outside/project/backup.tar.gz");
@@ -208,7 +208,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     try {
       const path = await backup({ destination: process.argv[2], signal: controller.signal });
       console.log(
-        `Backup saved: ${path}\nKeep the matching MASTER_KEY separately. The original app running state was restored.`,
+        `Backup saved: ${path}\nProtect this archive and any legacy external MASTER_KEY. The original app running state was restored.`,
       );
     } catch (error) {
       console.error(error instanceof Error ? error.message : "Backup failed.");

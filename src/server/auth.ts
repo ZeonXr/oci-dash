@@ -5,6 +5,8 @@ import type { SessionUser } from "@/lib/contracts";
 import { getDatabase, audit } from "./db";
 import { decryptSecret, encryptSecret, hashPassword, hashToken, verifyPassword } from "./crypto";
 import { AppError } from "./errors";
+import { assertRequestOrigin } from "./request-origin";
+import { clearInitialAdminPassword } from "./initial-admin";
 
 export const SESSION_COOKIE = "oci_dash_session";
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -39,8 +41,8 @@ export const currentSessionHash = (request: Request): string | undefined => {
   const token = cookieToken(request);
   return token ? hashToken(token) : undefined;
 };
-export function sessionCookie(token: string, remove = false): string {
-  const secure = (process.env.APP_ORIGIN ?? "").startsWith("https://");
+export function sessionCookie(token: string, request: Request, remove = false): string {
+  const secure = assertRequestOrigin(request).protocol === "https:";
   return `${SESSION_COOKIE}=${remove ? "" : token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${remove ? 0 : SESSION_SECONDS}${secure ? "; Secure" : ""}`;
 }
 export function requireUser(request: Request): SessionUser {
@@ -56,10 +58,7 @@ export function requireUser(request: Request): SessionUser {
   return { id: row.id, username: row.username, mfaEnabled: !!row.mfa_secret };
 }
 export function assertSameOrigin(request: Request): void {
-  const expected = new URL(process.env.APP_ORIGIN ?? request.url).origin;
-  const origin = request.headers.get("origin");
-  if (!origin || origin !== expected || request.headers.get("sec-fetch-site") === "cross-site")
-    throw new AppError("请求来源不匹配，请从面板页面操作", 403, "ORIGIN_MISMATCH");
+  assertRequestOrigin(request);
 }
 function limitLogin(subject: string): void {
   const db = getDatabase(),
@@ -176,6 +175,8 @@ export function changePassword(user: SessionUser, current: string, replacement: 
     db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(hashed, user.id);
     db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
   })();
+  if (!clearInitialAdminPassword(db.name))
+    console.warn("Initial administrator password file cleanup failed.");
   audit(user.username, "auth.password-change", "account", "密码已更新，全部会话已退出");
 }
 export async function beginMfa(user: SessionUser, password: string) {

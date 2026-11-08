@@ -48,6 +48,7 @@ function http(
         path,
         method: options.method ?? "GET",
         headers: {
+          host: new URL(ORIGIN).host,
           ...(options.body !== undefined
             ? { "content-length": String(Buffer.byteLength(options.body)) }
             : {}),
@@ -79,7 +80,7 @@ function bytes(value: RawData): Buffer {
   return Buffer.from(value);
 }
 
-async function fixture() {
+async function fixture(options: { origin?: string | null; requestOrigin?: string } = {}) {
   const requests: { method: string; path: string; headers: IncomingHttpHeaders; body: Buffer }[] =
     [];
   const upstream = createServer((request, response) => {
@@ -155,19 +156,24 @@ async function fixture() {
   const gateway = createConsoleGateway({
     manager,
     upstreamPort: (upstream.address() as AddressInfo).port,
-    origin: ORIGIN,
+    ...(options.origin === null ? {} : { origin: options.origin ?? ORIGIN }),
     authenticate,
     recordEvent,
   });
   gateways.push(gateway);
   await gateway.listen(0, "127.0.0.1");
   const port = (gateway.server.address() as AddressInfo).port;
+  const requestOrigin =
+    options.requestOrigin ??
+    options.origin ??
+    (options.origin === null ? `http://127.0.0.1:${port}` : ORIGIN);
   const api = (path: string, options: Parameters<typeof http>[2] = {}) =>
     http(port, path, {
       ...options,
       headers: {
         cookie: COOKIE,
-        origin: ORIGIN,
+        origin: requestOrigin,
+        host: new URL(requestOrigin).host,
         "content-type": "application/json",
         ...options.headers,
       },
@@ -178,7 +184,12 @@ async function fixture() {
     headers: Record<string, string> = {},
   ) => {
     const websocket = new WebSocket(`ws://127.0.0.1:${port}${path}`, protocols, {
-      headers: { cookie: COOKIE, origin: ORIGIN, ...headers },
+      headers: {
+        cookie: COOKIE,
+        origin: requestOrigin,
+        host: new URL(requestOrigin).host,
+        ...headers,
+      },
     });
     websocket.on("error", () => undefined);
     clients.push(websocket);
@@ -258,6 +269,7 @@ describe("console gateway HTTP proxy", () => {
         cookie: "first=1; second=2",
         "content-type": "application/octet-stream",
         "x-request": "forward-me",
+        origin: ORIGIN,
       },
     });
     expect(result.status).toBe(201);
@@ -288,6 +300,115 @@ describe("console gateway HTTP proxy", () => {
     expect(result.status).toBe(503);
     expect(JSON.parse(result.body.toString())).toMatchObject({ code: "APP_UNAVAILABLE" });
     expect(result.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("allows relative health reads through an internal Host while rejecting absolute foreign targets", async () => {
+    const f = await fixture();
+    const headers = { host: "127.0.0.1:3000" };
+    const healthy = await http(f.port, "/api/health", { headers });
+    expect(healthy.status).toBe(201);
+    expect(f.requests[0]).toMatchObject({ path: "/api/health", headers });
+    const foreign = await http(f.port, "https://other.invalid/api/health", { headers });
+    expect(foreign.status).toBe(400);
+    expect(f.requests).toHaveLength(1);
+    expect(f.authenticate).not.toHaveBeenCalled();
+  });
+});
+
+describe("console gateway without a fixed public origin", () => {
+  beforeEach(() => vi.stubEnv("APP_ORIGIN", undefined));
+
+  it("supports a random localhost port for HTTP and websocket admission", async () => {
+    const f = await fixture({ origin: null });
+    const created = await f.api("/api/console/sessions", {
+      method: "POST",
+      body: JSON.stringify({ instanceId: "test-instance" }),
+    });
+    expect(created.status).toBe(202);
+    const socket = await f.open();
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(f.manager.connect).toHaveBeenCalledWith(SESSION_ID, TICKET, actor);
+  });
+
+  it("supports HTTPS proxy Origins and preserves the external Host on the loopback hop", async () => {
+    const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
+    const result = await f.api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: "synthetic" }),
+      headers: {
+        host: "PANEL.EXAMPLE:443",
+        "x-forwarded-host": "attacker.example",
+        "x-forwarded-proto": "http",
+      },
+    });
+    expect(result.status).toBe(201);
+    expect(f.requests[0].headers.host).toBe("PANEL.EXAMPLE:443");
+    expect(f.requests[0].headers["x-forwarded-host"]).toBeUndefined();
+    expect(f.requests[0].headers["x-forwarded-proto"]).toBeUndefined();
+    const created = await f.api("https://panel.example/api/console/sessions", {
+      method: "POST",
+      body: JSON.stringify({ instanceId: "test-instance" }),
+    });
+    expect(created.status).toBe(202);
+    await f.open();
+    expect(f.manager.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["", "null", "https://other.example"])(
+    "rejects %s Origin on proxy writes and websocket upgrades",
+    async (origin) => {
+      const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
+      const denied = await f.api("/api/auth/login", {
+        method: "POST",
+        headers: { origin, "x-forwarded-host": "other.example" },
+      });
+      expect(denied.status).toBe(403);
+      expect(
+        (await rejected(f.client(SOCKET_PATH, ["oci-console", `ticket.${TICKET}`], { origin })))
+          .status,
+      ).toBe(403);
+      expect(f.requests).toHaveLength(0);
+      expect(f.manager.connect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects cross-site and missing Host before proxying a write", async () => {
+    const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
+    const invalidHeaders: Record<string, string>[] = [
+      { "sec-fetch-site": "cross-site" },
+      { host: "" },
+    ];
+    for (const headers of invalidHeaders) {
+      const result = await f.api("/api/auth/logout", { method: "POST", headers });
+      expect(result.status).toBe(403);
+    }
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it("rejects absolute foreign HTTP and websocket targets before forwarding or consuming tickets", async () => {
+    const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
+    for (const target of [
+      "https://other.example/api/auth/login",
+      "//other.example/api/auth/login",
+      "/\\other.example/api/auth/login",
+    ]) {
+      expect((await f.api(target, { method: "POST" })).status).toBe(400);
+    }
+    const upgrade = await http(f.port, `https://other.example${SOCKET_PATH}`, {
+      headers: {
+        host: "panel.example",
+        origin: "https://panel.example",
+        cookie: COOKIE,
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": Buffer.alloc(16, 1).toString("base64"),
+        "sec-websocket-protocol": `oci-console, ticket.${TICKET}`,
+      },
+    });
+    expect(upgrade.status).toBe(400);
+    expect(f.requests).toHaveLength(0);
+    expect(f.manager.connect).not.toHaveBeenCalled();
   });
 });
 
@@ -356,6 +477,17 @@ describe("console gateway HTTP API", () => {
     });
     expect(denied.status).toBe(403);
     expect(f.manager.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("also rejects a foreign Host when Origin matches the explicit configuration", async () => {
+    const f = await fixture();
+    const denied = await f.api("/api/console/sessions", {
+      method: "POST",
+      headers: { host: "other.invalid" },
+      body: JSON.stringify({ instanceId: "test-instance" }),
+    });
+    expect(denied.status).toBe(403);
+    expect(f.manager.create).not.toHaveBeenCalled();
   });
 
   it("rejects an absolute foreign request-target even without APP_ORIGIN", async () => {

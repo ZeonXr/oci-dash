@@ -103,7 +103,19 @@ try {
   writeFileSync(
     override,
     JSON.stringify({
-      services: { app: { image, restart: "no" } },
+      services: {
+        app: {
+          image,
+          restart: "no",
+          environment: {
+            ADMIN_USERNAME: values.ADMIN_USERNAME,
+            ADMIN_PASSWORD: values.ADMIN_PASSWORD,
+            MASTER_KEY: values.MASTER_KEY,
+            APP_ORIGIN: values.APP_ORIGIN,
+            DATABASE_PATH: values.DATABASE_PATH,
+          },
+        },
+      },
     }),
   );
   const env: NodeJS.ProcessEnv = {
@@ -155,6 +167,7 @@ try {
     service.environment?.ADMIN_PASSWORD !== values.ADMIN_PASSWORD ||
     service.environment?.APP_ORIGIN !== values.APP_ORIGIN ||
     service.environment?.DATABASE_PATH !== "/data/oci-dash.db" ||
+    service.environment?.PORT !== undefined ||
     ports?.length !== 1 ||
     ports[0].host_ip !== "127.0.0.1" ||
     Number(ports[0].published) !== port ||
