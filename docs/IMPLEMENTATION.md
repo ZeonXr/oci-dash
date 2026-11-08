@@ -62,8 +62,8 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 | `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                          |
 | `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`；返回 `CreateOptions`。                                                          |
 | `GET /api/instances`、`GET /api/instances/:id`          | `{instances,demo}` 或 `{instance,demo}`，ID 需要 URL 编码。                                                     |
-| `POST /api/inventory/refresh`                           | `{mode:"auto"                                                                                                   | "manual",accountIds?:string[]}`；返回任务和各账号的新鲜度/退避状态。 |
-| `GET /api/instances/:id/metrics`                        | `range=1h                                                                                                       | 24h                                                                  | 7d`，返回 `MetricsResult`。 |
+| `POST /api/inventory/refresh`                           | `mode` 为 `auto` 或 `manual`，可附 `accountIds` 数组；返回任务和各账号的新鲜度/退避状态。                       |
+| `GET /api/instances/:id/metrics`                        | `range` 可选 `1h`、`24h`、`7d`，返回 `MetricsResult`。                                                          |
 | `GET /api/instances/:id/security`                       | `{groups,demo}`。                                                                                               |
 | `GET /api/dashboard`                                    | 资源总量和近期活动的 `DashboardData`；图表总览使用下列统计接口。                                                |
 | `GET/POST /api/analytics/traffic`                       | 流量报告；POST 刷新相同 URL 查询范围。                                                                          |
