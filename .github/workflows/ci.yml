@@ -34,5 +34,5 @@ jobs:
         run: npm run test:runtime
       - name: Verify isolated backup and restore
         run: npm run test:backup
-      - name: Browser tests in an isolated demonstration deployment
+      - name: Browser tests in an isolated empty deployment
         run: npm run test:e2e:isolated -- --no-build

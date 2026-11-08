@@ -304,14 +304,12 @@ const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
         if (method === "GET" && url.pathname === "/api/auth/me")
           return json({
             user: { id: "analytics-user", username: "fixture", mfaEnabled: false },
-            demo: false,
           });
         if (method === "GET" && url.pathname === "/api/accounts") {
           if (state.accountsGate) await state.accountsGate;
-          return json({ accounts, syncJobs: [], demo: false });
+          return json({ accounts, syncJobs: [] });
         }
-        if (method === "GET" && url.pathname === "/api/instances")
-          return json({ instances, demo: false });
+        if (method === "GET" && url.pathname === "/api/instances") return json({ instances });
         if (["GET", "POST"].includes(method) && url.pathname === "/api/analytics/traffic") {
           if (method === "POST" && state.failTrafficPost)
             return json({ error: "模拟流量刷新失败" }, 503);

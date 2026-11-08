@@ -2,8 +2,7 @@ import type { AccountSummary, InstanceSummary } from "@/lib/contracts";
 import type { AnalyticsAccountStatus } from "@/lib/analytics-contracts";
 import type { CpuCoverage, CpuHour, CpuInstanceRow, CpuReport } from "@/lib/cpu-contracts";
 import { getCredentialSnapshot, listAccounts } from "../accounts";
-import { getDatabase, isDemo } from "../db";
-import { demoAccounts, demoInstances } from "../demo";
+import { getDatabase } from "../db";
 import { AppError } from "../errors";
 import { listInstances } from "../inventory";
 import { ocid, regionName } from "../oci/helpers";
@@ -33,7 +32,6 @@ export interface CpuServiceOptions {
   instances?: () => InstanceSummary[];
   access?: (id: string) => Access;
   isCurrent?: (id: string, revision: number) => boolean;
-  demo?: () => boolean;
   now?: () => number;
   clientFactory?: CpuClientFactory;
   timeoutMs?: number;
@@ -267,7 +265,6 @@ function reportFrom(
   accounts: AnalyticsAccountStatus[],
   warnings: string[],
   timestamp: number,
-  source: "oci" | "demo",
 ): CpuReport {
   const points = Array.from({ length: 24 }, (_, hour) => {
     const observed = rows.map((row) => row.points[hour]);
@@ -315,7 +312,7 @@ function reportFrom(
     generatedAt: new Date(timestamp).toISOString(),
     cacheExpiresAt: new Date(timestamp + (partial ? PARTIAL_TTL : TTL)).toISOString(),
     cached: false,
-    source,
+    source: "oci",
   };
 }
 
@@ -323,7 +320,6 @@ export function createCpuService(options: CpuServiceOptions = {}) {
   const accounts = options.accounts ?? listAccounts,
     instances = options.instances ?? listInstances;
   const access = options.access ?? getCredentialSnapshot,
-    demo = options.demo ?? isDemo,
     now = options.now ?? Date.now;
   const current =
     options.isCurrent ??
@@ -351,38 +347,6 @@ export function createCpuService(options: CpuServiceOptions = {}) {
         throw new AppError("CPU 查询时钟无效", 400, "INVALID_CPU_QUERY");
       const end = Math.floor(time / HOUR) * HOUR,
         start = end - 24 * HOUR;
-      if (demo()) {
-        const selected = demoAccounts().filter((account) => !accountId || account.id === accountId);
-        if (accountId && !selected.length)
-          throw new AppError("账号不存在", 404, "ACCOUNT_NOT_FOUND");
-        const ids = new Set(selected.map((account) => account.id));
-        const rows = demoInstances()
-          .filter((instance) => ids.has(instance.accountId))
-          .map((instance, index) => {
-            const observed = new Map<number, number>();
-            if (instance.state !== "STOPPED")
-              for (let sample = 0; sample < 288; sample++)
-                if (!(index === 1 && sample >= 60 && sample < 66))
-                  observed.set(
-                    start + sample * SAMPLE,
-                    2 + ((Math.floor(sample / 12) * 3 + index * 7) % 45),
-                  );
-            return rowFor(instance, start, observed);
-          });
-        return reportFrom(
-          rows,
-          start,
-          end,
-          selected.map((account) => ({
-            accountId: account.id,
-            accountName: account.name,
-            status: "ok",
-          })),
-          ["演示样本不代表实际实例负载。"],
-          time,
-          "demo",
-        );
-      }
       const matching = accounts().filter((account) => !accountId || account.id === accountId);
       if (accountId && !matching.length) throw new AppError("账号不存在", 404, "ACCOUNT_NOT_FOUND");
       if (matching.length > 20)
@@ -556,7 +520,7 @@ export function createCpuService(options: CpuServiceOptions = {}) {
           warnings.add(
             "缺失 CPU 样本保留为空；采集依赖 OCI 监控代理和相应权限，不代表实例离线或零负载。",
           );
-        const result = reportFrom(rows, start, end, statuses, [...warnings], now(), "oci");
+        const result = reportFrom(rows, start, end, statuses, [...warnings], now());
         assertCurrent(selected);
         for (const [oldKey, old] of cache)
           if (Date.parse(old.cacheExpiresAt) <= now()) cache.delete(oldKey);

@@ -222,14 +222,12 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
       if (method === "GET" && path === "/api/auth/me")
         return json({
           user: { id: "refresh-user", username: "fixture", mfaEnabled: false },
-          demo: false,
         });
       if (method === "GET" && path === "/api/accounts") {
         if (state.accountsGate) await state.accountsGate;
         return json({
           accounts: state.accounts,
           syncJobs: state.syncJobs,
-          demo: false,
         });
       }
       if (method === "GET" && path === "/api/instances") {
@@ -242,7 +240,7 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
             state.failedSnapshots--;
             return await json({ error: "模拟快照读取失败" }, 503);
           }
-          return await json({ instances: snapshot, demo: false });
+          return await json({ instances: snapshot });
         } finally {
           state.activeInstanceReads--;
         }
@@ -253,7 +251,6 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
           instances: state.rows,
           jobs: state.taskRows,
           activity: [],
-          demo: false,
           totals: {
             accounts: state.accounts.length,
             instances: state.rows.length,
@@ -270,8 +267,8 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         const instance = state.rows.find((row) => row.id === decodeURIComponent(detail[1]));
         if (!instance) return json({ error: "Fixture instance not found" }, 404);
         if (detail[2] === "metrics") return json({ points: [], available: false, source: "oci" });
-        if (detail[2] === "security") return json({ groups: [], demo: false });
-        return json({ instance, demo: false });
+        if (detail[2] === "security") return json({ groups: [] });
+        return json({ instance });
       }
       if (method === "POST" && path === "/api/inventory/refresh") {
         expect(["auto", "manual"]).toContain(entry.body?.mode);
@@ -318,13 +315,12 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
               nextRefreshAt: new Date(state.now + 60_000).toISOString(),
             };
           }),
-          demo: false,
         };
         return json(body, active.length ? 202 : 200);
       }
       if (method === "GET" && path === "/api/jobs") {
         if (state.jobsGate) await state.jobsGate;
-        return json({ jobs: state.taskRows, demo: false });
+        return json({ jobs: state.taskRows });
       }
       const sync = state.syncJobs.find((item) => path === `/api/jobs/${item.id}`);
       if (method === "GET" && sync) {
@@ -333,14 +329,13 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         return json({
           job: state.syncJobs.find((item) => item.id === sync.id),
           events: [],
-          demo: false,
         });
       }
       const task = state.taskRows.find(
         (row) => path === `/api/jobs/${row.id}` || path === `/api/jobs/${row.id}/cancel`,
       );
       if (task && method === "GET" && path === `/api/jobs/${task.id}`)
-        return json({ job: task, events: [], demo: false });
+        return json({ job: task, events: [] });
       if (task && method === "POST" && path === `/api/jobs/${task.id}/cancel`) {
         Object.assign(task, {
           state: "cancelled",

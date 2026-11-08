@@ -6,14 +6,15 @@ import type {
   TrafficPoint,
   TrafficReport,
   TrafficRow,
-} from "../../lib/analytics-contracts";
-import { normalizeDecimal } from "../../lib/decimal";
-import type { AccountSummary, InstanceSummary } from "../../lib/contracts";
-import { demoAccounts, demoInstances } from "../demo";
-import { aggregateCostRows } from "./costs";
+} from "../../src/lib/analytics-contracts";
+import { normalizeDecimal } from "../../src/lib/decimal";
+import type { AccountSummary, InstanceSummary } from "../../src/lib/contracts";
+import { fixtureAccounts, fixtureInstances } from "./seed-data";
+import { aggregateCostRows } from "../../src/server/analytics/costs";
+import type { CpuInstanceRow, CpuReport } from "../../src/lib/cpu-contracts";
 
 /** Structurally accepts the server normalizer's flat, validated query. */
-export interface DemoAnalyticsQuery {
+export interface FixtureAnalyticsQuery {
   range: AnalyticsRange;
   accountId?: string;
   region?: string;
@@ -25,14 +26,84 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MIB = 1024 * 1024;
 
+// Synthetic wire responses live only in the test tree and are never served by the application.
+export function fixtureCpuReport(accountId?: string, now = Date.now()): CpuReport {
+  const end = Math.floor(now / HOUR) * HOUR;
+  const start = end - 24 * HOUR;
+  const instances = fixtureInstances().filter((item) => !accountId || item.accountId === accountId);
+  const rows: CpuInstanceRow[] = instances.map((instance, index) => {
+    const cpu = instance.state === "RUNNING" ? 8 + index : null;
+    return {
+      instanceId: instance.id,
+      instanceName: instance.displayName,
+      accountId: instance.accountId,
+      accountName: instance.accountName,
+      region: instance.region,
+      state: instance.state,
+      points: Array.from({ length: 24 }, (_, hour) => ({
+        timestamp: new Date(start + hour * HOUR).toISOString(),
+        cpuPercent: cpu,
+        sampleCount: cpu === null ? 0 : 12,
+        expectedSamples: 12 as const,
+        coverage: cpu === null ? ("unavailable" as const) : ("complete" as const),
+      })),
+      averageCpuPercent: cpu,
+      peakCpuPercent: cpu,
+      sampleCount: cpu === null ? 0 : 24 * 12,
+      coverage: cpu === null ? "unavailable" : "complete",
+    };
+  });
+  const observed = rows.filter((row) => row.averageCpuPercent !== null);
+  const average = observed.length
+    ? observed.reduce((sum, row) => sum + row.averageCpuPercent!, 0) / observed.length
+    : null;
+  const sampleCount = observed.length * 12;
+  return {
+    range: {
+      startTime: new Date(start).toISOString(),
+      endTime: new Date(end).toISOString(),
+      granularity: "hourly",
+      timeZone: "UTC",
+    },
+    rows,
+    points: Array.from({ length: 24 }, (_, hour) => ({
+      timestamp: new Date(start + hour * HOUR).toISOString(),
+      cpuPercent: average,
+      instanceCount: observed.length,
+      totalInstances: rows.length,
+      sampleCount,
+      coverage: observed.length === rows.length ? "complete" : "partial",
+    })),
+    summary: {
+      averageCpuPercent: average,
+      peakCpuPercent: observed.length
+        ? Math.max(...observed.map((row) => row.peakCpuPercent!))
+        : null,
+      instancesWithSamples: observed.length,
+      totalInstances: rows.length,
+      observedHours: observed.length ? 24 : 0,
+      totalSamples: sampleCount * 24,
+    },
+    status: observed.length === rows.length ? "ok" : "partial",
+    accounts: fixtureAccounts()
+      .filter((account) => !accountId || account.id === accountId)
+      .map((account) => ({ accountId: account.id, accountName: account.name, status: "ok" })),
+    warnings: [],
+    generatedAt: new Date(now).toISOString(),
+    cacheExpiresAt: new Date(now + 60_000).toISOString(),
+    cached: false,
+    source: "oci",
+  };
+}
+
 function seed(value: string): number {
   let result = 2166136261;
   for (const character of value) result = Math.imul(result ^ character.charCodeAt(0), 16777619);
   return result >>> 0;
 }
-function scope(query: DemoAnalyticsQuery) {
-  const allAccounts = demoAccounts();
-  const selected = demoInstances()
+function scope(query: FixtureAnalyticsQuery) {
+  const allAccounts = fixtureAccounts();
+  const selected = fixtureInstances()
     .filter(
       (instance) =>
         (!query.accountId || instance.accountId === query.accountId) &&
@@ -65,7 +136,7 @@ function period(range: AnalyticsRange, now: number) {
     start % HOUR !== 0 ||
     end % HOUR !== 0
   )
-    throw new Error("Invalid normalized demonstration analytics range.");
+    throw new Error("Invalid normalized fixture analytics range.");
   return { start, through: Math.min(end, Math.floor(now / HOUR) * HOUR) };
 }
 function bucket(time: number, granularity: AnalyticsRange["granularity"]): number {
@@ -75,13 +146,13 @@ function bucket(time: number, granularity: AnalyticsRange["granularity"]): numbe
   }
   return granularity === "daily" ? Math.floor(time / DAY) * DAY : time;
 }
-function metadata(query: DemoAnalyticsQuery, now: number, accounts: AnalyticsAccountStatus[]) {
+function metadata(query: FixtureAnalyticsQuery, now: number, accounts: AnalyticsAccountStatus[]) {
   return {
     range: { ...query.range },
     generatedAt: new Date(now).toISOString(),
     cacheExpiresAt: new Date(now + 60_000).toISOString(),
     cached: false,
-    source: "demo" as const,
+    source: "oci" as const,
     accounts,
   };
 }
@@ -108,7 +179,10 @@ function hourlyTraffic(instance: InstanceSummary, vnicId: string, time: number) 
 }
 
 /** Entirely local examples; the same hour/resource always has the same byte values. */
-export function demoTrafficReport(query: DemoAnalyticsQuery, now = Date.now()): TrafficReport {
+export function fixtureTrafficReport(
+  query: FixtureAnalyticsQuery,
+  now = Date.now(),
+): TrafficReport {
   const selected = scope(query);
   const { start, through } = period(query.range, now);
   const rows: TrafficRow[] = [];
@@ -162,7 +236,7 @@ export function demoTrafficReport(query: DemoAnalyticsQuery, now = Date.now()): 
       sentBytes,
       totalBytes: receivedBytes === null || sentBytes === null ? null : receivedBytes + sentBytes,
     },
-    warnings: ["演示流量用于展示统计与筛选，不代表真实服务器用量。"],
+    warnings: ["测试流量用于展示统计与筛选，不代表真实服务器用量。"],
     status: hasData ? "ok" : "empty",
     dataThrough: new Date(Math.max(start, through)).toISOString(),
   };
@@ -180,7 +254,7 @@ function decimalMicros(value: bigint): string {
 }
 
 /** Synthetic amounts are exact decimal strings; currencies are never combined. */
-export function demoCostReport(query: DemoAnalyticsQuery, now = Date.now()): CostReport {
+export function fixtureCostReport(query: FixtureAnalyticsQuery, now = Date.now()): CostReport {
   const selected = scope(query);
   const { start, through } = period(query.range, now);
   const accounts = new Map(selected.allAccounts.map((account) => [account.id, account]));
@@ -251,7 +325,7 @@ export function demoCostReport(query: DemoAnalyticsQuery, now = Date.now()): Cos
     ),
     rows,
     ...aggregateCostRows(rows),
-    warnings: ["演示费用用于展示分析与筛选，不代表实际账单、资费或免费额度。"],
+    warnings: ["测试费用用于展示分析与筛选，不代表实际账单、资费或免费额度。"],
     status: rows.length ? "ok" : "empty",
   };
 }

@@ -181,7 +181,6 @@ beforeEach(() => {
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   vi.setSystemTime(new Date("2026-11-07T00:00:00Z"));
-  vi.stubEnv("DEMO_MODE", "false");
 });
 afterEach(async () => {
   const stopping = Promise.allSettled(managers.splice(0).map((manager) => manager.shutdown()));

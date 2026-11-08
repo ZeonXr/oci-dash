@@ -14,7 +14,6 @@ interface Toast {
 }
 interface AppContextValue {
   user: SessionUser;
-  demo: boolean;
   accounts: AccountSummary[];
   accountsLoading: boolean;
   reloadAccounts: () => void;
@@ -32,12 +31,12 @@ export function useApp() {
 }
 export function AppProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [session, setSession] = useState<{ user: SessionUser; demo: boolean } | null>(null);
+  const [session, setSession] = useState<{ user: SessionUser } | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setThemeState] = useState<"light" | "dark">("light");
-  const accounts = useResource<{ accounts: AccountSummary[]; demo: boolean }>(
+  const accounts = useResource<{ accounts: AccountSummary[] }>(
     session ? "/api/accounts" : null,
     30000,
   );
@@ -51,7 +50,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const controller = new AbortController();
     setAuthError(null);
-    api<{ user: SessionUser; demo: boolean }>("/api/auth/me", { signal: controller.signal })
+    api<{ user: SessionUser }>("/api/auth/me", { signal: controller.signal })
       .then((data) => {
         if (!data.user) {
           router.replace("/login");

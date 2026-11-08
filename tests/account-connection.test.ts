@@ -70,7 +70,6 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", USERNAME);
   vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
   vi.stubEnv("APP_ORIGIN", ORIGIN);
-  vi.stubEnv("DEMO_MODE", "false");
   for (const mock of Object.values(cloud)) {
     mock.mockReset();
     mock.mockRejectedValue(new Error("OCI must not run in account save requests"));
@@ -572,17 +571,6 @@ describe("atomic account save and background connection", () => {
     expect(next.state).toBe("queued");
     expect(store.getJob(initial.job!.id)?.state).toBe("cancel_requested");
     expect(store.listJobs()).toHaveLength(2);
-  });
-
-  it("demo mode refuses account creation and updates without storing credentials or tasks", async () => {
-    const account = createAccount(input(), USERNAME);
-    const before = storedAccount(account.id);
-    vi.stubEnv("DEMO_MODE", "true");
-    expect((await call("POST", "accounts", input())).status).toBe(403);
-    expect((await call("PATCH", `accounts/${account.id}`, replacementKey)).status).toBe(403);
-    expect(listAccounts()).toHaveLength(1);
-    expect(storedAccount(account.id)).toEqual(before);
-    expect(getJobStore().listJobs()).toEqual([]);
   });
 
   it("rejects a duplicate tenancy even with another user, key or region without queue or audit residue", async () => {

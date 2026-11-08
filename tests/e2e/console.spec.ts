@@ -84,7 +84,7 @@ function rfbFixture(socket: WebSocketRoute, authenticated: boolean) {
 async function setup(
   page: Page,
   options: {
-    demo?: boolean;
+    instanceState?: InstanceSummary["state"];
     existing?: ConsoleSessionSummary;
     preparing?: boolean;
     authenticated?: boolean;
@@ -194,25 +194,21 @@ async function setup(
     if (path === "/api/auth/me" && method === "GET")
       return json({
         user: { id: "fixture-user", username: "fixture", mfaEnabled: false },
-        demo: Boolean(options.demo),
       });
-    if (path === "/api/accounts" && method === "GET")
-      return json({ accounts: [], demo: Boolean(options.demo) });
+    if (path === "/api/accounts" && method === "GET") return json({ accounts: [] });
     if (path === "/api/inventory/refresh" && method === "POST") {
-      expect(options.demo).not.toBe(true);
       expect(req.postDataJSON()).toMatchObject({ mode: "auto" });
-      return json({ jobs: [], accounts: [], demo: false });
+      return json({ jobs: [], accounts: [] });
     }
     if (path === `/api/instances/${instance.id}` && method === "GET")
-      return json({ instance, demo: Boolean(options.demo) });
+      return json({ instance: { ...instance, state: options.instanceState ?? instance.state } });
     if (path === `/api/instances/${instance.id}/metrics` && method === "GET")
-      return json({ points: [], available: false, source: "demo" });
-    if (path === "/api/jobs" && method === "GET")
-      return json({ jobs: [], demo: Boolean(options.demo) });
+      return json({ points: [], available: false, source: "oci" });
+    if (path === "/api/jobs" && method === "GET") return json({ jobs: [] });
     if (path === "/api/console/session" && method === "GET")
-      return json({ session: fixture.session, demo: Boolean(options.demo) });
+      return json({ session: fixture.session });
     if (path === "/api/console/sessions" && method === "POST") {
-      expect(options.demo).not.toBe(true);
+      expect(["TERMINATED", "TERMINATING"]).not.toContain(options.instanceState);
       expect(req.postDataJSON()).toEqual({ instanceId: instance.id });
       fixture.creates += 1;
       fixture.session = summary(`console-session-${fixture.creates}`);
@@ -251,17 +247,24 @@ async function setup(
   return fixture;
 }
 
-test("演示控制台只读，实例详情的 VNC 链接在新标签打开", async ({ page }) => {
-  const fixture = await setup(page, { demo: true });
-  await page.goto(`/instances/${instance.id}`);
-  await expect(page.getByRole("link", { name: "VNC 控制台" })).toHaveAttribute("target", "_blank");
-  await page.goto(consolePath);
-  await expect(page.getByText("演示环境为只读模式，无法创建 VNC 会话。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "连接", exact: true })).toBeDisabled();
-  expect(fixture.writes).toEqual([]);
-  expect(fixture.unexpected).toEqual([]);
-  expect(fixture.errors).toEqual([]);
-});
+for (const instanceState of ["TERMINATED", "TERMINATING"]) {
+  test(`${instanceState} 实例禁止创建控制台，详情的 VNC 链接仍在新标签打开`, async ({ page }) => {
+    const fixture = await setup(page, { instanceState });
+    await page.goto(`/instances/${instance.id}`);
+    await expect(page.getByRole("link", { name: "VNC 控制台" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
+    await page.goto(consolePath);
+    await expect(page.getByText("实例已终止或正在终止，无法连接控制台。")).toBeVisible();
+    await expect(page.getByRole("button", { name: "连接", exact: true })).toBeDisabled();
+    expect(fixture.creates).toBe(0);
+    expect(fixture.tickets).toBe(0);
+    expect(fixture.writes).toEqual([]);
+    expect(fixture.unexpected).toEqual([]);
+    expect(fixture.errors).toEqual([]);
+  });
+}
 
 test("点击才创建，真实 noVNC 握手、票据子协议和用户活动续时", async ({ page }, testInfo) => {
   const fixture = await setup(page, { preparing: true });

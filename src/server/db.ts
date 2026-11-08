@@ -93,4 +93,3 @@ export function audit(actor: string, action: string, resource: string, result: s
     .prepare("INSERT INTO audit_events(actor,action,resource,result,created_at) VALUES(?,?,?,?,?)")
     .run(actor, action, resource.slice(0, 300), result.slice(0, 1200), new Date().toISOString());
 }
-export const isDemo = () => process.env.DEMO_MODE === "true";

@@ -124,7 +124,6 @@ function fixture(
     }),
     isCurrent: (id, r) => available.some((a) => a.id === id) && revision === r,
     now: () => clock,
-    demo: () => false,
     costs: { read: costRead },
     traffic: { read: trafficRead },
     timeoutMs: options.timeoutMs,
@@ -296,19 +295,45 @@ describe("analytics report orchestration", () => {
     expect(result.points[0].receivedBytes).toBe(10);
     expect(result.points[0].coverage).toBe("partial");
   });
-  it("serves demo reports without reading stored accounts or invoking either SDK", async () => {
-    const forbidden = () => {
-      throw Error("Real credentials must not be accessed");
-    };
-    const service = createAnalyticsService({
-      demo: () => true,
-      now: () => NOW,
-      accounts: forbidden,
-      instances: forbidden,
-      access: forbidden,
+  it("returns empty reports without credentials or OCI reads when no accounts are saved", async () => {
+    const forbidden = vi.fn(() => {
+      throw Error("Empty accounts must not access credentials or OCI");
     });
-    expect((await service.traffic(range, true)).source).toBe("demo");
-    expect((await service.costs(range, true)).source).toBe("demo");
+    const service = createAnalyticsService({
+      now: () => NOW,
+      accounts: () => [],
+      instances: () => [],
+      access: forbidden,
+      isCurrent: forbidden,
+      traffic: { read: forbidden },
+      costs: { read: forbidden },
+    });
+    for (const force of [false, true]) {
+      const traffic = await service.traffic(range, force);
+      expect(traffic).toMatchObject({
+        source: "oci",
+        status: "empty",
+        accounts: [],
+        rows: [],
+        points: [],
+        totals: { receivedBytes: null, sentBytes: null, totalBytes: null },
+      });
+      expect(await service.costs(range, force)).toMatchObject({
+        source: "oci",
+        status: "empty",
+        accounts: [],
+        rows: [],
+        points: [],
+        totals: [],
+      });
+    }
+    expect(forbidden).not.toHaveBeenCalled();
+    await expect(service.traffic({ ...range, accountId: "missing" })).rejects.toMatchObject({
+      code: "ACCOUNT_NOT_FOUND",
+    });
+    await expect(service.costs({ ...range, accountId: "missing" })).rejects.toMatchObject({
+      code: "ACCOUNT_NOT_FOUND",
+    });
   });
 });
 

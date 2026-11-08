@@ -6,7 +6,7 @@ import type {
   JobSummary,
   MetricsResult,
   SecurityGroup,
-} from "@/lib/contracts";
+} from "../../src/lib/contracts";
 
 const createdAt = "2026-11-01T02:00:00.000Z";
 const accountInfo = [
@@ -17,12 +17,12 @@ const accountInfo = [
   ["Core Account", "ap-singapore-1"],
   ["Backup Account", "ap-singapore-1"],
 ];
-export function demoAccounts(): AccountSummary[] {
+export function fixtureAccounts(): AccountSummary[] {
   return accountInfo.map(([name, region], i) => ({
     id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
     name,
-    tenancyId: `ocid1.tenancy.oc1..demo${i}`,
-    userId: `ocid1.user.oc1..demo${i}`,
+    tenancyId: `ocid1.tenancy.oc1..fixture${i}`,
+    userId: `ocid1.user.oc1..fixture${i}`,
     fingerprint: "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
     homeRegion: region!,
     regions: i === 4 ? [region!, "ap-osaka-1"] : [region!],
@@ -32,8 +32,8 @@ export function demoAccounts(): AccountSummary[] {
     createdAt,
   }));
 }
-export function demoInstances(): InstanceSummary[] {
-  const accounts = demoAccounts();
+export function fixtureInstances(): InstanceSummary[] {
+  const accounts = fixtureAccounts();
   const rows: [string, number, string, boolean, number, number, number][] = [
     ["SG-Oracle-02", 0, "ap-singapore-1", true, 1, 1, 50],
     ["JP-Oracle-02", 1, "ap-tokyo-1", true, 1, 1, 50],
@@ -48,8 +48,8 @@ export function demoInstances(): InstanceSummary[] {
   ];
   return rows.map(([name, a, region, running, ocpus, memoryGb, sizeGb], index) => {
     const account = accounts[a]!,
-      id = `demo-instance-${index + 1}`,
-      vnicId = `demo-vnic-${index + 1}`;
+      id = `fixture-instance-${index + 1}`,
+      vnicId = `fixture-vnic-${index + 1}`;
     return {
       id,
       accountId: account.id,
@@ -64,15 +64,15 @@ export function demoInstances(): InstanceSummary[] {
       memoryGb,
       os: "Ubuntu 24.04 LTS",
       createdAt,
-      tags: { environment: "demo", role: running ? "production" : "standby" },
+      tags: { environment: "fixture", role: running ? "production" : "standby" },
       syncedAt: new Date().toISOString(),
       vnics: [
         {
           id: vnicId,
           name: "Primary VNIC",
           primary: true,
-          subnetId: "demo-subnet",
-          nsgIds: ["demo-nsg"],
+          subnetId: "fixture-subnet",
+          nsgIds: ["fixture-nsg"],
           ipv6: [],
           privateIps: [
             {
@@ -100,14 +100,14 @@ export function demoInstances(): InstanceSummary[] {
       ],
       bootVolumes: [
         {
-          id: `demo-boot-${index + 1}`,
+          id: `fixture-boot-${index + 1}`,
           accountId: account.id,
           region,
           name: `boot-${name.toLowerCase()}`,
           state: "AVAILABLE",
           sizeGb,
           vpusPerGb: 100,
-          attachmentId: `demo-attachment-${index + 1}`,
+          attachmentId: `fixture-attachment-${index + 1}`,
         },
       ],
       metrics: {
@@ -119,13 +119,13 @@ export function demoInstances(): InstanceSummary[] {
     };
   });
 }
-export function demoMetrics(range: "1h" | "24h" | "7d"): MetricsResult {
+export function fixtureMetrics(range: "1h" | "24h" | "7d"): MetricsResult {
   const duration = range === "1h" ? 3600000 : range === "24h" ? 86400000 : 604800000,
     now = Date.now();
   return {
-    source: "demo",
+    source: "oci",
     available: true,
-    note: "演示指标，不代表真实服务器状态",
+    note: "测试指标，不代表真实服务器状态",
     points: Array.from({ length: 24 }, (_, i) => ({
       timestamp: new Date(now - duration + (duration * i) / 23).toISOString(),
       cpu: Math.round(24 + Math.sin(i * 0.8) * 12),
@@ -134,15 +134,15 @@ export function demoMetrics(range: "1h" | "24h" | "7d"): MetricsResult {
     })),
   };
 }
-export function demoJobs(): JobSummary[] {
-  const accounts = demoAccounts();
+export function fixtureJobs(): JobSummary[] {
+  const accounts = fixtureAccounts();
   return ["SG-Oracle-02", "JP-Oracle-02", "UK-Oracle"].map((_, i) => ({
-    id: `demo-job-${i + 1}`,
+    id: `fixture-job-${i + 1}`,
     kind: i ? "instance-rename" : "sync-account",
     accountId: accounts[i]!.id,
     accountName: accounts[i]!.name,
     region: accounts[i]!.homeRegion,
-    resourceId: `demo-instance-${i + 1}`,
+    resourceId: `fixture-instance-${i + 1}`,
     state: "succeeded",
     attempt: 1,
     maxAttempts: 3,
@@ -154,8 +154,8 @@ export function demoJobs(): JobSummary[] {
     result: { message: "示例任务已完成" },
   }));
 }
-export function demoEvents(jobId: string): JobEvent[] {
-  return ["任务已创建（演示）", "已检查资源状态（演示）", "操作完成（演示）"].map((message, i) => ({
+export function fixtureEvents(jobId: string): JobEvent[] {
+  return ["任务已创建（测试）", "已检查资源状态（测试）", "操作完成（测试）"].map((message, i) => ({
     id: i + 1,
     jobId,
     level: "info",
@@ -164,22 +164,22 @@ export function demoEvents(jobId: string): JobEvent[] {
     createdAt: new Date(Date.now() - 60000 + i * 10000).toISOString(),
   }));
 }
-export const demoActivity = (): AuditEvent[] =>
+export const fixtureActivity = (): AuditEvent[] =>
   ["资源同步完成", "实例名称已更新", "启动卷配置已更新"].map((action, i) => ({
     id: i + 1,
     action,
     resource: ["SG-Oracle-02", "JP-Oracle-02", "UK-Oracle"][i]!,
-    result: "演示记录",
+    result: "测试记录",
     createdAt: new Date(Date.now() - (i + 1) * 600000).toISOString(),
   }));
-export const demoSecurity = (): SecurityGroup[] => [
+export const fixtureSecurity = (): SecurityGroup[] => [
   {
-    id: "demo-nsg",
+    id: "fixture-nsg",
     name: "web-access",
     kind: "nsg",
     rules: [
       {
-        id: "demo-rule-1",
+        id: "fixture-rule-1",
         direction: "INGRESS",
         protocol: "6",
         peer: "203.0.113.0/24",
@@ -190,7 +190,7 @@ export const demoSecurity = (): SecurityGroup[] => [
         portMax: 22,
       },
       {
-        id: "demo-rule-2",
+        id: "fixture-rule-2",
         direction: "INGRESS",
         protocol: "6",
         peer: "0.0.0.0/0",

@@ -10,7 +10,7 @@ import type {
   TrafficReport,
 } from "@/lib/analytics-contracts";
 import { getCredentialSnapshot, listAccounts } from "../accounts";
-import { getDatabase, isDemo } from "../db";
+import { getDatabase } from "../db";
 import { AppError } from "../errors";
 import { listInstances } from "../inventory";
 import { cloudError } from "../oci/sdk";
@@ -18,7 +18,6 @@ import type { OciCredentials } from "../oci/types";
 import { CloudError } from "../oci/types";
 import { aggregateCostRows, createCostReader } from "./costs";
 import { createTrafficReader } from "./traffic";
-import { demoCostReport, demoTrafficReport } from "./demo";
 import { parseCostQuery, parseTrafficQuery } from "./query";
 import { createAnalyticsSnapshots, type AnalyticsSnapshots } from "./snapshots";
 
@@ -35,7 +34,6 @@ export interface AnalyticsServiceOptions {
   instances?: () => InstanceSummary[];
   access?: (id: string) => Access;
   isCurrent?: (id: string, revision: number) => boolean;
-  demo?: () => boolean;
   now?: () => number;
   traffic?: ReturnType<typeof createTrafficReader>;
   costs?: ReturnType<typeof createCostReader>;
@@ -126,7 +124,6 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
   const accounts = options.accounts ?? listAccounts;
   const instances = options.instances ?? listInstances;
   const access = options.access ?? getCredentialSnapshot;
-  const demo = options.demo ?? isDemo;
   const now = options.now ?? Date.now;
   const trafficReader = options.traffic ?? createTrafficReader();
   const costReader = options.costs ?? createCostReader();
@@ -316,7 +313,6 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
   return {
     async traffic(input: unknown, force = false, signal?: AbortSignal): Promise<TrafficReport> {
       const parsed = parseTrafficQuery(input, now());
-      if (demo()) return demoTrafficReport(parsed, now());
       const selected = select(parsed.accountId);
       const selectedIds = new Set(selected.map((item) => item.account.id));
       const scopes = new Map(
@@ -511,7 +507,6 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
     },
     async costs(input: unknown, force = false, signal?: AbortSignal): Promise<CostReport> {
       const parsed = parseCostQuery(input, now());
-      if (demo()) return demoCostReport(parsed, now());
       const selected = select(parsed.accountId);
       const key = JSON.stringify(["costs", parsed, fingerprint(selected)]);
       return query(

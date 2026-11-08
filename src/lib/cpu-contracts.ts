@@ -58,5 +58,5 @@ export interface CpuReport {
   generatedAt: string;
   cacheExpiresAt: string;
   cached: boolean;
-  source: "oci" | "demo";
+  source: "oci";
 }

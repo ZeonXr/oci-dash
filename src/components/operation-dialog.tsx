@@ -4,7 +4,7 @@ import type { JobSummary, OperationRequest } from "@/lib/contracts";
 import { useApp } from "./app-provider";
 import { send, useAction } from "./api";
 import { taskHref } from "./format";
-import { Alert, Button, ErrorState, Field, Modal } from "./ui";
+import { Button, ErrorState, Field, Modal } from "./ui";
 export interface OperationDialogProps {
   title: string;
   description: string;
@@ -25,12 +25,12 @@ export function OperationDialog({
   onClose,
   onSuccess,
 }: OperationDialogProps) {
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const action = useAction();
   const [confirmation, setConfirmation] = useState("");
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const execute = async () => {
-    if (demo || (requireName && confirmation !== requireName)) return;
+    if (requireName && confirmation !== requireName) return;
     const response = await action.run(() =>
       send<{ job: JobSummary }>("/api/operations", {
         ...operation,
@@ -59,7 +59,7 @@ export function OperationDialog({
           <Button
             variant={danger ? "danger" : "primary"}
             loading={action.pending}
-            disabled={demo || Boolean(requireName && confirmation !== requireName)}
+            disabled={Boolean(requireName && confirmation !== requireName)}
             onClick={execute}
           >
             确认{title}
@@ -68,7 +68,6 @@ export function OperationDialog({
       }
     >
       <div className="stack-sm">
-        {demo && <Alert tone="info">演示模式无法执行云操作。</Alert>}
         {summary.length > 0 && (
           <div className="confirm-summary">
             {summary.map(([label, value]) => (

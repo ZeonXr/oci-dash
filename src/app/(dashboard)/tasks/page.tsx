@@ -19,7 +19,7 @@ import { formatDate, operationLabels, shortId, taskHref } from "@/components/for
 import { RegionLabel } from "@/components/region-label";
 export default function TasksPage() {
   const { accounts } = useApp();
-  const resource = useResource<{ jobs: JobSummary[]; demo: boolean }>("/api/jobs", 5000);
+  const resource = useResource<{ jobs: JobSummary[] }>("/api/jobs", 5000);
   const [query, setQuery] = useState("");
   const [account, setAccount] = useState("");
   const [state, setState] = useState("");

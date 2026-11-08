@@ -79,7 +79,7 @@ export interface MetricsResult {
   points: MetricPoint[];
   available: boolean;
   note?: string;
-  source: "oci" | "demo";
+  source: "oci";
 }
 export interface InventoryResult {
   instances: InstanceSummary[];
@@ -199,7 +199,6 @@ export interface InventoryRefreshAccount {
 export interface InventoryRefreshResult {
   jobs: JobSummary[];
   accounts: InventoryRefreshAccount[];
-  demo: boolean;
 }
 export interface JobEvent {
   id: number;
@@ -221,7 +220,6 @@ export interface DashboardData {
   instances: InstanceSummary[];
   jobs: JobSummary[];
   activity: AuditEvent[];
-  demo: boolean;
   totals: {
     accounts: number;
     instances: number;

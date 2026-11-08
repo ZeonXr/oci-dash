@@ -10,7 +10,6 @@
 | `ADMIN_PASSWORD`          | 首次管理员密码；使用 12–256 个字符。已有管理员时不会覆盖数据库中的密码。 |
 | `MASTER_KEY`              | Base64 编码的 32 字节主密钥。Compose 必填，必须保留原值。                |
 | `APP_ORIGIN`              | 浏览器的协议、主机名和非默认端口，默认 `http://localhost:3000`。         |
-| `DEMO_MODE`               | 字符串 `true` 开启演示模式；bootstrap 和 Compose 默认开启。              |
 | `PORT`                    | 宿主机映射端口，默认 3000；容器内仍为 3000。                             |
 | `DATABASE_PATH`           | 本地默认 `data/oci-dash.db`；Compose 固定为 `/data/oci-dash.db`。        |
 | `NEXT_TELEMETRY_DISABLED` | 示例配置为 `1`，关闭 Next.js 遥测。                                      |
@@ -22,6 +21,8 @@ docker compose up -d --force-recreate app
 ```
 
 Web、网关和 Worker 必须使用同一数据库和主密钥。非 Compose 运行时，若未提供 `MASTER_KEY`，应用会在数据库目录生成 `.master-key`；它也是恢复所必需的秘密，不可用新随机密钥替换。
+
+新数据库启动后是普通空面板。旧 `DEMO_MODE` 环境变量不再读取，也不能暂停任务或控制台恢复；已有部署升级前见[专项检查流程](#从旧-demo_mode-配置升级)。
 
 ## HTTPS 与访问
 
@@ -143,7 +144,7 @@ docker compose -p oci-dash-restore --env-file /absolute/path/restore.env \
 
 备份可能早于云操作实际完成时间。核对 OCI 状态、任务检查点和请求标识后，才在对应隔离项目启动完整应用。恢复本地数据不是云资源回滚。完整异机恢复演练的验证状态见[验证指南](VERIFICATION.md)。
 
-升级前完成一致性备份并保留旧镜像，然后：
+升级前完成一致性备份并保留旧镜像。旧部署曾设置 `DEMO_MODE=true` 时，先完成下一节检查，再执行：
 
 ```sh
 docker compose build app
@@ -152,6 +153,34 @@ docker compose exec app node dist/health.mjs
 ```
 
 数据库迁移在启动时执行，没有通用降级迁移。回退需匹配的旧镜像和旧备份，不能把旧程序直接指向已升级数据库。直接更换 `MASTER_KEY` 也不是密钥轮换。
+
+### 从旧 DEMO_MODE 配置升级
+
+新版本不读取 `DEMO_MODE`。旧 `.env` 中保留 `DEMO_MODE=true` 也不会暂停执行：完整入口启动后，已有未完成任务会按租约、重试和完成期限规则继续，控制台会话会恢复核对或清理。是否有旧账号与任务取决于数据库，不取决于环境变量；没有自动清空或替换已有数据的迁移。
+
+若原部署依赖该变量暂停执行，在启动新镜像之前按以下路径检查：
+
+1. 在原部署目录执行 `docker compose stop app`，再用 `docker compose ps -a app` 确认已经停止。旧双容器部署必须同时停止 `web` 和 `worker`。
+2. 按备份流程保存一致性数据与原主密钥。当前备份脚本会保持原本已停止的应用为停止状态；不要为检查先启动完整应用。
+3. 将归档解压到独立目录，用 SQLite 工具以**只读方式**打开该副本中的数据库。保留归档内的配套 WAL 文件；不要直接打开仍在运行的生产库。
+4. 先检查表是否存在，再对存在的表执行下列只读查询。核对任务检查点、账号、实例、控制台连接和 OCI 实际状态。不要通过删除或改写数据库行取消任务或释放锁。
+
+```sql
+SELECT name FROM sqlite_master
+WHERE type = 'table' AND name IN ('jobs', 'console_sessions');
+
+SELECT id, kind, account_id, state, next_run_at, checkpoints_json, last_error
+FROM jobs
+WHERE state IN ('queued', 'running', 'retrying', 'cancel_requested', 'interrupted')
+ORDER BY created_at;
+
+SELECT id, account_id, instance_id, state, connection_id, cleanup_pending, last_error
+FROM console_sessions
+WHERE slot IS NOT NULL OR cleanup_pending = 1
+ORDER BY created_at;
+```
+
+确认允许恢复后，移除过时的环境变量并按上方命令升级和启动。仍有不确定操作时保持应用停止，先核对云端状态；即使云请求是在停止前提交，也可能已经完成。只启动 `node server.js` 不会恢复控制台或启动 Worker，但网页仍可能读取 OCI、排队同步或接受修改，不能作为只读核对工具。
 
 ## 从旧版双容器部署迁移
 
@@ -168,7 +197,7 @@ docker compose exec app node dist/health.mjs
 
 | 现象                         | 优先检查                                                                      |
 | ---------------------------- | ----------------------------------------------------------------------------- |
-| 页面正常，任务不执行         | 整体健康检查、Worker 日志、演示开关和任务状态。                               |
+| 页面正常，任务不执行         | 整体健康检查、Worker 日志、任务状态、租约和重试时间。                         |
 | 登录或写请求来源不匹配       | 浏览器源地址、`APP_ORIGIN`，以及修改环境后是否重建容器。                      |
 | 导入或恢复后无法解密         | 数据库与原 `MASTER_KEY` 是否配套，各进程配置是否一致。                        |
 | 修改 `.env` 密码后仍无法登录 | 初始化变量不会重置已有管理员；正常改密在“设置 → 登录安全”。                   |

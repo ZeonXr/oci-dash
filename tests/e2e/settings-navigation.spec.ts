@@ -44,16 +44,14 @@ const test = base.extend<{ isolatedApi: undefined }>({
           if (path === "/api/auth/me")
             return json({
               user: { id: "settings-navigation-user", username: "fixture", mfaEnabled: false },
-              demo: true,
             });
-          if (path === "/api/accounts") return json({ accounts: [], syncJobs: [], demo: true });
-          if (path === "/api/instances") return json({ instances: [], demo: true });
-          if (path === "/api/jobs") return json({ jobs: [], demo: true });
+          if (path === "/api/accounts") return json({ accounts: [], syncJobs: [] });
+          if (path === "/api/instances") return json({ instances: [] });
+          if (path === "/api/jobs") return json({ jobs: [] });
           if (path === "/api/settings") {
             const body: SettingsResult = {
               username: "fixture",
               mfaEnabled: false,
-              demo: true,
               version: "navigation-fixture",
               worker: { alive: true, lastSeenAt: "2026-11-08T00:00:00Z", runningJobs: 0 },
             };
@@ -222,4 +220,32 @@ test("空账号时总览、实例、流量和成本的引导都进入新账号�
       await currentSection(page, "/settings/accounts");
     });
   }
+});
+
+test("普通空账号可以打开添加与密码表单，通用设置只显示实际运行状态", async ({ page }) => {
+  await page.goto("/settings/accounts");
+  await currentSection(page, "/settings/accounts");
+  const add = page.locator(".settings-account-toolbar").getByRole("button", { name: "添加账号" });
+  await expect(add).toBeEnabled();
+  await add.click();
+  const accountDialog = page.getByRole("dialog", { name: "添加 OCI 账号", exact: true });
+  await expect(accountDialog).toBeVisible();
+  await expect(accountDialog.getByRole("button", { name: "添加账号", exact: true })).toBeEnabled();
+  await accountDialog.getByRole("button", { name: "取消", exact: true }).click();
+
+  await page.goto("/settings/security");
+  const password = page.getByRole("button", { name: "修改密码", exact: true });
+  await expect(password).toBeEnabled();
+  await expect(
+    page.getByRole("main").getByRole("button", { name: "设置", exact: true }),
+  ).toBeEnabled();
+  await password.click();
+  const passwordDialog = page.getByRole("dialog", { name: "修改登录密码", exact: true });
+  await expect(passwordDialog).toBeVisible();
+  await passwordDialog.getByRole("button", { name: "取消", exact: true }).click();
+
+  await page.goto("/settings/general");
+  await currentSection(page, "/settings/general");
+  await expect(page.getByText("当前模式", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("运行正常", { exact: true })).toBeVisible();
 });

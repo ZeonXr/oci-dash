@@ -14,14 +14,13 @@ const image = "oci-dash:local";
 const base = resolve(".test-tmp");
 mkdirSync(base, { recursive: true });
 const directory = mkdtempSync(join(base, "runtime-container-"));
-const envFile = join(directory, "demo.env");
+const envFile = join(directory, "test.env");
 writeFileSync(
   envFile,
   [
     "ADMIN_USERNAME=runtime-test",
     `ADMIN_PASSWORD=${randomBytes(24).toString("base64url")}`,
     `MASTER_KEY=${randomBytes(32).toString("base64")}`,
-    "DEMO_MODE=true",
     "APP_ORIGIN=http://localhost:3000",
     "DATABASE_PATH=/data/oci-dash.db",
     "",

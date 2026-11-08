@@ -76,9 +76,8 @@ const test = base.extend<{ overview: Fixture }>({
         if (url.pathname === "/api/auth/me")
           return json({
             user: { id: "fixture", username: "admin", mfaEnabled: false },
-            demo: false,
           });
-        if (url.pathname === "/api/accounts") return json({ accounts, demo: false, syncJobs: [] });
+        if (url.pathname === "/api/accounts") return json({ accounts, syncJobs: [] });
         const selected = resources.filter(
           (resource) => !params.get("accountId") || resource.account.id === params.get("accountId"),
         );

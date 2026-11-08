@@ -72,7 +72,6 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", USERNAME);
   vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
   vi.stubEnv("APP_ORIGIN", ORIGIN);
-  vi.stubEnv("DEMO_MODE", "false");
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-11-07T12:00:05Z"));
   for (const mock of Object.values(cloud)) mock.mockReset();
@@ -147,6 +146,35 @@ function instance(accountId: string, suffix: string, state = "RUNNING"): Instanc
 }
 
 describe("session and request boundaries", () => {
+  it("returns empty persisted resources on a fresh database without querying OCI", async () => {
+    const { token } = loggedIn();
+    for (const [path, expected] of [
+      ["accounts", { accounts: [], syncJobs: [] }],
+      ["instances", { instances: [] }],
+      ["jobs", { jobs: [] }],
+    ] as const) {
+      const response = await handleApi(request(path, { token }), path.split("/"));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expected);
+    }
+    const dashboard = await handleApi(request("dashboard", { token }), ["dashboard"]);
+    expect(dashboard.status).toBe(200);
+    expect(await dashboard.json()).toMatchObject({
+      accounts: [],
+      instances: [],
+      jobs: [],
+      totals: { accounts: 0, instances: 0, running: 0, stopped: 0, storageGb: 0, regions: 0 },
+    });
+    const refreshed = await handleApi(
+      request("inventory/refresh", { method: "POST", token, body: { mode: "auto" } }),
+      ["inventory", "refresh"],
+    );
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toEqual({ jobs: [], accounts: [] });
+    expect(getJobStore().listJobs()).toEqual([]);
+    for (const mock of Object.values(cloud)) expect(mock).not.toHaveBeenCalled();
+  });
+
   it("bootstraps login, stores only a token hash, expires sessions and revokes logout", async () => {
     const response = await handleApi(
       request("auth/login", { method: "POST", body: { username: USERNAME, password: PASSWORD } }),
@@ -155,7 +183,6 @@ describe("session and request boundaries", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       user: { username: USERNAME, mfaEnabled: false },
-      demo: false,
     });
     const setCookie = response.headers.get("set-cookie")!;
     expect(setCookie).toContain("HttpOnly");
@@ -201,17 +228,6 @@ describe("session and request boundaries", () => {
         }),
       ),
     ).toThrow();
-  });
-  it("keeps demo cloud operations and credential storage disabled", async () => {
-    const auth = loggedIn();
-    vi.stubEnv("DEMO_MODE", "true");
-    const response = await handleApi(
-      request("accounts", { method: "POST", token: auth.token, body: accountInput() }),
-      ["accounts"],
-    );
-    expect(response.status).toBe(403);
-    expect(listAccounts()).toEqual([]);
-    expect(cloud.verify).not.toHaveBeenCalled();
   });
   it("bounds random-username login work and prunes old attempt records", () => {
     const db = getDatabase();

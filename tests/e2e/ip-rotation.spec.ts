@@ -158,7 +158,6 @@ function fixtureInstances(): InstanceSummary[] {
 }
 type Submission = OperationRequest & { idempotencyKey: string };
 interface RotationFixture {
-  demo: boolean;
   now: number;
   instances: InstanceSummary[];
   jobs: JobSummary[];
@@ -185,7 +184,6 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
     const accepted = new Map<string, JobSummary>();
     const submittedByJob = new Map<string, Submission>();
     const fixture: RotationFixture = {
-      demo: false,
       now: Date.now(),
       instances: fixtureInstances(),
       jobs: [],
@@ -280,17 +278,16 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
       if (method === "GET" && path === "/api/auth/me")
         return json({
           user: { id: "rotation-user", username: "fixture", mfaEnabled: false },
-          demo: fixture.demo,
         });
       if (method === "GET" && path === "/api/accounts")
-        return json({ accounts: [account], syncJobs: [], demo: fixture.demo });
+        return json({ accounts: [account], syncJobs: [] });
       if (method === "GET" && path === "/api/instances") {
         if (fixture.instancesGate) await fixture.instancesGate;
-        return json({ instances: fixture.instances, demo: fixture.demo });
+        return json({ instances: fixture.instances });
       }
       if (method === "GET" && path === "/api/jobs") {
         const jobs = fixture.jobs.filter((job) => !fixture.omittedFromList.has(job.id));
-        await json({ jobs, demo: fixture.demo });
+        await json({ jobs });
         fixture.listResponses.push(jobs.map((job) => job.id));
         return;
       }
@@ -298,9 +295,7 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
       if (method === "GET" && jobMatch) {
         if (fixture.detailsGate) await fixture.detailsGate;
         const job = fixture.jobDetails.get(decodeURIComponent(jobMatch[1]));
-        return job
-          ? json({ job, events: [], demo: fixture.demo })
-          : json({ error: "Unknown fixture job" }, 404);
+        return job ? json({ job, events: [] }) : json({ error: "Unknown fixture job" }, 404);
       }
       if (method === "POST" && path === "/api/inventory/refresh") {
         const body = request.postDataJSON() as { mode?: string };
@@ -316,17 +311,12 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
               nextRefreshAt: new Date(fixture.now + 60_000).toISOString(),
             },
           ],
-          demo: fixture.demo,
         };
         return json(result);
       }
       if (method === "POST" && path === "/api/operations") {
         const body = request.postDataJSON() as Submission;
         fixture.submissions.push(body);
-        if (fixture.demo) {
-          fixture.unexpected.push("Operation submitted in demo mode");
-          return json({ error: "Demo operation blocked by fixture" }, 403);
-        }
         if (body.kind !== "public-ip-rotate" || typeof body.idempotencyKey !== "string") {
           fixture.unexpected.push("Unexpected operation or missing idempotency key");
           return json({ error: "Invalid fixture operation" }, 400);
@@ -381,14 +371,14 @@ const change = (container: Locator, address: string) =>
 const dialog = (page: Page) => page.getByRole("dialog", { name: "更换公网 IP", exact: true });
 const confirm = (page: Page) =>
   dialog(page).getByRole("button", { name: "确认更换公网 IP", exact: true });
-async function openCards(page: Page) {
+async function openCards(page: Page, hasRotationAction = true) {
   await page.goto("/instances");
   await expect(page.getByRole("button", { name: "卡片视图", exact: true })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
   await expect(page.locator("article.instance-card")).toHaveCount(3);
-  await expect(change(card(page), addresses.target)).toBeVisible();
+  if (hasRotationAction) await expect(change(card(page), addresses.target)).toBeVisible();
 }
 async function advanceJobPoll(page: Page, fixture: RotationFixture) {
   fixture.now += 5001;
@@ -544,12 +534,20 @@ test("后台任务失败显示错误入口并刷新卡片，重新发起操作�
   expect(rotationApi.jobs).toHaveLength(2);
 });
 
-test("演示模式展示可轮换地址但禁用所有更换入口", async ({ page, rotationApi }) => {
-  rotationApi.demo = true;
-  await openCards(page);
-  await expect(change(card(page), addresses.first)).toBeDisabled();
-  await expect(change(card(page), addresses.target)).toBeDisabled();
-  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeDisabled();
+test("已终止和正在终止的实例保留地址信息，但不提供公网 IP 更换入口", async ({
+  page,
+  rotationApi,
+}) => {
+  rotationApi.instances.find((item) => item.id === ids.main)!.state = "TERMINATED";
+  rotationApi.instances.find((item) => item.id === ids.stopped)!.state = "TERMINATING";
+  await openCards(page, false);
+  await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
+  await expect(
+    card(page, "Rotation stopped").getByText(addresses.stopped, { exact: true }),
+  ).toBeVisible();
+  await expect(change(card(page), addresses.first)).toHaveCount(0);
+  await expect(change(card(page), addresses.target)).toHaveCount(0);
+  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toHaveCount(0);
   await expect(change(card(page), addresses.fixed)).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(rotationApi.submissions).toEqual([]);

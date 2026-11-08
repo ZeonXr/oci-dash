@@ -33,7 +33,7 @@ import { RegionLabel } from "@/components/region-label";
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const [poll, setPoll] = useState(3000);
   const resource = useResource<{ job: JobSummary; events: JobEvent[] }>(
     `/api/jobs/${encodeURIComponent(id)}`,
@@ -47,7 +47,7 @@ export default function TaskDetailPage() {
     if (job) setPoll(isJobPending(job) ? 3000 : 0);
   }, [job]);
   const execute = async () => {
-    if (demo || !confirm) return;
+    if (!confirm) return;
     const response = await action.run(() =>
       send<{ job?: JobSummary }>(`/api/jobs/${encodeURIComponent(id)}/${confirm}`),
     );
@@ -93,7 +93,6 @@ export default function TaskDetailPage() {
         </Button>
         {isJobRetryable(job) && (
           <Button
-            disabled={demo}
             onClick={() => {
               action.clearError();
               setConfirm("retry");
@@ -105,7 +104,6 @@ export default function TaskDetailPage() {
         )}
         {isJobCancellable(job) && (
           <Button
-            disabled={demo}
             onClick={() => {
               action.clearError();
               setConfirm("cancel");
@@ -242,7 +240,7 @@ export default function TaskDetailPage() {
               <Button onClick={() => setConfirm(null)} disabled={action.pending}>
                 返回
               </Button>
-              <Button variant="primary" disabled={demo} loading={action.pending} onClick={execute}>
+              <Button variant="primary" loading={action.pending} onClick={execute}>
                 确认{confirm === "cancel" ? "取消" : "重试"}
               </Button>
             </>

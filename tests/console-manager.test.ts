@@ -92,7 +92,6 @@ beforeEach(() => {
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   vi.setSystemTime(new Date("2026-11-07T00:00:00Z"));
-  vi.stubEnv("DEMO_MODE", "false");
 });
 
 afterEach(async () => {
@@ -185,58 +184,6 @@ describe("console manager ownership and connection admission", () => {
     });
     await f.manager.connect(session.id, after.ticket, actor);
   });
-
-  it("rejects demo creation before transport or target credentials are accessed", async () => {
-    const f = fixture();
-    await f.manager.initialize();
-    vi.stubEnv("DEMO_MODE", "true");
-    await expect(f.manager.create(target.instanceId, actor)).rejects.toMatchObject({
-      code: "DEMO_MODE",
-    });
-    expect(f.resolveTarget).not.toHaveBeenCalled();
-    expect(f.transport.start).not.toHaveBeenCalled();
-    expect(f.store.active()).toBeNull();
-  });
-
-  it.each(["connected", "failed"] as const)(
-    "preserves a persisted %s session without cloud recovery or cleanup in demo mode",
-    async (state) => {
-      const f = fixture();
-      const record: ConsoleSessionRecord = {
-        id: "previous-real-session",
-        instanceId: target.instanceId,
-        instanceName: target.instanceName,
-        accountId: target.accountId,
-        region: target.region,
-        ownerUserId: actor.userId,
-        ownerUsername: actor.username,
-        ownerSessionHash: "old-real-login",
-        state,
-        connectionId: "previous-real-oci-connection",
-        compartmentId: null,
-        credentialRecoveryReady: false,
-        creationState: "created",
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 1_000).toISOString(),
-        lastActivityAt: new Date().toISOString(),
-        readyAt: new Date().toISOString(),
-        lastError: state === "failed" ? "cleanup pending" : null,
-        cleanupPending: state === "failed",
-        slot: 1,
-      };
-      f.store.reserve(record);
-      vi.stubEnv("DEMO_MODE", "true");
-      await f.manager.initialize();
-      await vi.advanceTimersByTimeAsync(60_000);
-      await f.manager.shutdown();
-      expect(f.store.get(record.id)).toEqual(record);
-      expect(f.store.active()?.id).toBe(record.id);
-      expect(f.resolveTarget).not.toHaveBeenCalled();
-      expect(f.transport.start).not.toHaveBeenCalled();
-      expect(f.transport.cleanup).not.toHaveBeenCalled();
-      expect(f.tunnel.close).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe("console cleanup and recovery", () => {

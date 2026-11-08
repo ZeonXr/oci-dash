@@ -57,7 +57,6 @@ describe("OCI accepted-operation polling", () => {
     vi.useFakeTimers();
     const start = Date.parse("2026-01-01T00:00:00Z");
     vi.setSystemTime(start);
-    vi.stubEnv("DEMO_MODE", "false");
     let instance: CloudDocument | null = null;
     const cloud = clients({
       listCompartments: () => ({ items: [] }),

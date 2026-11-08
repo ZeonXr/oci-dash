@@ -23,6 +23,8 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI T
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
+空数据库只初始化管理员，不生成账号、实例或指标样例。运行代码不读取旧 `DEMO_MODE`，不存在演示开关或假数据分支；测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
+
 正常读取使用服务端凭据；账号读取 API 不返回密钥。账号配置版本用于阻止异步读取结果或缓存跨越凭据和范围变化。部署、停止期限和恢复流程见[运维说明](OPERATIONS.md)。
 
 ## 账号与库存流程
@@ -47,32 +49,32 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 ## HTTP API
 
-业务 API 使用 JSON；错误通常为 `{error,code}`。除健康检查、登录和允许清除过期会话的注销接口外，均要求登录。非 GET/HEAD 请求还要求同源。演示模式拒绝真实账号保存、云写入和安全设置修改。
+业务 API 使用 JSON；错误通常为 `{error,code}`。除健康检查、登录和允许清除过期会话的注销接口外，均要求登录。非 GET/HEAD 请求还要求同源。响应不再包含 `demo` 字段；统计与指标的 `source` 只允许 `oci`。
 
 | 方法与路径                                              | 请求或响应要点                                                                                                  |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `GET /api/health`                                       | Web 与 SQLite 可用性；不代替 Worker 健康检查。                                                                  |
-| `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user,demo}` 并设置会话 Cookie。                                             |
+| `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user}` 并设置会话 Cookie。                                                  |
 | `GET /api/auth/me`、`POST /api/auth/logout`             | 当前会话；注销会撤销 Cookie 对应会话。                                                                          |
-| `GET /api/accounts`                                     | `{accounts,syncJobs,demo}`；每账号当前或最近同步任务。                                                          |
+| `GET /api/accounts`                                     | `{accounts,syncJobs}`；每账号当前或最近同步任务。                                                               |
 | `POST /api/accounts`                                    | `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}`；原子保存并返回 `{account,job}`，HTTP 201。 |
 | `PATCH /api/accounts/:id`                               | 修改名称、区域或替换凭据；通常返回 `{account,job?}`。                                                           |
 | `DELETE /api/accounts/:id`                              | 移除本地配置，不删除云资源；活动任务或控制台清理可阻止移除。                                                    |
 | `POST /api/accounts/:id/sync`                           | 创建或复用持久同步，返回 `{job}`，HTTP 202。                                                                    |
 | `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                          |
 | `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`；返回 `CreateOptions`。                                                          |
-| `GET /api/instances`、`GET /api/instances/:id`          | `{instances,demo}` 或 `{instance,demo}`，ID 需要 URL 编码。                                                     |
+| `GET /api/instances`、`GET /api/instances/:id`          | `{instances}` 或 `{instance}`，ID 需要 URL 编码。                                                               |
 | `POST /api/inventory/refresh`                           | `mode` 为 `auto` 或 `manual`，可附 `accountIds` 数组；返回任务和各账号的新鲜度/退避状态。                       |
 | `GET /api/instances/:id/metrics`                        | `range` 可选 `1h`、`24h`、`7d`，返回 `MetricsResult`。                                                          |
-| `GET /api/instances/:id/security`                       | `{groups,demo}`。                                                                                               |
+| `GET /api/instances/:id/security`                       | `{groups}`。                                                                                                    |
 | `GET /api/dashboard`                                    | 资源总量和近期活动的 `DashboardData`；图表总览使用下列统计接口。                                                |
 | `GET/POST /api/analytics/traffic`                       | 流量报告；POST 刷新相同 URL 查询范围。                                                                          |
 | `GET/POST /api/analytics/costs`                         | 费用报告；按币种分开。                                                                                          |
 | `GET/POST /api/analytics/cpu`                           | 仅可选 `accountId`，固定最近 24 个完整 UTC 小时。                                                               |
 | `POST /api/operations`                                  | `OperationRequest` → `{job}`，HTTP 202。                                                                        |
-| `GET /api/jobs`、`GET /api/jobs/:id`                    | `{jobs,demo}` 或 `{job,events,demo}`。                                                                          |
+| `GET /api/jobs`、`GET /api/jobs/:id`                    | `{jobs}` 或 `{job,events}`。                                                                                    |
 | `POST /api/jobs/:id/cancel`、`POST /api/jobs/:id/retry` | 请求取消或继续现有任务。                                                                                        |
-| `GET /api/settings`                                     | `{username,mfaEnabled,demo,version,worker}`。                                                                   |
+| `GET /api/settings`                                     | `{username,mfaEnabled,version,worker}`。                                                                        |
 | `POST /api/settings/password`                           | `{currentPassword,newPassword}`；成功后撤销全部登录会话。                                                       |
 | `POST /api/settings/mfa/setup`                          | `{password}` → 临时验证器配置。                                                                                 |
 | `POST /api/settings/mfa/confirm`                        | `{code}` → 一次性展示恢复码，撤销其他登录会话。                                                                 |
@@ -88,7 +90,7 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 | 接口                                                     | 行为                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/console/session`                               | `{session,demo}`，查看全局占用。                                   |
+| `GET /api/console/session`                               | `{session}`，查看全局占用。                                        |
 | `POST /api/console/sessions`                             | `{instanceId}` → `{session}`，HTTP 202。                           |
 | `GET /api/console/sessions/:id`                          | 登录会话所有者读取状态。                                           |
 | `DELETE /api/console/sessions/:id`、`POST .../:id/close` | 关闭并清理，返回 `{session}`。                                     |
@@ -98,7 +100,7 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 握手检查登录、Origin、所有者/登录会话绑定及标准 WebSocket 头；存活连接会再次验证登录。票据和私钥不放入 URL。全局唯一槽覆盖活动会话及未完成清理，不能借新会话绕过清理失败。
 
-外层 SSH 主机密钥与 OCI API 指纹匹配；内层仅通过认证外层通道使用本次私有 known_hosts。清理只删除账号、实例和会话标签都匹配的连接。权限不足或创建结果不明确时保留记录和锁，演示模式不执行云端恢复或清理。
+外层 SSH 主机密钥与 OCI API 指纹匹配；内层仅通过认证外层通道使用本次私有 known_hosts。清理只删除账号、实例和会话标签都匹配的连接。权限不足或创建结果不明确时保留记录和锁。完整应用启动后会按持久记录恢复和清理控制台。
 
 控制台记录保留已验证的所属区间。对于缺少该信息且父实例已不可读的旧记录，清理要求 `accessLevel=ANY` 的完整区间枚举及每个区间的连接枚举；失败或权限不足不能作为资源已经消失的证据。
 

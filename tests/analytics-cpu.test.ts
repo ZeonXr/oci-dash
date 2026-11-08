@@ -130,7 +130,6 @@ function fixture(
     isCurrent: (name, value) =>
       current && available.some((a) => a.id === name) && value === revision,
     now: () => clock,
-    demo: () => false,
     clientFactory: factory,
     timeoutMs: options.timeoutMs,
   });
@@ -543,24 +542,46 @@ describe("CPU query boundaries", () => {
     expect(invalid.factory).not.toHaveBeenCalled();
   });
 
-  it("returns labeled demo samples without accessing any real account, credential or SDK source", async () => {
+  it("returns empty CPU coverage without credentials or OCI when no accounts are saved", async () => {
     const forbidden = vi.fn(() => {
-      throw new Error("Real source must not be touched");
+      throw new Error("Empty accounts must not access credentials or OCI");
     });
     const options: CpuServiceOptions = {
-      demo: () => true,
       now: () => NOW,
-      accounts: forbidden,
-      instances: forbidden,
+      accounts: () => [],
+      instances: () => [],
       access: forbidden,
       isCurrent: forbidden,
       clientFactory: forbidden,
     };
-    const report = await createCpuService(options).query({}, true);
-    expect(report.source).toBe("demo");
-    expect(report.points).toHaveLength(24);
-    expect(report.rows.length).toBeGreaterThan(0);
-    expect(report.warnings.join(" ")).toContain("演示样本");
+    const service = createCpuService(options);
+    for (const force of [false, true]) {
+      const report = await service.query({}, force);
+      expect(report).toMatchObject({
+        source: "oci",
+        status: "empty",
+        accounts: [],
+        rows: [],
+        warnings: [],
+        summary: {
+          averageCpuPercent: null,
+          peakCpuPercent: null,
+          instancesWithSamples: 0,
+          totalInstances: 0,
+          observedHours: 0,
+          totalSamples: 0,
+        },
+      });
+      expect(report.points).toHaveLength(24);
+      expect(
+        report.points.every(
+          (point) => point.cpuPercent === null && point.coverage === "unavailable",
+        ),
+      ).toBe(true);
+    }
+    await expect(service.query({ accountId: "missing" })).rejects.toMatchObject({
+      code: "ACCOUNT_NOT_FOUND",
+    });
     expect(forbidden).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -31,11 +31,6 @@ const op: OperationRequest = {
   payload: { privateIpId: "test-private-ip" },
 };
 const emptyInventory: InventoryResult = { instances: [], warnings: [], regions: ["test-region"] };
-let previousDemoMode: string | undefined;
-beforeEach(() => {
-  previousDemoMode = process.env.DEMO_MODE;
-  process.env.DEMO_MODE = "false";
-});
 function fixture() {
   const accountState: AccountSummary = { ...account, regions: [...account.regions] };
   const base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
@@ -100,8 +95,6 @@ function fixture() {
   };
 }
 afterEach(() => {
-  if (previousDemoMode === undefined) delete process.env.DEMO_MODE;
-  else process.env.DEMO_MODE = previousDemoMode;
   for (const db of handles.splice(0)) if (db.open) db.close();
   for (const { directory, base } of directories.splice(0)) {
     const target = resolve(directory);
@@ -256,33 +249,6 @@ describe("worker with an offline OCI adapter", () => {
     },
   );
 
-  it("keeps its heartbeat in demo mode without claiming pre-existing real jobs", async () => {
-    const f = fixture();
-    const job = f.store.enqueueOperation(op, "admin");
-    const shutdown = new AbortController();
-    const getCredentials = vi.fn(f.dependencies.getCredentials);
-    process.env.DEMO_MODE = "true";
-    const worker = runWorker({
-      signal: shutdown.signal,
-      pollIntervalMs: 10,
-      heartbeatIntervalMs: 10,
-      dependencies: { ...f.dependencies, getCredentials },
-    });
-    try {
-      expect(f.store.getWorkerStatus().online).toBe(true);
-      const initial = f.store.getWorkerStatus().lastHeartbeatAt;
-      f.advance(50);
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      expect(f.store.getWorkerStatus().lastHeartbeatAt).not.toBe(initial);
-      expect(f.store.getJob(job.id)).toMatchObject({ state: "queued", attempt: 0 });
-      expect(getCredentials).not.toHaveBeenCalled();
-      expect(f.adapter.execute).not.toHaveBeenCalled();
-      expect(f.adapter.inventory).not.toHaveBeenCalled();
-    } finally {
-      shutdown.abort();
-      await worker;
-    }
-  });
   it("executes one persisted request and retains successful history after inventory refresh", async () => {
     const f = fixture();
     const job = f.store.enqueueOperation(op, "admin");

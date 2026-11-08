@@ -13,7 +13,7 @@ import {
   confirmMfa,
   disableMfa,
 } from "./auth";
-import { getDatabase, isDemo, audit } from "./db";
+import { getDatabase, audit } from "./db";
 import { AppError, safeMessage } from "./errors";
 import { json, readJson, errorResponse } from "./http";
 import { accountSchema, accountPatchSchema, regionSchema, validateOperation } from "./validation";
@@ -29,15 +29,6 @@ import { createAccountConnection, updateAccountConnection } from "./account-conn
 import { getInstance, listInstances, recentActivity } from "./inventory";
 import { requestInventoryRefresh } from "./inventory-refresh";
 import {
-  demoAccounts,
-  demoActivity,
-  demoEvents,
-  demoInstances,
-  demoJobs,
-  demoMetrics,
-  demoSecurity,
-} from "./demo";
-import {
   enqueueOperation,
   getJob,
   getJobEvents,
@@ -51,10 +42,6 @@ import { ociAdapter } from "./oci/adapter";
 import { analyticsService } from "./analytics/service";
 import { cpuService } from "./analytics/cpu";
 
-const liveOnly = () => {
-  if (isDemo())
-    throw new AppError("演示模式只用于浏览，不执行云操作或修改配置", 403, "DEMO_READ_ONLY");
-};
 const metricsCache = new Map<
   string,
   { expires: number; value: Awaited<ReturnType<typeof ociAdapter.metrics>> }
@@ -79,7 +66,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         })
         .parse(await readJson(request));
       const result = login(input.username, input.password, input.code);
-      return json({ user: result.user, demo: isDemo() }, 200, {
+      return json({ user: result.user }, 200, {
         "Set-Cookie": sessionCookie(result.token),
       });
     }
@@ -87,9 +74,8 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       logout(request);
       return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", true) });
     }
-    const user = requireUser(request),
-      demo = isDemo();
-    if (method === "GET" && path === "auth/me") return json({ user, demo });
+    const user = requireUser(request);
+    if (method === "GET" && path === "auth/me") return json({ user });
     if (
       ["GET", "POST"].includes(method) &&
       ["analytics/traffic", "analytics/costs", "analytics/cpu"].includes(path)
@@ -109,20 +95,18 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       return json(report);
     }
     if (method === "POST" && path === "inventory/refresh") {
-      liveOnly();
       const result = requestInventoryRefresh(await readJson(request), user.username);
       const active = result.jobs.some(isJobPending);
       return json(result, active ? 202 : 200);
     }
     if (method === "GET" && path === "dashboard") {
-      const accounts = demo ? demoAccounts() : listAccounts(),
-        instances = demo ? demoInstances() : listInstances();
+      const accounts = listAccounts(),
+        instances = listInstances();
       const data: DashboardData = {
         accounts,
         instances,
-        jobs: demo ? demoJobs() : listJobs(100),
-        activity: demo ? demoActivity() : recentActivity(),
-        demo,
+        jobs: listJobs(100),
+        activity: recentActivity(),
         totals: {
           accounts: accounts.length,
           instances: instances.length,
@@ -140,14 +124,10 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     if (path === "accounts") {
       if (method === "GET")
         return json({
-          accounts: demo ? demoAccounts() : listAccounts(),
-          syncJobs: demo
-            ? demoJobs().filter((job) => job.kind === "sync-account")
-            : listAccountSyncJobs(),
-          demo,
+          accounts: listAccounts(),
+          syncJobs: listAccountSyncJobs(),
         });
       if (method === "POST") {
-        liveOnly();
         return json(
           createAccountConnection(accountSchema.parse(await readJson(request)), user.username),
           201,
@@ -157,7 +137,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     if (segments[0] === "accounts" && segments[1]) {
       const id = segments[1];
       if (segments.length === 2 && method === "PATCH") {
-        liveOnly();
         return json(
           updateAccountConnection(
             id,
@@ -167,12 +146,10 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         );
       }
       if (segments.length === 2 && method === "DELETE") {
-        liveOnly();
         deleteAccount(id, user.username);
         return json({ ok: true });
       }
       if (segments.length === 3 && method === "POST" && segments[2] === "verify") {
-        liveOnly();
         const account = getAccount(id);
         if (!account) throw new AppError("账号不存在", 404);
         const access = getCredentialSnapshot(id);
@@ -189,7 +166,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         }
       }
       if (segments.length === 3 && method === "POST" && segments[2] === "sync") {
-        liveOnly();
         const account = getAccount(id);
         if (!account) throw new AppError("账号不存在", 404);
         const refreshed = requestInventoryRefresh(
@@ -202,7 +178,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         return json({ job }, 202);
       }
       if (segments.length === 3 && method === "GET" && segments[2] === "create-options") {
-        liveOnly();
         const region = regionSchema.parse(url.searchParams.get("region"));
         const compartmentId = url.searchParams.get("compartmentId") ?? undefined;
         if (compartmentId && !/^ocid1\.(tenancy|compartment)\.[A-Za-z0-9._-]+$/.test(compartmentId))
@@ -210,27 +185,20 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         return json(await ociAdapter.createOptions(getCredentials(id, region), compartmentId));
       }
     }
-    if (method === "GET" && path === "instances")
-      return json({ instances: demo ? demoInstances() : listInstances(), demo });
+    if (method === "GET" && path === "instances") return json({ instances: listInstances() });
     if (segments[0] === "instances" && segments[1] && method === "GET") {
-      const instance = demo
-        ? demoInstances().find((i) => i.id === segments[1])
-        : getInstance(segments[1]);
+      const instance = getInstance(segments[1]);
       if (!instance) throw new AppError("实例不存在", 404);
-      if (segments.length === 2) return json({ instance, demo });
+      if (segments.length === 2) return json({ instance });
       if (segments.length === 3 && segments[2] === "security")
         return json({
-          groups: demo
-            ? demoSecurity()
-            : await ociAdapter.securityGroups(
-                getCredentials(instance.accountId, instance.region),
-                instance,
-              ),
-          demo,
+          groups: await ociAdapter.securityGroups(
+            getCredentials(instance.accountId, instance.region),
+            instance,
+          ),
         });
       if (segments.length === 3 && segments[2] === "metrics") {
         const range = z.enum(["1h", "24h", "7d"]).parse(url.searchParams.get("range") ?? "1h");
-        if (demo) return json(demoMetrics(range));
         // Validate the current account's enabled region before consulting a prior snapshot.
         const snapshot = getCredentialSnapshot(instance.accountId, instance.region);
         const scopeOf = (value: typeof instance) =>
@@ -263,7 +231,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       }
     }
     if (method === "POST" && path === "operations") {
-      liveOnly();
       const operation = validateOperation(await readJson(request));
       const account = getAccount(operation.accountId);
       if (!account) throw new AppError("账号不存在", 404);
@@ -282,20 +249,17 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       audit(user.username, operation.kind, operation.resourceId ?? account.name, "操作已排队");
       return json({ job }, 202);
     }
-    if (method === "GET" && path === "jobs")
-      return json({ jobs: demo ? demoJobs() : listJobs(), demo });
+    if (method === "GET" && path === "jobs") return json({ jobs: listJobs() });
     if (segments[0] === "jobs" && segments[1]) {
       const id = segments[1],
-        job = demo ? demoJobs().find((j) => j.id === id) : getJob(id);
+        job = getJob(id);
       if (!job) throw new AppError("任务不存在", 404);
-      if (segments.length === 2 && method === "GET")
-        return json({ job, events: demo ? demoEvents(id) : getJobEvents(id), demo });
+      if (segments.length === 2 && method === "GET") return json({ job, events: getJobEvents(id) });
       if (
         segments.length === 3 &&
         method === "POST" &&
         ["cancel", "retry"].includes(segments[2]!)
       ) {
-        liveOnly();
         const result = segments[2] === "cancel" ? cancelJob(id) : retryJob(id);
         audit(user.username, `job.${segments[2]}`, id, "请求已提交");
         return json({ job: result });
@@ -306,7 +270,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       return json({
         username: user.username,
         mfaEnabled: user.mfaEnabled,
-        demo,
         version: process.env.APP_VERSION ?? "0.1.0",
         worker: {
           alive: worker.online,
@@ -316,7 +279,6 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       });
     }
     if (segments[0] === "settings" && method === "POST") {
-      liveOnly();
       const value = await readJson(request);
       if (path === "settings/password") {
         const input = z

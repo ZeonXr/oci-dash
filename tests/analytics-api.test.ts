@@ -5,11 +5,34 @@ import { closeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { handleApi } from "@/server/router";
 
+const { forbidden } = vi.hoisted(() => ({
+  forbidden: vi.fn(() => {
+    throw new Error("Empty-account API requests must not access credentials or OCI clients");
+  }),
+}));
+vi.mock("@/server/accounts", async (original) => ({
+  ...(await original<typeof import("@/server/accounts")>()),
+  getCredentialSnapshot: forbidden,
+}));
+vi.mock("oci-common", () => {
+  forbidden();
+  return {};
+});
+vi.mock("oci-monitoring", () => {
+  forbidden();
+  return {};
+});
+vi.mock("oci-usageapi", () => {
+  forbidden();
+  return {};
+});
+
 const origin = "https://analytics-api.invalid";
 let directory = "",
   base = "",
   token = "";
 beforeEach(() => {
+  forbidden.mockClear();
   closeDatabase();
   base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
@@ -19,7 +42,6 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", "analytics-test");
   vi.stubEnv("ADMIN_PASSWORD", "analytics-test-password");
   vi.stubEnv("APP_ORIGIN", origin);
-  vi.stubEnv("DEMO_MODE", "true");
   token = login("analytics-test", "analytics-test-password").token;
 });
 afterEach(() => {
@@ -43,17 +65,28 @@ describe("analytics API boundaries", () => {
     for (const kind of ["traffic", "costs", "cpu"])
       expect((await request(`analytics/${kind}`, "GET", false)).status).toBe(401);
   });
-  it("allows demo inspection and refresh without querying real accounts", async () => {
+  it("serves empty-account reports and refreshes from a fresh database", async () => {
     for (const kind of ["traffic", "costs", "cpu"]) {
       for (const method of ["GET", "POST"]) {
         const response = await request(`analytics/${kind}`, method);
         expect(response.status).toBe(200);
         const body = await response.json();
-        expect(body.source).toBe("demo");
+        expect(body.source).toBe("oci");
         expect(body.range.timeZone).toBe("UTC");
-        expect(body.rows.length).toBeGreaterThan(0);
+        expect(body.status).toBe("empty");
+        expect(body.accounts).toEqual([]);
+        expect(body.rows).toEqual([]);
       }
     }
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it("rejects a missing account instead of providing sample resources", async () => {
+    for (const kind of ["traffic", "costs", "cpu"]) {
+      const response = await request(`analytics/${kind}?accountId=missing`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: "ACCOUNT_NOT_FOUND" });
+    }
+    expect(forbidden).not.toHaveBeenCalled();
   });
   it("rejects cross-origin manual cloud reads", async () => {
     expect((await request("analytics/costs", "POST", true, "https://other.invalid")).status).toBe(

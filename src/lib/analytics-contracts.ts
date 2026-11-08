@@ -19,7 +19,7 @@ export interface AnalyticsMetadata {
   generatedAt: string;
   cacheExpiresAt: string;
   cached: boolean;
-  source: "oci" | "demo";
+  source: "oci";
   accounts: AnalyticsAccountStatus[];
 }
 export interface TrafficPoint {

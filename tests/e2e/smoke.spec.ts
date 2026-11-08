@@ -1,14 +1,48 @@
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import type { DashboardData, SessionUser } from "../../src/lib/contracts";
+import {
+  fixtureAccounts,
+  fixtureActivity,
+  fixtureEvents,
+  fixtureInstances,
+  fixtureJobs,
+  fixtureMetrics,
+  fixtureSecurity,
+} from "../fixtures/seed-data";
+import {
+  fixtureCostReport,
+  fixtureCpuReport,
+  fixtureTrafficReport,
+} from "../fixtures/analytics-data";
+import { parseCostQuery, parseTrafficQuery } from "../../src/server/analytics/query";
 
-// This suite deliberately uses an existing, local demo server. It never starts
-// services, reads a personal .env file, or submits a cloud/configuration mutation.
+// Authentication and empty-state checks use a fresh isolated server. Populated
+// screens receive synthetic responses from Playwright, never from the app runtime.
 test.describe.configure({ mode: "serial" });
 
-type Guard = { external: string[]; mutations: string[]; errors: string[] };
+type Guard = { external: string[]; mutations: string[]; errors: string[]; fixtures: boolean };
 const guards = new WeakMap<BrowserContext, Guard>();
 let cookies: Awaited<ReturnType<BrowserContext["cookies"]>> = [];
-let demo: DashboardData;
+const accounts = fixtureAccounts();
+const instances = fixtureInstances();
+const samples: DashboardData = {
+  accounts,
+  instances,
+  jobs: fixtureJobs(),
+  activity: fixtureActivity(),
+  totals: {
+    accounts: accounts.length,
+    instances: instances.length,
+    running: instances.filter((item) => item.state === "RUNNING").length,
+    stopped: instances.filter((item) => item.state === "STOPPED").length,
+    storageGb: instances.reduce(
+      (sum, instance) =>
+        sum + instance.bootVolumes.reduce((total, volume) => total + volume.sizeGb, 0),
+      0,
+    ),
+    regions: new Set(instances.map((item) => item.region)).size,
+  },
+};
 
 function localOrigin(value: string | undefined) {
   const url = new URL(value || "http://localhost:3000");
@@ -19,7 +53,7 @@ function localOrigin(value: string | undefined) {
 }
 
 async function guardNetwork(context: BrowserContext, origin: string) {
-  const guard: Guard = { external: [], mutations: [], errors: [] };
+  const guard: Guard = { external: [], mutations: [], errors: [], fixtures: true };
   guards.set(context, guard);
   context.on("page", (page) => page.on("pageerror", (error) => guard.errors.push(error.message)));
   await context.route("**/*", async (route) => {
@@ -27,6 +61,75 @@ async function guardNetwork(context: BrowserContext, origin: string) {
     const url = new URL(request.url());
     if (url.origin !== origin && url.protocol !== "data:") {
       guard.external.push(`${url.origin}${url.pathname}`);
+      await route.abort();
+      return;
+    }
+    const path = url.pathname;
+    const method = request.method();
+    const json = (value: unknown) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
+    if (path.startsWith("/api/") && !path.startsWith("/api/auth/")) {
+      if (
+        !guard.fixtures &&
+        (method === "GET" || (method === "POST" && path === "/api/inventory/refresh"))
+      ) {
+        await route.continue();
+        return;
+      }
+      if (guard.fixtures) {
+        if (["GET", "POST"].includes(method) && path.startsWith("/api/analytics/")) {
+          const query = Object.fromEntries(url.searchParams);
+          if (path === "/api/analytics/traffic")
+            return json(fixtureTrafficReport(parseTrafficQuery(query)));
+          if (path === "/api/analytics/costs")
+            return json(fixtureCostReport(parseCostQuery(query)));
+          if (path === "/api/analytics/cpu") return json(fixtureCpuReport(query.accountId));
+        }
+        if (method === "POST" && path === "/api/inventory/refresh")
+          return json({
+            jobs: [],
+            accounts: accounts.map((account) => ({
+              accountId: account.id,
+              status: "fresh",
+              jobId: null,
+              lastSyncedAt: account.lastSyncAt,
+              nextRefreshAt: null,
+            })),
+          });
+        if (method === "GET") {
+          if (path === "/api/dashboard") return json(samples);
+          if (path === "/api/accounts") return json({ accounts, syncJobs: [] });
+          if (path === "/api/instances") return json({ instances });
+          if (path === "/api/jobs") return json({ jobs: samples.jobs });
+          if (path === "/api/settings")
+            return json({
+              username: process.env.ADMIN_USERNAME,
+              mfaEnabled: false,
+              version: "test",
+              worker: { alive: true, lastSeenAt: new Date().toISOString(), runningJobs: 0 },
+            });
+          const instanceMatch = /^\/api\/instances\/([^/]+)(?:\/(metrics|security))?$/.exec(path);
+          if (instanceMatch) {
+            const instance = instances.find(
+              (item) => item.id === decodeURIComponent(instanceMatch[1]),
+            );
+            if (instance) {
+              if (instanceMatch[2] === "metrics")
+                return json(
+                  fixtureMetrics((url.searchParams.get("range") || "1h") as "1h" | "24h" | "7d"),
+                );
+              if (instanceMatch[2] === "security") return json({ groups: fixtureSecurity() });
+              return json({ instance });
+            }
+          }
+          const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(path);
+          if (jobMatch) {
+            const job = samples.jobs.find((item) => item.id === decodeURIComponent(jobMatch[1]));
+            if (job) return json({ job, events: fixtureEvents(job.id) });
+          }
+        }
+      }
+      guard.mutations.push(`Unexpected API request: ${method} ${path}`);
       await route.abort();
       return;
     }
@@ -42,16 +145,31 @@ async function guardNetwork(context: BrowserContext, origin: string) {
   });
 }
 
-async function requireDemo(context: BrowserContext, origin: string) {
+async function requireTestSession(context: BrowserContext, origin: string) {
   const response = await context.request.get(`${origin}/api/auth/me`);
   expect(response.status()).toBe(200);
-  const body = (await response.json()) as { user: SessionUser; demo: boolean };
-  if (body.demo !== true) throw new Error("This readonly smoke suite requires demo=true.");
+  const body = (await response.json()) as { user: SessionUser };
+  expect(body.user.username).toBe(process.env.ADMIN_USERNAME);
+  expect(body).not.toHaveProperty("demo");
+}
+
+async function requireEmptyServer(context: BrowserContext, origin: string) {
+  // APIRequestContext bypasses browser route fixtures, checking the actual database.
+  for (const [path, field] of [
+    ["accounts", "accounts"],
+    ["instances", "instances"],
+    ["jobs", "jobs"],
+  ]) {
+    const response = await context.request.get(`${origin}/api/${path}`);
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body[field]).toEqual([]);
+    expect(body).not.toHaveProperty("demo");
+  }
 }
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
-  // beforeEach has already verified demo=true. Screenshots remain opt-in and
-  // contain only demonstration resources, never login values or session tokens.
+  // This owned server is empty; populated browser screens contain only fixtures.
   if (process.env.E2E_SCREENSHOTS === "1") {
     await page.screenshot({
       path: testInfo.outputPath(`${name}.png`),
@@ -63,7 +181,7 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
 
 async function instancePage(page: Page) {
   const instance =
-    demo.instances.find((item) => item.displayName === "SG-Oracle-02") || demo.instances[0];
+    samples.instances.find((item) => item.displayName === "SG-Oracle-02") || samples.instances[0];
   expect(instance).toBeTruthy();
   await page.goto(`/instances/${encodeURIComponent(instance.id)}`);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(instance.displayName);
@@ -71,10 +189,18 @@ async function instancePage(page: Page) {
 }
 
 test.beforeAll(async ({ browser, baseURL }) => {
+  const run = process.env.E2E_ISOLATED_RUN || "";
+  if (
+    !/^oci-dash-e2e-[a-f0-9-]{36}$/.test(run) ||
+    process.env.ADMIN_USERNAME !== run.slice("oci-dash-".length)
+  )
+    throw new Error(
+      "Run this suite through npm run test:e2e:isolated with its fresh test administrator.",
+    );
   const password = process.env.ADMIN_PASSWORD;
   if (!password)
     throw new Error(
-      "Inject ADMIN_PASSWORD for the local demo administrator before running E2E tests.",
+      "Inject ADMIN_PASSWORD for the isolated test administrator before running E2E tests.",
     );
   const origin = localOrigin(baseURL);
   const context = await browser.newContext({
@@ -96,12 +222,22 @@ test.beforeAll(async ({ browser, baseURL }) => {
     }
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.waitForURL("**/overview");
-    await requireDemo(context, origin);
+    await requireTestSession(context, origin);
+    await requireEmptyServer(context, origin);
     const response = await context.request.get(`${origin}/api/dashboard`);
     expect(response.status()).toBe(200);
-    demo = (await response.json()) as DashboardData;
-    expect(demo.demo).toBe(true);
-    expect(demo.instances.length).toBeGreaterThan(0);
+    const empty = (await response.json()) as DashboardData;
+    expect(empty.instances).toEqual([]);
+    expect(empty.accounts).toEqual([]);
+    expect(empty.totals).toEqual({
+      accounts: 0,
+      instances: 0,
+      running: 0,
+      stopped: 0,
+      storageGb: 0,
+      regions: 0,
+    });
+    expect(empty).not.toHaveProperty("demo");
     cookies = await context.cookies();
     expect(guards.get(context)?.mutations).toEqual([]);
     expect(guards.get(context)?.external).toEqual([]);
@@ -135,17 +271,32 @@ test.beforeEach(async ({ context, baseURL }) => {
   const origin = localOrigin(baseURL);
   await guardNetwork(context, origin);
   await context.addCookies(cookies);
-  await requireDemo(context, origin);
+  await requireTestSession(context, origin);
 });
 
 test.afterEach(async ({ context }) => {
   const guard = guards.get(context);
   expect(
     guard?.mutations,
-    "The UI must never submit cloud/configuration writes in demo mode",
+    "All cloud and configuration calls must be intercepted by test fixtures",
   ).toEqual([]);
   expect(guard?.external, "No external service should be contacted").toEqual([]);
   expect(guard?.errors, "The page should not raise uncaught JavaScript errors").toEqual([]);
+});
+
+test("全新数据库显示添加账号引导，不填充示例资源", async ({ page, context, baseURL }) => {
+  guards.get(context)!.fixtures = false;
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { name: "添加账号后查看用量" })).toBeVisible();
+  await expect(page.locator(".overview-panel")).toHaveCount(0);
+  await page.goto("/settings/accounts");
+  await expect(page.getByRole("heading", { name: "添加你的第一个 OCI 账号" })).toBeVisible();
+  await expect(page.locator(".account-card")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "添加账号", exact: true }).first()).toBeEnabled();
+  await page.goto("/instances");
+  await expect(page.getByRole("heading", { name: "还没有实例资源" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建实例", exact: true })).toBeDisabled();
+  await requireEmptyServer(context, localOrigin(baseURL));
 });
 
 test("数据总览展示用量摘要与四个统计面板", async ({ page }, testInfo) => {
@@ -165,7 +316,7 @@ test("数据总览展示用量摘要与四个统计面板", async ({ page }, tes
     await expect(page.getByRole("list", { name: "实例流量排行" })).toBeVisible();
     await expect(page.getByRole("grid", { name: "最近 24 小时 CPU 热力图" })).toBeVisible();
     await expect(page.getByRole("img", { name: /^每日服务费用，币种 / })).toBeVisible();
-    await expect(page.getByText("演示环境 · 只读", { exact: true })).toBeVisible();
+    await expect(page.getByText("演示环境 · 只读", { exact: true })).toHaveCount(0);
   });
   await test.step("总览时间范围可以切换", async () => {
     const range = page.locator(".data-overview .page-heading p");
@@ -191,20 +342,20 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
   await test.step("停止状态计数和结果一致", async () => {
     await page.getByLabel("筛选状态", { exact: true }).selectOption("STOPPED");
     await expect(rows).toHaveCount(
-      demo.instances.filter((item) => item.state === "STOPPED").length,
+      samples.instances.filter((item) => item.state === "STOPPED").length,
     );
     await page.getByLabel("筛选状态", { exact: true }).selectOption("");
   });
   await test.step("账号筛选限定资源范围", async () => {
-    const account = demo.instances[0].accountId;
+    const account = samples.instances[0].accountId;
     await page.getByLabel("筛选账号").selectOption(account);
     await expect(rows).toHaveCount(
-      demo.instances.filter((item) => item.accountId === account).length,
+      samples.instances.filter((item) => item.accountId === account).length,
     );
     await page.getByLabel("筛选账号").selectOption("");
   });
-  await test.step("演示环境禁止创建实例", async () => {
-    await expect(page.getByRole("button", { name: "创建实例", exact: true })).toBeDisabled();
+  await test.step("已有账号时可进入创建实例", async () => {
+    await expect(page.getByRole("button", { name: "创建实例", exact: true })).toBeEnabled();
   });
   await capture(page, testInfo, "instances-desktop");
   await test.step("卡片视图展示同一批实例且没有多选控件", async () => {
@@ -216,7 +367,7 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
       "true",
     );
     const cards = page.locator("article.instance-card");
-    await expect(cards).toHaveCount(Math.min(10, demo.instances.length));
+    await expect(cards).toHaveCount(Math.min(10, samples.instances.length));
     await expect(cards.first().locator(".name-link")).toHaveCount(1);
     await expect(page.locator(".resource-table")).toHaveCount(0);
     expect(
@@ -225,7 +376,7 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
         .evaluate((element) => getComputedStyle(element).display),
     ).toBe("grid");
     const flags = cards.locator('img[src^="/flags/"]');
-    await expect(flags).toHaveCount(Math.min(10, demo.instances.length));
+    await expect(flags).toHaveCount(Math.min(10, samples.instances.length));
     await expect
       .poll(() =>
         flags.evaluateAll((images) =>
@@ -249,7 +400,7 @@ test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
       if (label === "安全规则")
         await expect(page.getByRole("button", { name: "刷新规则", exact: true })).toBeVisible();
       if (label === "存储")
-        await expect(page.getByRole("button", { name: "调整容量与性能" }).first()).toBeDisabled();
+        await expect(page.getByRole("button", { name: "调整容量与性能" }).first()).toBeEnabled();
       expect(
         (await page.getByRole("alert").allTextContents()).filter((value) => value.trim()),
       ).toEqual([]);
@@ -281,21 +432,22 @@ test("公网地址保护", async ({ page }, testInfo) => {
       name: "更换 IP",
       exact: true,
     });
-    expect(await rotations.count()).toBeGreaterThan(0);
-    for (const button of await rotations.all()) await expect(button).toBeDisabled();
-    await expect(page.getByRole("button", { name: "分配 IPv6", exact: true })).toBeDisabled();
+    await expect(rotations).toHaveCount(2);
+    await expect(rotations.nth(0)).toBeEnabled();
+    await expect(rotations.nth(1)).toBeDisabled();
+    await expect(page.getByRole("button", { name: "分配 IPv6", exact: true })).toBeEnabled();
   });
   await capture(page, testInfo, "instance-network");
 });
 
-test("账号列表完成加载且凭据操作只读", async ({ page }, testInfo) => {
+test("账号列表完成加载且凭据操作可用", async ({ page }, testInfo) => {
   await page.goto("/settings/accounts");
-  await expect(page.locator(".account-card")).toHaveCount(demo.accounts.length);
-  await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
+  await expect(page.locator(".account-card")).toHaveCount(samples.accounts.length);
+  await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeEnabled();
   for (const name of ["刷新资源", "编辑", "移除"]) {
-    await test.step(`${name}按钮在演示模式禁用`, async () => {
+    await test.step(`${name}按钮可用`, async () => {
       for (const button of await page.getByRole("button", { name, exact: true }).all())
-        await expect(button).toBeDisabled();
+        await expect(button).toBeEnabled();
     });
   }
   await capture(page, testInfo, "accounts");
@@ -310,7 +462,7 @@ test("任务详情展示状态与事件历史", async ({ page }, testInfo) => {
   await capture(page, testInfo, "task-detail");
 });
 
-test("主题切换持久化且安全设置只读", async ({ page }, testInfo) => {
+test("主题切换持久化且安全设置可用", async ({ page }, testInfo) => {
   await page.goto("/settings/general");
   await test.step("启用深色主题", async () => {
     await page.getByRole("button", { name: "深色", exact: true }).click();
@@ -329,7 +481,7 @@ test("主题切换持久化且安全设置只读", async ({ page }, testInfo) =>
     .click();
   await expect(page).toHaveURL(/\/settings\/security$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("设置");
-  await expect(page.getByRole("button", { name: "修改密码", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "修改密码", exact: true })).toBeEnabled();
   await capture(page, testInfo, "settings-security");
 });
 
@@ -374,7 +526,7 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
   await test.step("卡片在小屏使用网格布局且不横向溢出", async () => {
     await page.getByRole("button", { name: "卡片视图", exact: true }).click();
     await expect(page.locator("article.instance-card")).toHaveCount(
-      Math.min(10, demo.instances.length),
+      Math.min(10, samples.instances.length),
     );
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     const dimensions = await page.evaluate(() => ({

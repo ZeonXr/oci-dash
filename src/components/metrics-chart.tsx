@@ -137,11 +137,7 @@ export function MetricsChart({
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <p className="chart-note">
-        {data.source === "demo"
-          ? "演示数据 · 不代表实际资源使用情况"
-          : data.note || "数据来源：OCI 原生监控"}
-      </p>
+      <p className="chart-note">{data.note || "数据来源：OCI 原生监控"}</p>
     </div>
   );
 }

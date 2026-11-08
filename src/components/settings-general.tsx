@@ -7,7 +7,7 @@ import { formatDate } from "@/components/format";
 import type { SettingsResult } from "@/lib/settings-contracts";
 
 export function SettingsGeneral() {
-  const { demo, theme, setTheme } = useApp();
+  const { theme, setTheme } = useApp();
   const resource = useResource<SettingsResult>("/api/settings", 30000);
   if (resource.loading) return <LoadingState />;
   const settings = resource.data;
@@ -51,12 +51,6 @@ export function SettingsGeneral() {
           <dl className="details-list">
             <dt>应用版本</dt>
             <dd>{settings.version}</dd>
-            <dt>当前模式</dt>
-            <dd>
-              <Badge tone={demo ? "info" : "success"}>
-                {demo ? "演示模式 · 只读" : "正常模式"}
-              </Badge>
-            </dd>
             <dt>任务执行器</dt>
             <dd>
               <Badge tone={settings.worker.alive ? "success" : "warning"}>
@@ -68,7 +62,7 @@ export function SettingsGeneral() {
             <dt>执行中任务</dt>
             <dd>{settings.worker.runningJobs}</dd>
           </dl>
-          {!settings.worker.alive && !demo && (
+          {!settings.worker.alive && (
             <div style={{ marginTop: 18 }}>
               <Alert>后台执行器尚未连接，已排队的任务会等待执行器恢复。</Alert>
             </div>

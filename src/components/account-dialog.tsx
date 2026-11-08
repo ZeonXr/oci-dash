@@ -26,7 +26,7 @@ export function AccountDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const action = useAction();
   const [replaceCredentials, setReplaceCredentials] = useState(!account);
   const [recoverConsoleCleanup, setRecoverConsoleCleanup] = useState(false);
@@ -44,7 +44,6 @@ export function AccountDialog({
 
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo) return;
     const response = await action.run(async () => {
       const selectedRegions = regions.split(/[\s,，;；]+/).filter(Boolean);
       let body: Record<string, unknown>;
@@ -147,13 +146,7 @@ export function AccountDialog({
           <Button onClick={onClose} disabled={action.pending}>
             取消
           </Button>
-          <Button
-            form="account-form"
-            type="submit"
-            variant="primary"
-            loading={action.pending}
-            disabled={demo}
-          >
+          <Button form="account-form" type="submit" variant="primary" loading={action.pending}>
             {account ? "保存更改" : "添加账号"}
           </Button>
         </>

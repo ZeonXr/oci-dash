@@ -485,7 +485,7 @@ export function createJobStore({
     accountIds: string[],
     mode: "auto" | "manual",
     requestedBy: string,
-  ): Omit<InventoryRefreshResult, "demo"> {
+  ): InventoryRefreshResult {
     if (!["auto", "manual"].includes(mode) || !requestedBy || requestedBy.length > 200)
       throw new JobError(
         "A valid refresh mode and requesting user are required.",

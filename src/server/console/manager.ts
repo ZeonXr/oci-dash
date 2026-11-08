@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import type { ConsoleSessionSummary, ConsoleSocketTicket } from "../../lib/console-contracts";
 import { getCredentials } from "../accounts";
-import { getDatabase, isDemo } from "../db";
+import { getDatabase } from "../db";
 import { AppError, safeMessage } from "../errors";
 import { getInstance } from "../inventory";
 import { CloudError } from "../oci/types";
@@ -222,8 +222,6 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
     runtime.ticket = undefined;
     runtime.controller.abort();
     runtime.stream?.destroy();
-    // Demo startup can point at an existing database. It must not delete its cloud resources.
-    if (isDemo()) return Promise.resolve();
     if (runtime.closing) return runtime.closing;
     const row = store.get(runtime.id);
     if (!row || row.slot !== 1) return Promise.resolve();
@@ -242,7 +240,6 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
           const operation = (async () => {
             if (runtime.preparePending) await runtime.prepared;
             if (runtime.preparePending) throw new Error("Console preparation still running");
-            if (isDemo()) throw new Error("Cloud cleanup is disabled in demo mode");
             if (runtime.tunnel) await runtime.tunnel.close();
             runtime.localClosed = true;
             const latest = store.get(runtime.id)!;
@@ -374,7 +371,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
   }
 
   async function sweep() {
-    if (sweeping || stopped || isDemo()) return;
+    if (sweeping || stopped) return;
     sweeping = true;
     try {
       const row = store.active();
@@ -399,10 +396,6 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
       if (initializing) return initializing;
       initializing = (async () => {
         if (stopped) throw new AppError("控制台服务已停止", 503, "CONSOLE_UNAVAILABLE");
-        if (isDemo()) {
-          initialized = true;
-          return;
-        }
         const previous = store.active();
         if (previous)
           await cleanup(runtimeFor(previous), "closed", "应用重启后，旧控制台会话已结束。");
@@ -423,7 +416,6 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
     async create(instanceId, actor) {
       ensureInitialized();
       validateActor(actor);
-      if (isDemo()) throw new AppError("演示模式不能打开真实控制台", 403, "DEMO_MODE");
       // Target resolution and reservation are synchronous; two requests cannot await into this slot.
       let target = resolveTarget(instanceId);
       if (target.instanceId !== instanceId)
@@ -556,7 +548,6 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
       stopped = true;
       if (timer) clearInterval(timer);
       if (initializing) await initializing.catch(() => undefined);
-      if (isDemo()) return;
       const row = store.active();
       if (row) await cleanup(runtimeFor(row));
     },

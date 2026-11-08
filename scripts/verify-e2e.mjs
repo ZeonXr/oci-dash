@@ -10,7 +10,7 @@ const base = resolve(repository, ".test-tmp");
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
   console.log(
-    "Usage: npm run test:e2e:isolated -- [--no-build] [Playwright test arguments]\nBuilds and tests in a temporary Compose project with a fresh demo database.\n--no-build uses an existing oci-dash:local image. All test containers, data and reports are removed afterward.",
+    "Usage: npm run test:e2e:isolated -- [--no-build] [Playwright test arguments]\nBuilds and tests in a temporary Compose project with a fresh empty database.\n--no-build uses an existing oci-dash:local image. All test containers, data and reports are removed afterward.",
   );
   process.exit(0);
 }
@@ -20,7 +20,7 @@ const project = `oci-dash-e2e-${randomUUID()}`;
 const image = noBuild ? "oci-dash:local" : `${project}:local`;
 mkdirSync(base, { recursive: true });
 const directory = mkdtempSync(join(base, "e2e-"));
-const envFile = join(directory, "demo.env");
+const envFile = join(directory, "test.env");
 const override = join(directory, "compose.json");
 
 async function unusedPort() {
@@ -46,10 +46,9 @@ let failure;
 try {
   const port = await unusedPort();
   const values = {
-    ADMIN_USERNAME: "admin",
+    ADMIN_USERNAME: project.slice("oci-dash-".length),
     ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
     MASTER_KEY: randomBytes(32).toString("base64"),
-    DEMO_MODE: "true",
     APP_ORIGIN: `http://127.0.0.1:${port}`,
     DATABASE_PATH: "/data/oci-dash.db",
     PORT: String(port),
@@ -62,13 +61,19 @@ try {
       .join("\n") + "\n",
     { mode: 0o600 },
   );
-  writeFileSync(override, JSON.stringify({ services: { app: { image, restart: "no" } } }));
+  writeFileSync(
+    override,
+    JSON.stringify({
+      services: { app: { image, restart: "no" } },
+    }),
+  );
   const env = {
     ...process.env,
     ...values,
     COMPOSE_PROJECT_NAME: project,
     COMPOSE_ENV_FILES: envFile,
     E2E_BASE_URL: values.APP_ORIGIN,
+    E2E_ISOLATED_RUN: project,
     E2E_OUTPUT_DIR: join(directory, "results"),
   };
   // Explicit files, environment and project avoid loading a checkout's personal .env
@@ -102,7 +107,7 @@ try {
     volumes[0].type !== "volume" ||
     volumes[0].source !== "app-data" ||
     volumes[0].target !== "/data" ||
-    service.environment?.DEMO_MODE !== "true" ||
+    Object.keys(service.environment ?? {}).some((key) => !(key in values)) ||
     service.environment?.MASTER_KEY !== values.MASTER_KEY ||
     service.environment?.ADMIN_PASSWORD !== values.ADMIN_PASSWORD ||
     service.environment?.APP_ORIGIN !== values.APP_ORIGIN ||
@@ -127,6 +132,16 @@ try {
     ],
     { inherit: true, timeoutMs: 12 * 60_000, signal: controller.signal },
   );
+  try {
+    const health = await fetch(`${values.APP_ORIGIN}/api/health`, {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+    });
+    if (!health.ok) throw new Error(`HTTP ${health.status}`);
+  } catch (error) {
+    throw new Error(
+      `The isolated app is not reachable from the browser host: ${error.cause?.code ?? error.message}`,
+    );
+  }
   await runProcess(
     process.execPath,
     [join(repository, "node_modules/@playwright/test/cli.js"), "test", ...testArgs],

@@ -357,7 +357,7 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       // this local bound only caps execution objects owned by this process.
       const capacity = options.once ? 1 : MAX_CONCURRENT_ACCOUNT_SYNCS + 1;
       while (!shutdown.signal.aborted && active.size < capacity) {
-        const job = process.env.DEMO_MODE === "true" ? null : store.claimNext(workerId, leaseMs);
+        const job = store.claimNext(workerId, leaseMs);
         if (!job) break;
         launch(job);
       }

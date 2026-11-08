@@ -151,14 +151,12 @@ async function fixture() {
       throw new AppError("test authentication required", 401, "UNAUTHORIZED");
     return actor;
   });
-  const demo = vi.fn(() => false);
   const recordEvent = vi.fn();
   const gateway = createConsoleGateway({
     manager,
     upstreamPort: (upstream.address() as AddressInfo).port,
     origin: ORIGIN,
     authenticate,
-    demo,
     recordEvent,
   });
   gateways.push(gateway);
@@ -198,7 +196,6 @@ async function fixture() {
     requests,
     manager,
     authenticate,
-    demo,
     recordEvent,
     stream,
     received,
@@ -229,7 +226,6 @@ function rejected(websocket: WebSocket): Promise<HttpResult> {
 
 beforeEach(() => {
   vi.stubEnv("APP_ORIGIN", ORIGIN);
-  vi.stubEnv("DEMO_MODE", "false");
 });
 
 afterEach(async () => {
@@ -389,7 +385,6 @@ describe("console gateway HTTP API", () => {
     const current = await f.api("/api/console/session");
     expect(JSON.parse(current.body.toString())).toMatchObject({
       session: { id: SESSION_ID },
-      demo: false,
     });
     const status = await f.api(`/api/console/sessions/${SESSION_ID}`);
     expect(status.status).toBe(200);
@@ -450,30 +445,6 @@ describe("console gateway HTTP API", () => {
     });
     expect(result.status).toBe(415);
     expect(f.manager.create).not.toHaveBeenCalled();
-  });
-
-  it("keeps demo reads empty and refuses all console writes", async () => {
-    const f = await fixture();
-    f.demo.mockReturnValue(true);
-    const result = await f.api("/api/console/session");
-    expect(JSON.parse(result.body.toString())).toEqual({ session: null, demo: true });
-    expect(f.manager.current).not.toHaveBeenCalled();
-    for (const [method, path] of [
-      ["POST", "/api/console/sessions"],
-      ["POST", `/api/console/sessions/${SESSION_ID}/ticket`],
-      ["POST", `/api/console/sessions/${SESSION_ID}/touch`],
-      ["DELETE", `/api/console/sessions/${SESSION_ID}`],
-    ]) {
-      const response = await f.api(path!, {
-        method,
-        body: JSON.stringify({ instanceId: "test-instance" }),
-      });
-      expect(response.status).toBe(403);
-    }
-    expect(f.manager.create).not.toHaveBeenCalled();
-    expect(f.manager.issueTicket).not.toHaveBeenCalled();
-    expect(f.manager.close).not.toHaveBeenCalled();
-    expect(f.manager.touch).not.toHaveBeenCalled();
   });
 
   it("preserves manager authorization errors and keeps unknown console routes out of the upstream", async () => {
@@ -567,7 +538,7 @@ describe("console gateway websocket admission", () => {
     },
   );
 
-  it("rejects tickets in query strings, unknown upgrade paths and demo upgrades", async () => {
+  it("rejects tickets in query strings and unknown upgrade paths", async () => {
     const f = await fixture();
     for (const path of [
       `${SOCKET_PATH}?ticket=${TICKET}`,
@@ -578,9 +549,6 @@ describe("console gateway websocket admission", () => {
       expect(result.status).toBe(404);
       expect(result.body.toString()).not.toContain(TICKET);
     }
-    f.demo.mockReturnValue(true);
-    const demo = await rejected(f.client());
-    expect(demo.status).toBe(403);
     expect(f.manager.connect).not.toHaveBeenCalled();
     expect(f.requests).toHaveLength(0);
     expect(f.recordEvent).not.toHaveBeenCalled();

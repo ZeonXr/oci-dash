@@ -22,7 +22,7 @@ interface MfaSetup {
 }
 export function SettingsSecurity() {
   const router = useRouter();
-  const { demo, notify, reloadSession } = useApp();
+  const { notify, reloadSession } = useApp();
   const resource = useResource<SettingsResult>("/api/settings", 30000);
   const action = useAction();
   const [modal, setModal] = useState<"password" | "mfa-setup" | "mfa-disable" | "recovery" | null>(
@@ -52,7 +52,7 @@ export function SettingsSecurity() {
   };
   const changePassword = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo || newPassword !== repeat) return;
+    if (newPassword !== repeat) return;
     const result = await action.run(() =>
       send<{ ok: boolean; relogin: boolean }>("/api/settings/password", {
         currentPassword: password,
@@ -68,7 +68,6 @@ export function SettingsSecurity() {
   };
   const prepareMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo) return;
     const result = await action.run(() => send<MfaSetup>("/api/settings/mfa/setup", { password }));
     if (result) {
       setSetup(result);
@@ -77,7 +76,6 @@ export function SettingsSecurity() {
   };
   const confirmMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo) return;
     const result = await action.run(() =>
       send<{ recoveryCodes: string[] }>("/api/settings/mfa/confirm", { code }),
     );
@@ -93,7 +91,6 @@ export function SettingsSecurity() {
   };
   const disableMfa = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo) return;
     const result = await action.run(() =>
       send<{ ok: boolean }>("/api/settings/mfa/disable", { password, code }),
     );
@@ -136,9 +133,7 @@ export function SettingsSecurity() {
                 <strong>登录密码</strong>
                 <p className="muted small">修改后需要重新登录。</p>
               </div>
-              <Button disabled={demo} onClick={() => open("password")}>
-                修改密码
-              </Button>
+              <Button onClick={() => open("password")}>修改密码</Button>
             </div>
             <div className="inline-resource">
               <span className="resource-icon">
@@ -152,10 +147,7 @@ export function SettingsSecurity() {
                     : "通过验证器应用增加一道登录验证。"}
                 </p>
               </div>
-              <Button
-                disabled={demo}
-                onClick={() => open(settings.mfaEnabled ? "mfa-disable" : "mfa-setup")}
-              >
+              <Button onClick={() => open(settings.mfaEnabled ? "mfa-disable" : "mfa-setup")}>
                 {settings.mfaEnabled ? "关闭" : "设置"}
               </Button>
             </div>
@@ -179,7 +171,7 @@ export function SettingsSecurity() {
                 type="submit"
                 variant="primary"
                 loading={action.pending}
-                disabled={demo || newPassword !== repeat}
+                disabled={newPassword !== repeat}
               >
                 更新密码
               </Button>
@@ -243,7 +235,6 @@ export function SettingsSecurity() {
                 type="submit"
                 variant="primary"
                 loading={action.pending}
-                disabled={demo}
               >
                 {setup ? "开启双重验证" : "继续"}
               </Button>
@@ -342,7 +333,6 @@ export function SettingsSecurity() {
                 type="submit"
                 variant="danger"
                 loading={action.pending}
-                disabled={demo}
               >
                 关闭双重验证
               </Button>

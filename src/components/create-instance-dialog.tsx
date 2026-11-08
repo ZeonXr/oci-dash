@@ -7,7 +7,7 @@ import { send, useAction, useResource } from "./api";
 import { regionName, taskHref } from "./format";
 import { Alert, Button, ErrorState, Field, LoadingState, Modal, Select } from "./ui";
 export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
-  const { accounts, demo, notify } = useApp();
+  const { accounts, notify } = useApp();
   const action = useAction();
   const [accountId, setAccountId] = useState(accounts[0]?.id || "");
   const account = accounts.find((a) => a.id === accountId);
@@ -63,7 +63,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
   };
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo || !acknowledged || !options.data) return;
+    if (!acknowledged || !options.data) return;
     const response = await action.run(() =>
       send<{ job: JobSummary }>("/api/operations", {
         kind: "instance-create",
@@ -102,7 +102,6 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
             variant="primary"
             loading={action.pending}
             disabled={
-              demo ||
               !acknowledged ||
               !options.data ||
               options.refreshing ||

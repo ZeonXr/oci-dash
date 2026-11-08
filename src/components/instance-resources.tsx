@@ -30,7 +30,6 @@ import { TablePanel } from "./table";
 import { canRotatePublicIp, publicIpRotation } from "./public-ip-rotation";
 
 export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
-  const { demo } = useApp();
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   return (
     <div className="stack">
@@ -110,13 +109,11 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                         <Button
                           variant="ghost"
                           className="button-sm"
-                          disabled={demo || !canRotatePublicIp(binding)}
+                          disabled={!canRotatePublicIp(binding)}
                           title={
                             binding.protected || binding.lifetime === "RESERVED"
                               ? "保留或受保护地址不可轮换"
-                              : demo
-                                ? "演示模式仅供查看"
-                                : undefined
+                              : undefined
                           }
                           onClick={() => setOperation(publicIpRotation(instance, vnic, binding))}
                         >
@@ -145,7 +142,6 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
               </div>
               <Button
                 className="button-sm"
-                disabled={demo}
                 onClick={() =>
                   setOperation({
                     title: "分配 IPv6",
@@ -185,7 +181,7 @@ function VolumeDialog({
   volume: BootVolumeSummary;
   onClose: () => void;
 }) {
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const action = useAction();
   const [size, setSize] = useState(volume.sizeGb);
   const [vpu, setVpu] = useState(volume.vpusPerGb);
@@ -193,7 +189,7 @@ function VolumeDialog({
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo || !ack) return;
+    if (!ack) return;
     const result = await action.run(() =>
       send<{ job: JobSummary }>("/api/operations", {
         kind: "boot-volume-update",
@@ -225,7 +221,7 @@ function VolumeDialog({
             form="volume-form"
             type="submit"
             variant="primary"
-            disabled={demo || !ack || (size === volume.sizeGb && vpu === volume.vpusPerGb)}
+            disabled={!ack || (size === volume.sizeGb && vpu === volume.vpusPerGb)}
             loading={action.pending}
           >
             保存配置
@@ -272,7 +268,6 @@ function VolumeDialog({
   );
 }
 export function StoragePanel({ instance }: { instance: InstanceSummary }) {
-  const { demo } = useApp();
   const [editing, setEditing] = useState<BootVolumeSummary | null>(null);
   return (
     <>
@@ -306,9 +301,7 @@ export function StoragePanel({ instance }: { instance: InstanceSummary }) {
                 <dt>挂载状态</dt>
                 <dd>{volume.attachmentId ? "已附加到当前实例" : "未提供挂载信息"}</dd>
               </dl>
-              <Button disabled={demo} onClick={() => setEditing(volume)}>
-                调整容量与性能
-              </Button>
+              <Button onClick={() => setEditing(volume)}>调整容量与性能</Button>
             </Card>
           ))
         ) : (
@@ -338,7 +331,7 @@ function RuleDialog({
   onClose: () => void;
   onSubmitted: () => void;
 }) {
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const action = useAction();
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [form, setForm] = useState({
@@ -355,7 +348,6 @@ function RuleDialog({
   });
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (demo) return;
     const rule = {
       id: "",
       direction: form.direction,
@@ -406,7 +398,6 @@ function RuleDialog({
             type="submit"
             form="security-rule-form"
             variant="primary"
-            disabled={demo}
             loading={action.pending}
           >
             添加规则
@@ -543,8 +534,7 @@ const protocolLabels: Record<string, string> = {
   all: "所有",
 };
 export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
-  const { demo } = useApp();
-  const resource = useResource<{ groups: SecurityGroup[]; demo: boolean }>(
+  const resource = useResource<{ groups: SecurityGroup[] }>(
     `/api/instances/${encodeURIComponent(instance.id)}/security`,
   );
   const [adding, setAdding] = useState<SecurityGroup | null>(null);
@@ -569,7 +559,7 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
               title={group.name}
               description={group.kind === "nsg" ? "网络安全组 (NSG)" : "子网安全列表"}
               action={
-                <Button className="button-sm" disabled={demo} onClick={() => setAdding(group)}>
+                <Button className="button-sm" onClick={() => setAdding(group)}>
                   <Plus size={14} />
                   添加规则
                 </Button>
@@ -621,7 +611,6 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
                           <Button
                             variant="ghost"
                             className="button-sm danger-text"
-                            disabled={demo}
                             onClick={() => setDeleting({ group, rule })}
                           >
                             删除

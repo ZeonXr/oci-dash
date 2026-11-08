@@ -9,7 +9,7 @@
 - 用持久任务执行云操作，支持进度、取消、有限重试和检查点恢复。
 - 查看流量、按币种区分的费用、CPU 热力图和用量总览。缺失数据保留为空，不当作零。
 - 通过浏览器连接 OCI 原生 VNC 控制台，无需上传实例 SSH 私钥或安装来宾 VNC 服务。
-- 管理员登录、TOTP MFA、一次性恢复码，以及明确标注的只读演示模式。
+- 管理员登录、TOTP MFA 和一次性恢复码。
 
 账号管理位于“设置 → OCI 账号”；登录安全和外观分别位于另外两个设置分区。当前面向单管理员使用，不提供不同用户之间的云账号权限隔离。
 
@@ -31,7 +31,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 脚本只在 `.env` 不存在时生成随机管理员密码和主密钥，不会打印秘密或覆盖已有配置。不要先复制一个必填项为空的 `.env`；已有文件需要自行补全。
 
-检查 `.env` 中的 `APP_ORIGIN`、`DEMO_MODE` 和 `PORT`，然后启动：
+检查 `.env` 中的 `APP_ORIGIN` 和 `PORT`，然后启动：
 
 ```sh
 docker compose up -d --build app
@@ -39,15 +39,13 @@ docker compose ps app
 docker compose exec app node dist/health.mjs
 ```
 
-默认访问地址为 `http://localhost:3000`，用户名为 `admin`，初始密码保存在 `.env` 的 `ADMIN_PASSWORD` 中。默认启用演示模式。宿主机端口只绑定 `127.0.0.1`；远程访问应通过 HTTPS 反向代理，`APP_ORIGIN` 必须与浏览器使用的源地址一致。VNC 还需要代理支持 WebSocket Upgrade。
+默认访问地址为 `http://localhost:3000`，用户名为 `admin`，初始密码保存在 `.env` 的 `ADMIN_PASSWORD` 中。新数据库启动后是普通空面板，添加账号后才会同步云资源。宿主机端口只绑定 `127.0.0.1`；远程访问应通过 HTTPS 反向代理，`APP_ORIGIN` 必须与浏览器使用的源地址一致。VNC 还需要代理支持 WebSocket Upgrade。
 
 Compose 服务为 `app`，数据库保存在 `app-data` 卷内的 `/data/oci-dash.db`。不要用 `docker compose down -v` 进行日常重启。
 
-## 连接真实 OCI 账号
+## 连接 OCI 账号
 
-1. 保留原 `MASTER_KEY`，将 `.env` 中的 `DEMO_MODE` 改为 `false`。
-2. 执行 `docker compose up -d --force-recreate app`，让容器读取新配置。
-3. 在“设置 → OCI 账号”粘贴 OCI 配置文本并选择对应的 API 签名私钥。应用会核对指纹，保存后在后台连接和同步。
+在“设置 → OCI 账号”粘贴 OCI 配置文本并选择对应的 API 签名私钥。应用会核对指纹，保存后在后台连接和同步。连接账号无需修改环境变量或重新创建容器。
 
 需要至少 2048 位、未加密 PEM 格式的 RSA API 私钥；这不是实例的 SSH 私钥。配置中的 `key_file` 路径不会被读取，应用使用你选择的文件。同一租户保存一份账号配置，多个区域在该配置内管理。
 
@@ -59,7 +57,9 @@ OCI API 私钥和 MFA 秘密使用 AES-256-GCM 加密，管理员密码使用 sc
 
 必须同时保留数据库备份和对应的原 `MASTER_KEY`，并分别受控存放。更换主密钥不会自动重加密数据；修改 `.env` 中的初始化密码也不会重置已有管理员。备份、恢复和升级请按[运维说明](docs/OPERATIONS.md)操作。
 
-演示开关不会删除真实任务或撤销 OCI 已接受的操作。使用独立环境测试，尤其不要把生产 `.env`、数据库、密钥、日志或备份放进提交和测试产物。
+旧 `DEMO_MODE` 配置已不再读取。曾用 `DEMO_MODE=true` 暂停任务或控制台恢复的部署，升级后会按正常规则继续处理已有记录；启动新版本前请按[升级检查流程](docs/OPERATIONS.md#从旧-demo_mode-配置升级)停止并核对。停止应用不会撤销 OCI 已接受的操作。
+
+使用独立环境测试，不要把生产 `.env`、数据库、密钥、日志或备份放进提交和测试产物。
 
 ## 限制与验证范围
 

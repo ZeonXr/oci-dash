@@ -53,13 +53,13 @@ import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
 
 function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClose: () => void }) {
-  const { demo, notify } = useApp();
+  const { notify } = useApp();
   const [name, setName] = useState(instance.displayName);
   const action = useAction();
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const submit = async (e: SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (demo || !name.trim()) return;
+    if (!name.trim()) return;
     const response = await action.run(() =>
       send<{ job: JobSummary }>("/api/operations", {
         kind: "instance-rename",
@@ -89,7 +89,7 @@ function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClos
             type="submit"
             form="rename-form"
             variant="primary"
-            disabled={demo || name.trim() === instance.displayName}
+            disabled={name.trim() === instance.displayName}
             loading={action.pending}
           >
             保存名称
@@ -123,11 +123,10 @@ const tabs = [
 export default function InstanceDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const { demo } = useApp();
   const [tab, setTab] = useState("overview");
   const [range, setRange] = useState("1h");
   const [mode, setMode] = useState<"cpu" | "network">("cpu");
-  const resource = useResource<{ instance: InstanceSummary; demo: boolean }>(
+  const resource = useResource<{ instance: InstanceSummary }>(
     `/api/instances/${encodeURIComponent(id)}`,
     30000,
   );
@@ -143,7 +142,7 @@ export default function InstanceDetailPage() {
       : null,
     60000,
   );
-  const jobs = useResource<{ jobs: JobSummary[]; demo: boolean }>(
+  const jobs = useResource<{ jobs: JobSummary[] }>(
     tab === "overview" || tab === "activity" ? "/api/jobs" : null,
     5000,
   );
@@ -331,7 +330,7 @@ export default function InstanceDetailPage() {
           <RefreshCw size={15} />
         </Button>
         {instance.state === "STOPPED" && (
-          <Button disabled={demo} onClick={() => lifecycle("instance-start")}>
+          <Button onClick={() => lifecycle("instance-start")}>
             <Play size={15} />
             启动
           </Button>
@@ -342,7 +341,6 @@ export default function InstanceDetailPage() {
           </summary>
           <div className="dropdown-menu">
             <button
-              disabled={demo}
               onClick={(e) => {
                 e.currentTarget.closest("details")?.removeAttribute("open");
                 setRenaming(true);
@@ -352,7 +350,7 @@ export default function InstanceDetailPage() {
             </button>
             <button
               type="button"
-              disabled={demo || instance.state !== "RUNNING"}
+              disabled={instance.state !== "RUNNING"}
               onClick={(e) => {
                 const menu = e.currentTarget.closest("details");
                 menu?.removeAttribute("open");
@@ -363,7 +361,7 @@ export default function InstanceDetailPage() {
               重启实例
             </button>
             <button
-              disabled={demo || instance.state !== "RUNNING"}
+              disabled={instance.state !== "RUNNING"}
               onClick={(e) => {
                 e.currentTarget.closest("details")?.removeAttribute("open");
                 lifecycle("instance-stop");
@@ -373,7 +371,7 @@ export default function InstanceDetailPage() {
             </button>
             <button
               className="danger-text"
-              disabled={demo || instance.state === "TERMINATED" || instance.state === "TERMINATING"}
+              disabled={instance.state === "TERMINATED" || instance.state === "TERMINATING"}
               onClick={(e) => {
                 e.currentTarget.closest("details")?.removeAttribute("open");
                 lifecycle("instance-terminate");

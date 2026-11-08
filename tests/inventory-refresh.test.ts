@@ -103,7 +103,6 @@ function fixture() {
 
 beforeEach(() => {
   closeDatabase();
-  vi.stubEnv("DEMO_MODE", "false");
   for (const mock of Object.values(cloud)) {
     mock.mockReset();
     mock.mockRejectedValue(new Error("Real OCI adapter must not run in refresh requests"));
@@ -477,7 +476,6 @@ describe("inventory refresh API boundaries", () => {
     expect(response.status).toBe(202);
     const body = await response.json();
     expect(body).toMatchObject({
-      demo: false,
       accounts: [
         { accountId: "account-a", status: "queued" },
         { accountId: "account-b", status: "queued" },
@@ -514,17 +512,25 @@ describe("inventory refresh API boundaries", () => {
     expect(getJobStore().listAccountSyncJobs()).toHaveLength(0);
   });
 
-  it("keeps GET inventory routes passive and rejects refresh writes in demo mode", async () => {
+  it("keeps GET inventory routes passive", async () => {
     const f = apiFixture();
     for (const path of ["dashboard", "accounts", "instances", "jobs"])
       expect((await f.request(path)).status).toBe(200);
     expect((await f.request("inventory/refresh")).status).toBe(404);
     expect(getJobStore().listAccountSyncJobs()).toHaveLength(0);
-    vi.stubEnv("DEMO_MODE", "true");
-    expect((await f.request("inventory/refresh", "POST", { mode: "auto" })).status).toBe(403);
-    expect((await f.request("inventory/refresh", "POST", { mode: "manual" })).status).toBe(403);
-    expect(getJobStore().listAccountSyncJobs()).toHaveLength(0);
     for (const mock of Object.values(cloud)) expect(mock).not.toHaveBeenCalled();
+  });
+
+  it("validates direct refresh requests and forwards the selected scope to the persistent queue", () => {
+    const refresh = vi.fn(() => ({ jobs: [], accounts: [] }));
+    const dependencies = { store: { refreshInventory: refresh }, accountIds: () => ["account-a"] };
+    expect(() => requestInventoryRefresh({ mode: "unexpected" }, "admin", dependencies)).toThrow();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(requestInventoryRefresh({ mode: "manual" }, "admin", dependencies)).toEqual({
+      jobs: [],
+      accounts: [],
+    });
+    expect(refresh).toHaveBeenCalledWith(["account-a"], "manual", "admin");
   });
 
   it("routes the legacy account sync through manual deduplication without repeating its audit event", async () => {
@@ -540,17 +546,5 @@ describe("inventory refresh API boundaries", () => {
         .get(),
     ).toEqual({ count: 1 });
     expect(getJobStore().listJobs()).toHaveLength(1);
-  });
-
-  it("validates demo mode even when called outside the HTTP route", () => {
-    const enqueue = vi.fn();
-    expect(() =>
-      requestInventoryRefresh({ mode: "manual" }, "admin", {
-        store: { refreshInventory: enqueue },
-        accountIds: () => ["account-a"],
-        demo: () => true,
-      }),
-    ).toThrow(expect.objectContaining({ code: "DEMO_READ_ONLY" }));
-    expect(enqueue).not.toHaveBeenCalled();
   });
 });

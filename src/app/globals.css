@@ -576,12 +576,6 @@ pre {
   margin-top: auto;
   padding-top: 24px;
 }
-.sidebar-demo {
-  margin-bottom: 12px;
-}
-.sidebar-demo .badge {
-  font-size: 10px;
-}
 .sidebar-controls {
   display: flex;
   align-items: center;

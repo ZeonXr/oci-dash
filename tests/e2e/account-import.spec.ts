@@ -57,15 +57,14 @@ const test = base.extend<{ mockApi: MockApi }>({
         if (method === "GET" && url.pathname === "/api/auth/me") {
           return json({
             user: { id: "ui-test-user", username: "tester", mfaEnabled: false },
-            demo: false,
           });
         }
         if (method === "GET" && url.pathname === "/api/accounts") {
-          return json({ accounts: state.accounts, syncJobs: state.syncJobs, demo: false });
+          return json({ accounts: state.accounts, syncJobs: state.syncJobs });
         }
         if (method === "POST" && url.pathname === "/api/inventory/refresh") {
           expect(request.postDataJSON()).toMatchObject({ mode: "auto" });
-          return json({ jobs: [], accounts: [], demo: false });
+          return json({ jobs: [], accounts: [] });
         }
         if (
           (method === "POST" && url.pathname === "/api/accounts") ||

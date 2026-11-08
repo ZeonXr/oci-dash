@@ -7,14 +7,12 @@ import type RFB from "@novnc/novnc";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { ConsoleSessionSummary, ConsoleSocketTicket } from "@/lib/console-contracts";
 import { api, errorMessage, useResource } from "./api";
-import { useApp } from "./app-provider";
 import { Badge, Button, ErrorState, LoadingState, PageHeader, Status } from "./ui";
 import { formatDate } from "./format";
 import { RegionLabel } from "./region-label";
 
 type SessionResponse = {
   session: ConsoleSessionSummary | null;
-  demo?: boolean;
 };
 type TransportState = "idle" | "connecting" | "connected" | "disconnected";
 const stateLabels = {
@@ -53,8 +51,7 @@ function closeOnLeave(id: string) {
 }
 
 export function ConsoleView({ instanceId }: { instanceId: string }) {
-  const { demo } = useApp();
-  const resource = useResource<{ instance: InstanceSummary; demo: boolean }>(
+  const resource = useResource<{ instance: InstanceSummary }>(
     `/api/instances/${encodeURIComponent(instanceId)}`,
     30000,
   );
@@ -146,7 +143,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
 
   const closeSession = useCallback(
     async (id: string) => {
-      if (demo || closingRef.current) return;
+      if (closingRef.current) return;
       closingRef.current = true;
       mutation.current += 1;
       setClosing(true);
@@ -170,12 +167,11 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
         if (alive.current) setClosing(false);
       }
     },
-    [demo, receive, showTransport, stopRfb],
+    [receive, showTransport, stopRfb],
   );
 
   const connect = async () => {
     if (
-      demo ||
       creatingRef.current ||
       closingRef.current ||
       !loaded ||
@@ -229,7 +225,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
     !session.cleanupPending,
   );
   useEffect(() => {
-    if (!ownedId || !attachable || demo) return;
+    if (!ownedId || !attachable) return;
     let cancelled = false;
     let client: RFB | null = null;
     let handshakeTimer: number | undefined;
@@ -309,7 +305,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
       window.clearTimeout(handshakeTimer);
       if (client && rfb.current === client) stopRfb();
     };
-  }, [ownedId, attachable, demo, closeSession, showTransport, stopRfb]);
+  }, [ownedId, attachable, closeSession, showTransport, stopRfb]);
 
   useEffect(() => {
     const update = () => setFullscreen(document.fullscreenElement === panel.current);
@@ -319,12 +315,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
 
   const touch = () => {
     const id = owned.current;
-    if (
-      demo ||
-      !id ||
-      currentTransport.current !== "connected" ||
-      Date.now() - lastTouch.current < 30000
-    )
+    if (!id || currentTransport.current !== "connected" || Date.now() - lastTouch.current < 30000)
       return;
     lastTouch.current = Date.now();
     void api(`${sessionUrl(id)}/touch`, { method: "POST" }).catch(() => undefined);
@@ -357,19 +348,16 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             : session
               ? stateLabels[session.state]
               : "未连接";
-  const canConnect =
-    !demo && loaded && !fetchError && !active && !creating && !closing && !terminated;
-  const placeholder = demo
-    ? "演示环境不创建控制台连接"
-    : occupied
-      ? "已有控制台会话正在使用"
-      : session?.cleanupPending
-        ? "正在回收控制台资源"
-        : creating || session?.state === "preparing"
-          ? "正在准备控制台"
-          : transport === "connecting" && active
-            ? "正在连接远程画面"
-            : "连接到实例控制台";
+  const canConnect = loaded && !fetchError && !active && !creating && !closing && !terminated;
+  const placeholder = occupied
+    ? "已有控制台会话正在使用"
+    : session?.cleanupPending
+      ? "正在回收控制台资源"
+      : creating || session?.state === "preparing"
+        ? "正在准备控制台"
+        : transport === "connecting" && active
+          ? "正在连接远程画面"
+          : "连接到实例控制台";
 
   return (
     <>
@@ -402,11 +390,8 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
         </Link>
       </PageHeader>
       <div className="console-notices">
-        {demo && <p className="console-notice">演示环境为只读模式，无法创建 VNC 会话。</p>}
-        {!demo && terminated && (
-          <p className="console-notice">实例已终止或正在终止，无法连接控制台。</p>
-        )}
-        {!demo && !terminated && instance.state !== "RUNNING" && (
+        {terminated && <p className="console-notice">实例已终止或正在终止，无法连接控制台。</p>}
+        {!terminated && instance.state !== "RUNNING" && (
           <p className="console-notice">
             实例当前未运行，控制台可能暂无画面。可在实例页启动后查看开机过程。
           </p>
@@ -477,7 +462,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             </Button>
             {active ? (
               <Button
-                disabled={demo || creating}
+                disabled={creating}
                 loading={closing}
                 onClick={() => {
                   if (session) {

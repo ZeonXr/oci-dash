@@ -43,12 +43,9 @@ type InstanceView = "table" | "cards";
 const viewPreference = "oci-dash:instances:view";
 
 function InstancesContent() {
-  const { demo, accounts, accountsLoading } = useApp();
+  const { accounts, accountsLoading } = useApp();
   const params = useSearchParams();
-  const resource = useResource<{ instances: InstanceSummary[]; demo: boolean }>(
-    "/api/instances",
-    30000,
-  );
+  const resource = useResource<{ instances: InstanceSummary[] }>("/api/instances", 30000);
   const [query, setQuery] = useState(params.get("q") || "");
   const [region, setRegion] = useState(params.get("region") || "");
   const [account, setAccount] = useAccountFilter();
@@ -161,15 +158,15 @@ function InstancesContent() {
         <Button
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
-          disabled={accountsLoading}
+          disabled={accountsLoading || !accounts.length}
         >
           <RefreshCw size={15} />
           刷新
         </Button>
         <Button
           variant="primary"
-          disabled={demo || !accounts.length}
-          title={demo ? "演示模式仅供查看" : !accounts.length ? "请先添加 OCI 账号" : undefined}
+          disabled={!accounts.length}
+          title={!accounts.length ? "请先添加 OCI 账号" : undefined}
           onClick={() => setCreating(true)}
         >
           <Plus size={16} />
@@ -310,7 +307,6 @@ function InstancesContent() {
                       rotationWarning={needsRefresh}
                       onRotate={(vnic, binding) => {
                         if (
-                          demo ||
                           resource.error ||
                           needsRefresh ||
                           instanceJobs.loading ||

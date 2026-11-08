@@ -12,7 +12,7 @@ if (
   parsed.search ||
   parsed.hash
 ) {
-  throw new Error("E2E_BASE_URL must be the origin of a local OCI Dash demo server.");
+  throw new Error("E2E_BASE_URL must be the origin of a local isolated OCI Dash test server.");
 }
 
 const outputDirectory = process.env.E2E_OUTPUT_DIR || "./test-results";

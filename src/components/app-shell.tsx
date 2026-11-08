@@ -16,7 +16,7 @@ import {
   CircleDollarSign,
 } from "lucide-react";
 import { useApp } from "./app-provider";
-import { Badge, IconButton } from "./ui";
+import { IconButton } from "./ui";
 const navigation = [
   { href: "/overview", label: "总览", icon: LayoutDashboard },
   { href: "/instances", label: "实例", icon: Server },
@@ -25,7 +25,7 @@ const navigation = [
   { href: "/tasks", label: "任务", icon: ListChecks },
 ];
 export function AppShell({ children }: { children: ReactNode }) {
-  const { user, demo, theme, setTheme, logout } = useApp();
+  const { user, theme, setTheme, logout } = useApp();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -158,11 +158,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          {demo && (
-            <div className="sidebar-demo">
-              <Badge tone="info">演示环境 · 只读</Badge>
-            </div>
-          )}
           <div className="sidebar-controls">
             <Link
               href="/settings"

@@ -39,7 +39,6 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", "metrics-test");
   vi.stubEnv("ADMIN_PASSWORD", "metrics-test-password");
   vi.stubEnv("APP_ORIGIN", origin);
-  vi.stubEnv("DEMO_MODE", "false");
   getDatabase();
   token = login("metrics-test", "metrics-test-password").token;
   account = createAccount(

@@ -8,7 +8,7 @@ import type { Duplex } from "node:stream";
 import { createWebSocketStream, WebSocket, WebSocketServer } from "ws";
 import { z } from "zod";
 import { currentSessionHash, requireUser } from "../auth";
-import { audit, isDemo } from "../db";
+import { audit } from "../db";
 import { AppError } from "../errors";
 import { errorResponse, json } from "../http";
 import type { ConsoleManager } from "./manager";
@@ -19,7 +19,6 @@ interface GatewayOptions {
   upstreamPort: number;
   origin?: string;
   authenticate?: (request: Request) => ConsoleActor;
-  demo?: () => boolean;
   recordEvent?: (actor: ConsoleActor, action: string, resource: string, result: string) => void;
 }
 
@@ -76,7 +75,6 @@ export function createConsoleGateway(options: GatewayOptions) {
     options.origin ?? process.env.APP_ORIGIN ?? "http://localhost:3000",
   ).origin;
   const authenticate = options.authenticate ?? actorFor;
-  const demo = options.demo ?? isDemo;
   const recordEvent =
     options.recordEvent ??
     ((actor: ConsoleActor, action: string, resource: string, result: string) =>
@@ -118,13 +116,9 @@ export function createConsoleGateway(options: GatewayOptions) {
       const method = request.method ?? "GET";
       if (!["GET", "HEAD"].includes(method)) {
         assertOrigin(normalized);
-        if (demo()) throw new AppError("演示模式不创建控制台连接", 403, "DEMO_READ_ONLY");
       }
       if (method === "GET" && path === "/api/console/session") {
-        return respond(
-          response,
-          json({ session: demo() ? null : manager.current(actor), demo: demo() }),
-        );
+        return respond(response, json({ session: manager.current(actor) }));
       }
       if (method === "POST" && path === "/api/console/sessions") {
         const { instanceId } = startSchema.parse(await bodyFrom(request));
@@ -135,7 +129,6 @@ export function createConsoleGateway(options: GatewayOptions) {
       const match = sessionRoute.exec(path);
       if (!match) throw new AppError("控制台接口不存在", 404, "NOT_FOUND");
       const [, id, action] = match;
-      if (demo()) throw new AppError("演示模式不提供真实控制台会话", 403, "DEMO_READ_ONLY");
       if (method === "GET" && !action)
         return respond(response, json({ session: manager.get(id!, actor) }));
       if (method === "POST" && action === "ticket")
@@ -236,7 +229,6 @@ export function createConsoleGateway(options: GatewayOptions) {
       if (!match || url.search) throw new AppError("控制台连接地址无效", 404);
       assertOrigin(normalized);
       const actor = authenticate(normalized);
-      if (demo()) throw new AppError("演示模式不连接控制台", 403, "DEMO_READ_ONLY");
       if (
         request.method !== "GET" ||
         request.headers.upgrade?.toLowerCase() !== "websocket" ||

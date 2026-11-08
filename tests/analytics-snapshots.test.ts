@@ -169,7 +169,6 @@ describe("persisted analytics snapshots", () => {
           },
         }),
         isCurrent: (_id, value) => enabled && value === revision,
-        demo: () => false,
         now: () => time,
         costs: { read },
         snapshots: createAnalyticsSnapshots({ database: () => currentDb, now: () => time }),

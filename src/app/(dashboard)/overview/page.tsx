@@ -20,7 +20,6 @@ import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { displayCost } from "@/components/analytics-cost-data";
 import { UpdatedAt } from "@/components/updated-at";
 import {
-  Badge,
   Card,
   EmptyState,
   ErrorState,
@@ -74,7 +73,7 @@ function PanelContent({
 }
 
 export default function OverviewPage() {
-  const { accounts, accountsLoading, demo } = useApp();
+  const { accounts, accountsLoading } = useApp();
   const [account, setAccount] = useState("");
   const [period, setPeriod] = useState<Period>("7d");
   const [range, setRange] = useState(() => dateRange("7d"));
@@ -148,7 +147,6 @@ export default function OverviewPage() {
           " · UTC"
         }
       >
-        {demo && <Badge tone="info">示例数据</Badge>}
         <Select
           aria-label="总览账号"
           value={accountId}

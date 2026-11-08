@@ -2,7 +2,6 @@ import { ZodError } from "zod";
 import type { SessionUser } from "@/lib/contracts";
 import { AppError, safeMessage } from "./errors";
 import { requireUser, assertSameOrigin } from "./auth";
-import { isDemo } from "./db";
 
 export const json = (value: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(value, { status, headers: { "Cache-Control": "no-store", ...headers } });
@@ -49,14 +48,12 @@ export function errorResponse(error: unknown): Response {
 }
 export function api(
   handler: (request: Request, user: SessionUser) => Promise<Response> | Response,
-  options: { mutation?: boolean; cloudWrite?: boolean } = {},
+  options: { mutation?: boolean } = {},
 ) {
   return async (request: Request): Promise<Response> => {
     try {
       const user = requireUser(request);
-      if (options.mutation || options.cloudWrite) assertSameOrigin(request);
-      if (options.cloudWrite && isDemo())
-        throw new AppError("演示模式不执行云操作或保存真实凭据", 403, "DEMO_READ_ONLY");
+      if (options.mutation) assertSameOrigin(request);
       return await handler(request, user);
     } catch (error) {
       return errorResponse(error);

@@ -9,7 +9,6 @@ import { Button, CopyButton, Status } from "./ui";
 import { formatDate, instanceHref, number, primaryAddress, taskHref } from "./format";
 import { RegionLabel } from "./region-label";
 import { InventoryFreshness } from "./inventory-freshness";
-import { useApp } from "./app-provider";
 import { canRotatePublicIp } from "./public-ip-rotation";
 
 export function InstanceCard({
@@ -25,7 +24,6 @@ export function InstanceCard({
   rotationJob?: JobSummary;
   rotationWarning?: boolean;
 }) {
-  const { demo } = useApp();
   const titleId = useId();
   const address = primaryAddress(instance);
   const addresses = instance.vnics.flatMap((vnic) =>
@@ -37,15 +35,13 @@ export function InstanceCard({
   const failed =
     rotationJob && ["failed", "cancelled", "interrupted"].includes(rotationJob.state) && !pending;
   const syncing = rotationJob?.kind === "sync-account";
-  const disabledReason = demo
-    ? "演示模式仅供查看"
-    : rotationWarning
-      ? "地址同步不完整，请先刷新资源"
-      : rotationDisabled
-        ? "正在读取或处理此实例的任务"
-        : !["RUNNING", "STOPPED"].includes(instance.state)
-          ? "当前实例状态不可更换 IP"
-          : undefined;
+  const disabledReason = rotationWarning
+    ? "地址同步不完整，请先刷新资源"
+    : rotationDisabled
+      ? "正在读取或处理此实例的任务"
+      : !["RUNNING", "STOPPED"].includes(instance.state)
+        ? "当前实例状态不可更换 IP"
+        : undefined;
   return (
     <article className="card instance-card" aria-labelledby={titleId}>
       <div className="instance-card-heading">

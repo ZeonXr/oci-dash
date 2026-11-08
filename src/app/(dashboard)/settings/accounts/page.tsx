@@ -43,12 +43,11 @@ function connectionAction(account: AccountSummary, job?: JobSummary): string {
 }
 
 export default function AccountsPage() {
-  const { demo, notify, reloadAccounts } = useApp();
+  const { notify, reloadAccounts } = useApp();
   const [pollMs, setPollMs] = useState(30000);
   const resource = useResource<{
     accounts: AccountSummary[];
     syncJobs?: JobSummary[];
-    demo: boolean;
   }>("/api/accounts", pollMs);
   const inventory = useInventoryRefresh({ onUpdated: resource.reload });
   useEffect(() => {
@@ -65,7 +64,6 @@ export default function AccountsPage() {
     reloadAccounts();
   };
   const sync = async (account: AccountSummary) => {
-    if (demo) return;
     setBusyKey(`${account.id}:sync`);
     const response = await action.run(() =>
       send<{ job: JobSummary }>(`/api/accounts/${encodeURIComponent(account.id)}/sync`),
@@ -88,7 +86,7 @@ export default function AccountsPage() {
     setBusyKey("");
   };
   const remove = async () => {
-    if (demo || !removing || removeName !== removing.name) return;
+    if (!removing || removeName !== removing.name) return;
     const response = await action.run(() =>
       api(`/api/accounts/${encodeURIComponent(removing.id)}`, { method: "DELETE" }),
     );
@@ -103,7 +101,7 @@ export default function AccountsPage() {
     <section className="settings-accounts" aria-label="OCI 账号">
       <div className="settings-account-toolbar">
         <p>管理 OCI 连接凭据与区域同步范围。</p>
-        <Button variant="primary" disabled={demo} onClick={() => setEditing(null)}>
+        <Button variant="primary" onClick={() => setEditing(null)}>
           <Plus size={16} />
           添加账号
         </Button>
@@ -166,7 +164,7 @@ export default function AccountsPage() {
                   <div className="account-actions">
                     <Button
                       className="button-sm"
-                      disabled={demo || action.pending || syncing}
+                      disabled={action.pending || syncing}
                       loading={requesting || syncing}
                       onClick={() => sync(account)}
                     >
@@ -176,7 +174,6 @@ export default function AccountsPage() {
                     <Button
                       className="button-sm"
                       variant="ghost"
-                      disabled={demo}
                       onClick={() => setEditing(account)}
                     >
                       编辑
@@ -184,7 +181,7 @@ export default function AccountsPage() {
                     <Button
                       className="button-sm danger-text"
                       variant="ghost"
-                      disabled={demo || syncing}
+                      disabled={syncing}
                       onClick={() => {
                         setRemoving(account);
                         setRemoveName("");
@@ -205,7 +202,7 @@ export default function AccountsPage() {
               title="添加你的第一个 OCI 账号"
               description="粘贴 OCI 配置并上传 PEM 私钥文件，即可添加账号。"
               action={
-                <Button variant="primary" disabled={demo} onClick={() => setEditing(null)}>
+                <Button variant="primary" onClick={() => setEditing(null)}>
                   <Plus size={15} />
                   添加账号
                 </Button>
@@ -235,7 +232,7 @@ export default function AccountsPage() {
               </Button>
               <Button
                 variant="danger"
-                disabled={demo || removeName !== removing.name}
+                disabled={removeName !== removing.name}
                 loading={action.pending}
                 onClick={remove}
               >

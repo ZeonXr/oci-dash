@@ -57,7 +57,8 @@ export function useInventoryRefresh({
   onUpdated: () => void | Promise<void>;
   enabled?: boolean;
 }) {
-  const { demo, reloadAccounts } = useApp();
+  const { accounts, accountsLoading, reloadAccounts } = useApp();
+  const canRefresh = enabled && !accountsLoading && accounts.length > 0;
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const updated = useRef(onUpdated);
@@ -98,7 +99,7 @@ export function useInventoryRefresh({
       await whileVisible(reading, signal);
     };
     const run = (mode: "auto" | "manual"): Promise<void> => {
-      if (disposed || !enabled || !visible()) return Promise.resolve();
+      if (disposed || !canRefresh || !visible()) return Promise.resolve();
       if (mode === "auto" && Date.now() < automaticNotBefore) return Promise.resolve();
       if (running) {
         if (mode === "manual" && currentMode === "auto") {
@@ -107,7 +108,6 @@ export function useInventoryRefresh({
         }
         return running;
       }
-      if (demo) return mode === "manual" ? Promise.resolve(updated.current()) : Promise.resolve();
       if (selected?.length === 0) return Promise.resolve(updated.current());
       const operation = new AbortController();
       controller = operation;
@@ -300,6 +300,6 @@ export function useInventoryRefresh({
       window.removeEventListener("online", resume);
       if (runner.current === run) runner.current = async () => {};
     };
-  }, [demo, enabled, scope]);
+  }, [canRefresh, scope]);
   return { refresh, refreshing, error };
 }
