@@ -9,7 +9,7 @@ import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
 import { useAccountFilter } from "@/components/account-filter";
 import { useAnalytics } from "@/components/analytics-query";
-import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
+import { AnalyticsRange, useAnalyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart, analyticsNumber, utcTimestamp } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { UpdatedAt } from "@/components/updated-at";
@@ -34,7 +34,7 @@ const totalBytes = (received: number | null, sent: number | null) =>
   received == null || sent == null ? null : received + sent;
 
 function TrafficContent() {
-  const { accounts, accountsLoading } = useApp();
+  const { accounts, accountsLoading, accountsReady, accountsError, reloadAccounts } = useApp();
   const inventory = useResource<{ instances: InstanceSummary[] }>("/api/instances");
   const [account, setAccount] = useAccountFilter();
   const [filters, setFilters] = useState({ account, region: "", instance: "", vnic: "" });
@@ -44,7 +44,7 @@ function TrafficContent() {
     filters.account === account ? filters : { region: "", instance: "", vnic: "" };
   const changeFilters = (updates: Partial<{ region: string; instance: string; vnic: string }>) =>
     setFilters({ account, region, instance, vnic, ...updates });
-  const [range, setRange] = useState(() => analyticsRange("month"));
+  const { range, setRange, refreshRange } = useAnalyticsRange();
   const [granularity, setGranularity] = useState<"hourly" | "daily">("daily");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -72,7 +72,7 @@ function TrafficContent() {
   if (region) query.set("region", region);
   if (instance) query.set("instanceId", instance);
   if (vnic) query.set("vnicId", vnic);
-  const url = accountsLoading || !accounts.length ? null : `/api/analytics/traffic?${query}`;
+  const url = !accountsReady || !accounts.length ? null : `/api/analytics/traffic?${query}`;
   const report = useAnalytics<TrafficReport>(url);
   const data = report.data;
   const rows = useMemo(
@@ -110,7 +110,13 @@ function TrafficContent() {
       <PageHeader title="流量统计" description="按账号、实例和网卡查看接收与发送流量。">
         {data && <AnalyticsStatusNote report={data} />}
         <UpdatedAt value={data?.generatedAt} title="统计查询时间" />
-        <RefreshButton onClick={report.refresh} loading={report.refreshing} disabled={!url}>
+        <RefreshButton
+          onClick={() => {
+            if (!refreshRange()) void report.refresh();
+          }}
+          loading={report.refreshing}
+          disabled={!url}
+        >
           刷新数据
         </RefreshButton>
       </PageHeader>
@@ -119,7 +125,7 @@ function TrafficContent() {
           <Select
             aria-label="流量账号"
             value={account}
-            disabled={accountsLoading}
+            disabled={!accountsReady}
             onChange={(event) => {
               setAccount(event.target.value);
               setFilters({ account: event.target.value, region: "", instance: "", vnic: "" });
@@ -185,13 +191,16 @@ function TrafficContent() {
           </Select>
         </div>
       </div>
+      {accountsError && (
+        <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
+      )}
       {inventory.error && (
         <ErrorState message={`筛选选项读取失败：${inventory.error}`} retry={inventory.reload} />
       )}
       {report.error && <ErrorState message={report.error} retry={report.retry} />}
       {accountsLoading || report.loading ? (
         <LoadingState label="正在读取流量统计…" />
-      ) : !accounts.length ? (
+      ) : !accountsReady ? null : !accounts.length ? (
         <Card>
           <EmptyState
             title="先添加 OCI 账号"

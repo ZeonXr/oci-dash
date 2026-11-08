@@ -4,6 +4,10 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+    inputs:
+      force_full:
+        type: boolean
+        default: true
 permissions:
   contents: read
 concurrency:
@@ -17,26 +21,41 @@ jobs:
       E2E_BROWSER_CHANNEL: chrome
     steps:
       - uses: actions/checkout@v4
-      - name: Validate the standalone deployment file
-        run: docker compose --env-file /dev/null -f compose.yaml config --quiet
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "26.13.0"
           cache: npm
+      - name: Select documentation or full verification
+        id: scope
+        env:
+          FORCE_FULL: ${{ inputs.force_full || false }}
+        run: node scripts/check-docs.ts --scope
       - run: npm ci
       - run: npm run format:check
+      - name: Check local documentation links
+        run: node scripts/check-docs.ts
+      - name: Validate the standalone deployment file
+        if: steps.scope.outputs.full == 'true'
+        run: docker compose --env-file /dev/null -f compose.yaml config --quiet
       - run: npm run typecheck
+        if: steps.scope.outputs.full == 'true'
       - run: npm test
-      - run: npm run build
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
+        if: steps.scope.outputs.full == 'true'
       - name: Check runner-provided Chrome
+        if: steps.scope.outputs.full == 'true'
         run: google-chrome --version
-      - name: Build local application image
+      - name: Build the production application image
+        if: steps.scope.outputs.full == 'true'
         run: docker build -t oci-dash:local .
       - name: Verify isolated container lifecycle
+        if: steps.scope.outputs.full == 'true'
         run: npm run test:runtime
       - name: Verify isolated backup and restore
+        if: steps.scope.outputs.full == 'true'
         run: npm run test:backup
       - name: Browser tests in an isolated empty deployment
+        if: steps.scope.outputs.full == 'true'
         run: npm run test:e2e:isolated -- --no-build

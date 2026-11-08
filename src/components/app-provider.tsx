@@ -16,6 +16,8 @@ interface AppContextValue {
   user: SessionUser;
   accounts: AccountSummary[];
   accountsLoading: boolean;
+  accountsReady: boolean;
+  accountsError: string | null;
   reloadAccounts: () => void;
   reloadSession: () => void;
   notify: (message: string, href?: string) => void;
@@ -42,8 +44,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const reloadSession = useCallback(() => setRevision((n) => n + 1), []);
   useEffect(() => {
-    const saved = localStorage.getItem("oci-dash-theme");
-    const value = saved === "dark" ? "dark" : "light";
+    let value: "light" | "dark" = "light";
+    try {
+      const saved = localStorage.getItem("oci-dash-theme");
+      value = saved === "dark" ? "dark" : "light";
+    } catch {
+      // The theme still works for this visit when browser storage is unavailable.
+    }
     setThemeState(value);
     document.documentElement.dataset.theme = value;
   }, []);
@@ -78,7 +85,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setTheme = (value: "light" | "dark") => {
     setThemeState(value);
     document.documentElement.dataset.theme = value;
-    localStorage.setItem("oci-dash-theme", value);
+    try {
+      localStorage.setItem("oci-dash-theme", value);
+    } catch {
+      // Persisting this preference is optional.
+    }
   };
   const logout = async () => {
     try {
@@ -110,6 +121,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...session,
         accounts: accounts.data?.accounts || [],
         accountsLoading: accounts.loading,
+        accountsReady: accounts.data !== undefined,
+        accountsError: accounts.error,
         reloadAccounts: accounts.reload,
         reloadSession,
         notify,

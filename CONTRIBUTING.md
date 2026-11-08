@@ -30,7 +30,7 @@ npm run dev
 npm run worker
 ```
 
-无需 `.env`。首次在浏览器中填写用户名、密码和确认密码，或生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。主密钥仍自动保存到 `data/.master-key`，不生成默认管理员或初始密码文件。新数据库不生成示例账号。可选的本地 `.env` 可覆盖应用变量，见[运维说明](docs/OPERATIONS.md#可选配置)。不要把生产配置复制到开发目录，也不要把密码放进提交或截图。首个可访问初始化页面的人可创建管理员；开发脚本默认监听 `0.0.0.0`，首次设置应使用受控网络，仅本机使用时运行 `npx --no-install next dev --hostname 127.0.0.1`。
+无需 `.env`。首次在浏览器中填写用户名、密码和确认密码，或生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。主密钥仍自动保存到 `data/.master-key`，不生成默认管理员或初始密码文件。新数据库不生成示例账号。可选的本地 `.env` 可覆盖应用变量，见[运维说明](docs/OPERATIONS.md#可选配置)。不要把生产配置复制到开发目录，也不要把密码放进提交或截图。开发服务器默认只监听 `127.0.0.1`；需要远程调试时显式指定监听地址。
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
@@ -52,6 +52,7 @@ PostCSS 插件列表使用静态 `postcss.config.json`，不需要可执行的 J
 
 ```sh
 npm run format:check
+node scripts/check-docs.ts
 npm run typecheck
 npm test
 npm run build
@@ -61,7 +62,7 @@ npm run build
 
 使用 `npm run format` 修正格式。项目的 Prettier、EditorConfig 和忽略规则决定格式与扫描范围，不要格式化环境文件、私钥、数据库或构建产物。
 
-页面复用 `src/components/ui.tsx` 中的交互组件。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，由组件替换图标。初始加载使用 `LoadingState` 或 `Spinner`，不要在页面另写旋转动画。加载效果应遵守减少动态效果的系统偏好。
+页面复用 `src/components/ui.tsx` 中的交互组件。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，由组件替换图标。初始加载使用 `LoadingState` 或 `Spinner`，不要在页面另写旋转动画。
 
 按改动范围补充有意义的回归：
 
@@ -95,7 +96,15 @@ npm run test:backup
 
 浏览器安装、平台差异、已知基线和验收限制见[验证指南](docs/VERIFICATION.md)。真实 OCI 验收不属于上述自动化测试，必须另行选择隔离账号或资源，并记录操作范围与清理结果。
 
-发布以源码 tag 对应固定镜像版本和同版本的独立 `compose.yaml` 资产。目标平台为原生 Linux `amd64`、`arm64`；发布前需分别完成构建验证、镜像索引、匿名拉取、宿主目录持久化和网页首次初始化检查，不能把工作流配置等同于已经通过。当前发布核对项见[发布验收](docs/VERIFICATION.md#v021-发布验收)。
+## CI 与发布
+
+普通推送和 PR 中，纯 Markdown、许可证及静态文档附件变更只执行格式和本地链接检查；代码、运行脚本、配置、依赖和部署文件变更执行完整验证。无法确定变更范围时执行完整验证。发布流程调用 CI 时始终执行完整检查，不受文档范围判断影响。
+
+完整 CI 先执行类型检查和单元测试，再通过 Docker 构建一次生产应用，随后检查容器生命周期、备份恢复和隔离浏览器流程。`Dockerfile` 负责构建，不再重复运行完整单测和独立工具脚本的类型检查；直接构建镜像不能替代源码检查。`node scripts/check-docs.ts` 只检查仓库内文件和 Markdown 标题链接，不联网检查历史版本或其他远程地址。
+
+发布以源码 tag 对应固定版本镜像和同版本的独立 `compose.yaml` 资产。先验证版本与源码标签，分别构建并运行 Linux `amd64`、`arm64`，再组合已验证的镜像摘要。固定版本镜像和 Compose 附件发布成功后进行匿名部署验收，验收通过才推广 Docker 与 GitHub 的 `latest`；版本比较同时防止两个渠道回退。
+
+发布中断后可以重跑失败任务：相同镜像摘要和相同 Compose 内容会复用，缺少的 Release 或附件会补齐；不同摘要或内容会拒绝覆盖。候选镜像可能被正式索引引用，不自动删除。实际执行结果见[发布验收](docs/VERIFICATION.md#v030-发布验收)。
 
 ## 提交与评审
 

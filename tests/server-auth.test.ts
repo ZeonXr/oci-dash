@@ -241,7 +241,7 @@ describe("session and request boundaries", () => {
     for (const [path, expected] of [
       ["accounts", { accounts: [], syncJobs: [] }],
       ["instances", { instances: [] }],
-      ["jobs", { jobs: [] }],
+      ["jobs", { jobs: [], total: 0, page: 1, pageSize: 100 }],
     ] as const) {
       const response = await handleApi(request(path, { token }), path.split("/"));
       expect(response.status).toBe(200);
@@ -262,6 +262,43 @@ describe("session and request boundaries", () => {
     expect(refreshed.status).toBe(200);
     expect(await refreshed.json()).toEqual({ jobs: [], accounts: [] });
     expect(getJobStore().listJobs()).toEqual([]);
+    for (const mock of Object.values(cloud)) expect(mock).not.toHaveBeenCalled();
+  });
+
+  it("returns recent terminal context separately from every active instance job", async () => {
+    const { token } = loggedIn();
+    const account = createAccount(accountInput(), USERNAME);
+    const store = getJobStore();
+    const operation = (resourceId: string) => ({
+      kind: "public-ip-rotate" as const,
+      accountId: account.id,
+      region: account.homeRegion,
+      resourceId,
+      payload: {},
+    });
+    const failed = store.enqueueOperation(operation("failed-instance"), USERNAME);
+    store.claimNext("fixture-worker");
+    store.finish(failed.id, "fixture-worker", "failed", undefined, "fixture failure");
+    const uncertain = store.enqueueOperation(operation("uncertain-instance"), USERNAME);
+    store.claimNext("fixture-worker");
+    store.finish(uncertain.id, "fixture-worker", "succeeded", {
+      synchronization: {
+        status: "completed-with-warnings",
+        warnings: ["fixture inventory warning"],
+      },
+    });
+    const active = store.enqueueOperation(operation("active-instance"), USERNAME);
+    const response = await handleApi(request("jobs?active=true", { token }), ["jobs"]);
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.jobs.map((job: { id: string }) => job.id)).toEqual([active.id]);
+    expect(result.recentJobs.map((job: { id: string }) => job.id).sort()).toEqual(
+      [failed.id, uncertain.id, active.id].sort(),
+    );
+    expect(
+      result.recentJobs.find((job: { id: string }) => job.id === uncertain.id).result
+        .synchronization.status,
+    ).toBe("completed-with-warnings");
     for (const mock of Object.values(cloud)) expect(mock).not.toHaveBeenCalled();
   });
 

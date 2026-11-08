@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { JobSummary } from "@/lib/contracts";
+import type { InstanceJobContext, JobSummary } from "@/lib/contracts";
 import { isJobPending as isPending } from "@/lib/job-state";
 import { api, ApiError, errorMessage } from "./api";
 
@@ -124,11 +124,13 @@ export function useInstanceJobs(onUpdated: () => void | Promise<void>) {
           });
         const version = trackVersion.current;
         try {
-          const result = await request<{ jobs: JobSummary[] }>("/api/jobs");
+          const result = await request<InstanceJobContext>("/api/jobs?active=true");
           if (disposed || stop.aborted) return;
-          if (!Array.isArray(result.jobs)) throw new Error("任务列表响应不完整，请重试");
+          if (!Array.isArray(result.jobs) || !Array.isArray(result.recentJobs))
+            throw new Error("任务列表响应不完整，请重试");
+          const jobs = new Map([...result.recentJobs, ...result.jobs].map((job) => [job.id, job]));
           // A submission can complete while this older list request is still in flight.
-          for (const job of result.jobs)
+          for (const job of jobs.values())
             if ((trackedAt.current.get(job.id) ?? 0) <= version) accept(job);
           publish();
         } catch (reason) {

@@ -1,4 +1,5 @@
 import { expect, test as base, type Locator, type Page } from "@playwright/test";
+import { jobContextFixture } from "../fixtures/job-page";
 import type {
   AccountSummary,
   InstanceSummary,
@@ -166,6 +167,7 @@ interface RotationFixture {
   instancesGate?: Promise<void>;
   detailsGate?: Promise<void>;
   listResponses: string[][];
+  contextResponses: { jobs: string[]; recentJobs: string[] }[];
   submissions: Submission[];
   requests: { method: string; path: string }[];
   unexpected: string[];
@@ -190,6 +192,7 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
       jobDetails: new Map(),
       omittedFromList: new Set(),
       listResponses: [],
+      contextResponses: [],
       submissions: [],
       requests: [],
       unexpected: [],
@@ -286,8 +289,21 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
         return json({ instances: fixture.instances });
       }
       if (method === "GET" && path === "/api/jobs") {
-        const jobs = fixture.jobs.filter((job) => !fixture.omittedFromList.has(job.id));
-        await json({ jobs });
+        const syncIds = new Set(
+          fixture.jobs.flatMap((job) => {
+            const sync = job.result?.synchronization as { jobId?: string } | undefined;
+            return sync?.jobId ? [sync.jobId] : [];
+          }),
+        );
+        const jobs = fixture.jobs.filter(
+          (job) => !fixture.omittedFromList.has(job.id) && !syncIds.has(job.id),
+        );
+        const context = jobContextFixture(jobs, [...fixture.jobDetails.values()]);
+        fixture.contextResponses.push({
+          jobs: context.jobs.map((job) => job.id),
+          recentJobs: context.recentJobs.map((job) => job.id),
+        });
+        await json(context);
         fixture.listResponses.push(jobs.map((job) => job.id));
         return;
       }
@@ -400,6 +416,93 @@ function expectTarget(operation: Submission) {
   expect(operation.idempotencyKey).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   );
+}
+
+function terminalRotation(id: string, state: "failed" | "succeeded"): JobSummary {
+  return {
+    id,
+    kind: "public-ip-rotate",
+    accountId: account.id,
+    accountName: account.name,
+    region: account.homeRegion,
+    resourceId: ids.main,
+    state,
+    attempt: 1,
+    maxAttempts: 4,
+    createdAt: account.createdAt,
+    startedAt: account.createdAt,
+    finishedAt: account.createdAt,
+    nextRunAt: null,
+    lastError: state === "failed" ? "模拟历史轮换失败" : null,
+    result: null,
+  };
+}
+
+test("重载后从最近历史恢复失败轮换提示，不把完成任务混入活动列表", async ({
+  page,
+  rotationApi,
+}) => {
+  const history = terminalRotation("rotation-history-failed", "failed");
+  rotationApi.jobs.push(history);
+  rotationApi.jobDetails.set(history.id, history);
+  await openCards(page);
+  const failure = () =>
+    card(page).getByRole("link", { name: "更换未完成 · 查看任务", exact: true });
+  await expect(failure()).toBeVisible();
+  await expect(change(card(page), addresses.target)).toBeEnabled();
+  await page.reload();
+  await expect(failure()).toBeVisible();
+  await expect(failure()).toHaveAttribute("href", "/tasks/" + history.id);
+  await expect(change(card(page), addresses.target)).toBeEnabled();
+  expect(rotationApi.contextResponses.at(-1)).toEqual({ jobs: [], recentJobs: [history.id] });
+  expect(rotationApi.submissions).toEqual([]);
+});
+
+for (const synchronization of ["completed-with-warnings", "failed-child"] as const) {
+  test(`重载后保留同步未确认的成功轮换保护：${synchronization}`, async ({ page, rotationApi }) => {
+    const history = terminalRotation("rotation-history-unconfirmed", "succeeded");
+    const syncId = "rotation-history-sync-failed";
+    history.result = {
+      details: {
+        privateIpId: ids.targetPrivate,
+        publicIpId: "rotation-public-replacement",
+        publicIp: addresses.replacement,
+      },
+      synchronization:
+        synchronization === "failed-child"
+          ? { status: "queued", jobId: syncId }
+          : { status: "completed-with-warnings", warnings: ["模拟库存未能确认新地址"] },
+    };
+    rotationApi.jobs.push(history);
+    rotationApi.jobDetails.set(history.id, history);
+    if (synchronization === "failed-child") {
+      const sync: JobSummary = {
+        ...history,
+        id: syncId,
+        kind: "sync-account",
+        resourceId: null,
+        state: "failed",
+        result: null,
+        lastError: "模拟后台同步失败",
+      };
+      rotationApi.jobs.push(sync);
+      rotationApi.jobDetails.set(sync.id, sync);
+    }
+    await openCards(page);
+    const warning = () =>
+      card(page).getByRole("link", { name: "地址同步不完整 · 查看任务", exact: true });
+    await expect(warning()).toBeVisible();
+    await expect(change(card(page), addresses.target)).toBeDisabled();
+    await page.reload();
+    await expect(warning()).toBeVisible();
+    await expect(change(card(page), addresses.first)).toBeDisabled();
+    await expect(change(card(page), addresses.target)).toBeDisabled();
+    await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+    expect(rotationApi.contextResponses.at(-1)).toEqual({ jobs: [], recentJobs: [history.id] });
+    if (synchronization === "failed-child")
+      expect(rotationApi.count("/api/jobs/" + syncId)).toBeGreaterThan(0);
+    expect(rotationApi.submissions).toEqual([]);
+  });
 }
 
 test("卡片仅为完整且未保护的临时公网绑定提供更换入口", async ({ page, rotationApi }) => {

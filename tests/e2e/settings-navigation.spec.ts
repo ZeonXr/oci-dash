@@ -47,7 +47,7 @@ const test = base.extend<{ isolatedApi: undefined }>({
             });
           if (path === "/api/accounts") return json({ accounts: [], syncJobs: [] });
           if (path === "/api/instances") return json({ instances: [] });
-          if (path === "/api/jobs") return json({ jobs: [] });
+          if (path === "/api/jobs") return json({ jobs: [], recentJobs: [] });
           if (path === "/api/settings") {
             const body: SettingsResult = {
               username: "fixture",
@@ -125,6 +125,26 @@ async function primaryNavigation(page: Page) {
     0,
   );
 }
+
+test("浏览器禁止站点存储时仍能打开面板并切换主题", async ({ page }) => {
+  await page.addInitScript(() => {
+    for (const operation of ["getItem", "setItem"] as const)
+      Object.defineProperty(Storage.prototype, operation, {
+        configurable: true,
+        value() {
+          throw new DOMException("Storage is blocked", "SecurityError");
+        },
+      });
+  });
+  await page.goto("/settings/general");
+  await currentSection(page, "/settings/general");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.locator(".theme-options").getByRole("button", { name: "深色", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.locator(".theme-options").getByRole("button", { name: "浅色", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await primaryNavigation(page);
+});
 
 test("旧账号链接与设置入口均重定向到 OCI 账号分区", async ({ page }) => {
   for (const legacy of ["/accounts", "/settings"]) {

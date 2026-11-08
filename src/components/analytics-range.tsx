@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Select } from "./ui";
 
 export type AnalyticsPreset = "today" | "last7" | "month" | "lastMonth" | "last12Months" | "custom";
@@ -25,6 +25,41 @@ export function analyticsRange(
     end.setUTCDate(0);
   }
   return { preset, startDate: utcDate(start), endDate: utcDate(end) };
+}
+
+/** Relative presets follow UTC dates; an explicitly chosen range stays fixed. */
+export function useAnalyticsRange(initial: Exclude<AnalyticsPreset, "custom"> = "month") {
+  const [range, setRange] = useState(() => analyticsRange(initial));
+  const refreshRange = useCallback(() => {
+    if (range.preset === "custom") return false;
+    const next = analyticsRange(range.preset);
+    if (next.startDate === range.startDate && next.endDate === range.endDate) return false;
+    setRange(next);
+    return true;
+  }, [range]);
+  useEffect(() => {
+    if (range.preset === "custom") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const update = () => {
+      clearTimeout(timer);
+      if (document.visibilityState !== "visible") return;
+      setRange((current) => {
+        if (current.preset === "custom") return current;
+        const next = analyticsRange(current.preset);
+        return next.startDate === current.startDate && next.endDate === current.endDate
+          ? current
+          : next;
+      });
+      timer = setTimeout(update, 86_400_000 - (Date.now() % 86_400_000) + 50);
+    };
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [range.preset]);
+  return { range, setRange, refreshRange };
 }
 
 export function AnalyticsRange({

@@ -9,7 +9,7 @@ import { useApp } from "@/components/app-provider";
 import { useAccountFilter } from "@/components/account-filter";
 import { useResource } from "@/components/api";
 import { useAnalytics } from "@/components/analytics-query";
-import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
+import { AnalyticsRange, analyticsRange, useAnalyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { UpdatedAt } from "@/components/updated-at";
@@ -42,14 +42,14 @@ const matches = (selected: string, value: string | null) =>
   !selected || (selected === missing ? value == null : selected === value);
 
 function CostsContent() {
-  const { accounts, accountsLoading } = useApp();
+  const { accounts, accountsLoading, accountsReady, accountsError, reloadAccounts } = useApp();
   const inventory = useResource<{ instances: InstanceSummary[] }>("/api/instances");
   const [account, setAccount] = useAccountFilter();
   const [filters, setFilters] = useState({ account, region: "", service: "" });
   const { region, service } = filters.account === account ? filters : { region: "", service: "" };
   const changeFilters = (updates: Partial<{ region: string; service: string }>) =>
     setFilters({ account, region, service, ...updates });
-  const [range, setRange] = useState(() => analyticsRange("month"));
+  const { range, setRange, refreshRange } = useAnalyticsRange();
   const [granularity, setGranularity] = useState<"daily" | "monthly">("daily");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -62,7 +62,7 @@ function CostsContent() {
     granularity,
   });
   if (account) query.set("accountId", account);
-  const url = accountsLoading || !accounts.length ? null : `/api/analytics/costs?${query}`;
+  const url = !accountsReady || !accounts.length ? null : `/api/analytics/costs?${query}`;
   const report = useAnalytics<CostReport>(url);
   const data = report.data;
   const filtered = Boolean(region || service);
@@ -153,7 +153,13 @@ function CostsContent() {
       <PageHeader title="成本分析" description="OCI 已报告成本，账单数据可能延迟约 48 小时。">
         {data && <AnalyticsStatusNote report={data} />}
         <UpdatedAt value={data?.generatedAt} title="统计查询时间，不代表账单上报时间" />
-        <RefreshButton onClick={report.refresh} loading={report.refreshing} disabled={!url}>
+        <RefreshButton
+          onClick={() => {
+            if (!refreshRange()) void report.refresh();
+          }}
+          loading={report.refreshing}
+          disabled={!url}
+        >
           刷新数据
         </RefreshButton>
       </PageHeader>
@@ -162,7 +168,7 @@ function CostsContent() {
           <Select
             aria-label="成本账号"
             value={account}
-            disabled={accountsLoading}
+            disabled={!accountsReady}
             onChange={(event) => {
               setAccount(event.target.value);
               setFilters({ account: event.target.value, region: "", service: "" });
@@ -231,10 +237,13 @@ function CostsContent() {
           </Select>
         </div>
       </div>
+      {accountsError && (
+        <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
+      )}
       {report.error && <ErrorState message={report.error} retry={report.retry} />}
       {accountsLoading || report.loading ? (
         <LoadingState label="正在读取成本分析…" />
-      ) : !accounts.length ? (
+      ) : !accountsReady ? null : !accounts.length ? (
         <Card>
           <EmptyState
             title="先添加 OCI 账号"

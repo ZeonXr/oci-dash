@@ -56,7 +56,7 @@ const test = base.extend<{ auth: AuthFixture }>({
               return route.fulfill({ json: { user: auth.authenticated ? user : null } });
             if (path === "/api/accounts")
               return route.fulfill({ json: { accounts: [], syncJobs: [] } });
-            if (path === "/api/jobs") return route.fulfill({ json: { jobs: [] } });
+            if (path === "/api/jobs") return route.fulfill({ json: { jobs: [], recentJobs: [] } });
             if (
               [
                 "/login",

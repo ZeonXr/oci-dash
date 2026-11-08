@@ -103,7 +103,7 @@ function fixture(
       },
     };
   });
-  const factory = vi.fn(async (_credentials, region: string) => {
+  const factory = vi.fn(async (_credentials, region: string, _signal: AbortSignal) => {
     if (options.factoryGate) await options.factoryGate;
     return {
       close,
@@ -160,6 +160,82 @@ function fixture(
 afterEach(() => vi.useRealTimers());
 
 describe("CPU hourly analytics", () => {
+  it("does not read credentials or dispatch for an already-cancelled caller", async () => {
+    const f = fixture();
+    await expect(f.service.query({}, false, AbortSignal.abort())).rejects.toMatchObject({
+      status: 499,
+      code: "CPU_CANCELLED",
+    });
+    expect(f.access).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled();
+  });
+
+  it("keeps a shared CPU read alive when only one subscriber leaves", async () => {
+    const f = fixture();
+    const gate = deferred<CloudDocument>();
+    f.metric.mockReturnValue(gate.promise);
+    const caller = new AbortController();
+    const first = f.service.query({}, false, caller.signal);
+    const rejected = expect(first).rejects.toMatchObject({ code: "CPU_CANCELLED" });
+    const second = f.service.query({});
+    await vi.waitFor(() => expect(f.metric).toHaveBeenCalledTimes(1));
+    caller.abort();
+    await rejected;
+    expect(f.factory.mock.calls[0][2].aborted).toBe(false);
+    gate.resolve({ items: [series(f.inventory[0].id, Array(288).fill(20))] });
+    expect((await second).status).toBe("ok");
+    expect(f.factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts abandoned CPU work without dispatching queued instances or caching it", async () => {
+    const a = account();
+    const f = fixture([a], {
+      items: [instance(a, "a"), instance(a, "b"), instance(a, "queued")],
+    });
+    const gate = deferred<CloudDocument>();
+    f.metric.mockReturnValue(gate.promise);
+    const caller = new AbortController();
+    const request = f.service.query({}, false, caller.signal);
+    const rejected = expect(request).rejects.toMatchObject({ code: "CPU_CANCELLED" });
+    await vi.waitFor(() => expect(f.metric).toHaveBeenCalledTimes(2));
+    caller.abort();
+    await rejected;
+    expect(f.factory.mock.calls.every((call) => call[2].aborted)).toBe(true);
+    expect(f.metric).toHaveBeenCalledTimes(2);
+    // A transport that ignores abort still retains its concurrency slot until it settles.
+    expect(f.active()).toBe(2);
+    gate.resolve({ items: [] });
+    await vi.waitFor(() => expect(f.active()).toBe(0));
+    f.metric.mockImplementation(async (resource) => ({
+      items: [series(resource, Array(288).fill(20))],
+    }));
+    const next = await f.service.query({});
+    expect(next.cached).toBe(false);
+    expect(next.status).toBe("ok");
+    expect(f.metric).toHaveBeenCalledTimes(5);
+  });
+
+  it("preserves an earlier CPU snapshot when every manual-refresh subscriber leaves", async () => {
+    const f = fixture();
+    const saved = await f.service.query({});
+    f.advance(3000);
+    const gate = deferred<CloudDocument>();
+    f.metric.mockReturnValue(gate.promise);
+    const caller = new AbortController();
+    const refresh = f.service.query({}, true, caller.signal);
+    const rejected = expect(refresh).rejects.toMatchObject({ code: "CPU_CANCELLED" });
+    await vi.waitFor(() => expect(f.metric).toHaveBeenCalledTimes(2));
+    caller.abort();
+    await rejected;
+    gate.resolve({ items: [] });
+    await vi.waitFor(() => expect(f.active()).toBe(0));
+    const retained = await f.service.query({});
+    expect(retained.cached).toBe(true);
+    expect(retained.generatedAt).toBe(saved.generatedAt);
+    expect(retained.rows).toEqual(saved.rows);
+    expect(f.metric).toHaveBeenCalledTimes(2);
+  });
+
   it("returns exactly 24 completed UTC hours and retains zero, including historically stopped instances", async () => {
     const f = fixture();
     f.inventory[0].state = "STOPPED";

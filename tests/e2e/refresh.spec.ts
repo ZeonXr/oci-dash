@@ -1,4 +1,5 @@
 import { expect, test as base, type Page } from "@playwright/test";
+import { jobPageFixture } from "../fixtures/job-page";
 import type {
   AccountSummary,
   DashboardData,
@@ -74,6 +75,7 @@ interface RefreshFixture {
   syncJob: JobSummary | null;
   syncJobs: JobSummary[];
   taskRows: JobSummary[];
+  jobQueries: URLSearchParams[];
   requests: RequestRecord[];
   failedRequests: string[];
   unexpected: string[];
@@ -126,6 +128,7 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         },
       ],
       requests: [],
+      jobQueries: [],
       failedRequests: [],
       unexpected: [],
       finish(status, update) {
@@ -319,8 +322,9 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
         return json(body, active.length ? 202 : 200);
       }
       if (method === "GET" && path === "/api/jobs") {
+        state.jobQueries.push(new URLSearchParams(url.searchParams));
         if (state.jobsGate) await state.jobsGate;
-        return json({ jobs: state.taskRows });
+        return json(jobPageFixture(state.taskRows, url.searchParams));
       }
       const sync = state.syncJobs.find((item) => path === `/api/jobs/${item.id}`);
       if (method === "GET" && sync) {
@@ -352,6 +356,96 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
     expect(state.unexpected, "Every API/external request must be mocked").toEqual([]);
     expect(errors, "Refresh must not raise uncaught browser errors").toEqual([]);
   },
+});
+
+function taskHistory(fixture: RefreshFixture, count: number): JobSummary[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...job(`history-${String(index + 1).padStart(3, "0")}`),
+    kind: "instance-rename",
+    resourceId: `task-resource-${String(index + 1).padStart(3, "0")}`,
+    state: index === 0 ? "running" : "succeeded",
+    createdAt: new Date(fixture.now + index * 1000).toISOString(),
+    finishedAt: index === 0 ? null : new Date(fixture.now + index * 1000).toISOString(),
+  }));
+}
+
+test("任务分页读取完整历史，筛选与浏览器前进后退保持查询范围", async ({ page, refreshApi }) => {
+  refreshApi.taskRows = taskHistory(refreshApi, 121);
+  await page.goto("/tasks?page=12");
+  const list = page.getByRole("region", { name: "任务列表表格", exact: true });
+  await expect(list.locator("tbody tr")).toHaveCount(10);
+  await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 121 条");
+  await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("page")).toBe("12");
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page).toHaveURL(/page=13/);
+  await expect(list.locator("tbody tr")).toHaveCount(1);
+  await expect(list).toContainText("task-resource-001");
+  await page.goBack();
+  await expect(page).toHaveURL(/page=12/);
+  await expect(list.locator("tbody tr")).toHaveCount(10);
+  await page.goForward();
+  await expect(page).toHaveURL(/page=13/);
+  await expect(list).toContainText("task-resource-001");
+  await page.reload();
+  await expect(list.locator("tbody tr")).toHaveCount(1);
+  await page.getByLabel("按状态筛选任务", { exact: true }).selectOption("running");
+  await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 1 条");
+  await expect(list).toContainText("task-resource-001");
+  await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("state")).toBe("running");
+  await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("page")).toBe("1");
+  await page.getByRole("button", { name: "重置筛选", exact: true }).click();
+  await page.getByRole("button", { name: "提交时间", exact: true }).click();
+  await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("sort")).toBe("ascending");
+  await expect(list.locator("tbody tr").first()).toContainText("task-resource-001");
+  await page.getByLabel("搜索任务", { exact: true }).fill("重命名实例");
+  await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("query")).toBe("重命名实例");
+  await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 121 条");
+});
+
+test("实例历史按实例查询完整页，近期任务不受其他实例的新历史挤出", async ({ page, refreshApi }) => {
+  refreshApi.taskRows = taskHistory(refreshApi, 131).map((task, index) => ({
+    ...task,
+    resourceId: index < 101 ? "refresh-instance-1" : "unrelated-instance",
+  }));
+  await page.goto("/instances/refresh-instance-1");
+  await expect(page.locator(".recent-task-summary a")).toHaveAttribute(
+    "href",
+    "/tasks/history-101",
+  );
+  await page.getByRole("tab", { name: "任务与活动", exact: true }).click();
+  const history = page.getByRole("region", { name: "实例任务表格", exact: true });
+  await expect(history.locator("tbody tr")).toHaveCount(10);
+  await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 101 条");
+  await page.getByLabel("每页条数", { exact: true }).selectOption("50");
+  await expect(history.locator("tbody tr")).toHaveCount(50);
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(history.locator("tbody tr")).toHaveCount(50);
+  await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("2 / 3");
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(history.locator("tbody tr")).toHaveCount(1);
+  await expect(history.getByRole("link", { name: "查看详情", exact: true })).toHaveAttribute(
+    "href",
+    "/tasks/history-001",
+  );
+  const latest = refreshApi.jobQueries.at(-1)!;
+  expect(latest.get("resourceId")).toBe("refresh-instance-1");
+  expect(latest.get("accountId")).toBe(account.id);
+  expect(latest.get("page")).toBe("3");
+  expect(latest.get("pageSize")).toBe("50");
+});
+
+test("实例任务观察单独查询全部活动任务，发现最近100条以外的旧任务", async ({
+  page,
+  refreshApi,
+}) => {
+  refreshApi.taskRows = taskHistory(refreshApi, 121);
+  refreshApi.taskRows[0].resourceId = "refresh-instance-1";
+  await page.goto("/instances");
+  await expect
+    .poll(() => refreshApi.jobQueries.some((query) => query.get("active") === "true"))
+    .toBe(true);
+  await expect.poll(() => refreshApi.count("/api/jobs/history-001")).toBeGreaterThan(0);
+  expect(refreshApi.manualRequests()).toEqual([]);
 });
 test.use({ trace: "off", video: "off", screenshot: "off", serviceWorkers: "block" });
 

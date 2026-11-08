@@ -1,8 +1,6 @@
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import * as schema from "./schema";
 import { initializeMasterKey } from "./master-key";
 import { ensureInitialAdmin } from "./initial-admin";
 
@@ -76,7 +74,6 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
-export const getOrm = () => drizzle(getDatabase(), { schema });
 export function closeDatabase(): void {
   connection?.close();
   connection = undefined;

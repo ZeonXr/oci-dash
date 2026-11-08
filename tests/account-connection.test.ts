@@ -13,6 +13,7 @@ import {
   getCredentialSnapshot,
   getCredentials,
   listAccounts,
+  updateAccount,
   type AccountInput,
 } from "@/server/accounts";
 import { createAccountConnection } from "@/server/account-connection";
@@ -164,6 +165,36 @@ function failedConsole(accountId: string) {
 }
 
 describe("atomic account save and background connection", () => {
+  it("preserves Worker state committed after an account edit starts", () => {
+    const account = createAccount(input(), USERNAME);
+    const db = getDatabase();
+    const peer = new Database(process.env.DATABASE_PATH!);
+    const revision = getCredentialSnapshot(account.id).revision;
+    const transaction = db.transaction.bind(db);
+    const syncedAt = "2026-11-08T12:00:00.000Z";
+    try {
+      // The editor already read the account, but has not acquired its write lock.
+      // Background connection updates do not change the credential revision.
+      vi.spyOn(db, "transaction").mockImplementationOnce((operation) => {
+        peer
+          .prepare("UPDATE accounts SET status=?,last_sync_at=?,last_error=? WHERE id=?")
+          .run("error", syncedAt, "Synthetic background failure", account.id);
+        return transaction(operation);
+      });
+      const updated = updateAccount(account.id, { name: "Renamed account" }, USERNAME);
+      expect(updated).toMatchObject({
+        name: "Renamed account",
+        status: "error",
+        lastSyncAt: syncedAt,
+        lastError: "Synthetic background failure",
+      });
+      expect(getCredentialSnapshot(account.id).revision).toBe(revision);
+      expect(getCredentials(account.id).fingerprint).toBe(firstKey.fingerprint);
+    } finally {
+      peer.close();
+    }
+  });
+
   it("recovers a revoked key through PATCH and lets the live manager clean with the replacement", async () => {
     const account = createAccount(input(), USERNAME);
     const store = createConsoleStore();

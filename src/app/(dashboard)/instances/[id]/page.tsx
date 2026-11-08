@@ -12,7 +12,7 @@ import {
   Network,
   Play,
 } from "lucide-react";
-import type { InstanceSummary, JobSummary, MetricsResult } from "@/lib/contracts";
+import type { InstanceSummary, JobPage, JobSummary, MetricsResult } from "@/lib/contracts";
 import { useApp } from "@/components/app-provider";
 import { send, useAction, useResource } from "@/components/api";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
@@ -142,31 +142,32 @@ export default function InstanceDetailPage() {
       : null,
     60000,
   );
-  const jobs = useResource<{ jobs: JobSummary[] }>(
-    tab === "overview" || tab === "activity" ? "/api/jobs" : null,
+  const [activityPage, setActivityPage] = useState(1);
+  const [activityPageSize, setActivityPageSize] = useState(10);
+  const [activityOrder, setActivityOrder] = useState<"ascending" | "descending">("descending");
+  const jobQuery = new URLSearchParams({
+    resourceId: id,
+    accountId: instance?.accountId || "",
+    page: String(tab === "overview" ? 1 : activityPage),
+    pageSize: String(tab === "overview" ? 1 : activityPageSize),
+    sort: tab === "overview" ? "descending" : activityOrder,
+  });
+  const jobs = useResource<JobPage>(
+    instance && (tab === "overview" || tab === "activity") ? `/api/jobs?${jobQuery}` : null,
     5000,
   );
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   const [renaming, setRenaming] = useState(false);
-  const [activityPage, setActivityPage] = useState(1);
-  const [activityPageSize, setActivityPageSize] = useState(10);
-  const [activityOrder, setActivityOrder] = useState<"ascending" | "descending">("descending");
   useEffect(() => setActivityPage(1), [id, activityPageSize, activityOrder]);
+  useEffect(() => {
+    if (tab === "activity" && jobs.data && jobs.data.page !== activityPage)
+      setActivityPage(jobs.data.page);
+  }, [tab, jobs.data, activityPage]);
   if (resource.loading) return <LoadingState />;
   if (!instance)
     return <ErrorState message={resource.error || "未找到此实例。"} retry={resource.reload} />;
-  const instanceJobs = (
-    jobs.data?.jobs.filter(
-      (job) => job.resourceId === instance.id && job.accountId === instance.accountId,
-    ) || []
-  ).sort((a, b) => {
-    const result = a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-    return activityOrder === "ascending" ? result : -result;
-  });
-  const safeActivityPage = Math.min(
-    activityPage,
-    Math.max(1, Math.ceil(instanceJobs.length / activityPageSize)),
-  );
+  const instanceJobs = jobs.data?.jobs || [];
+  const safeActivityPage = jobs.data?.page ?? activityPage;
   const lifecycle = (
     kind: "instance-start" | "instance-stop" | "instance-reboot" | "instance-terminate",
   ) =>
@@ -230,7 +231,7 @@ export default function InstanceDetailPage() {
       />
     </div>
   );
-  const taskRows = (limit?: number) => (
+  const taskRows = () => (
     <TablePanel
       embedded
       label="实例任务"
@@ -239,15 +240,13 @@ export default function InstanceDetailPage() {
       hasRows={instanceJobs.length > 0}
       empty={<EmptyState title="暂无关联任务" description="在此实例上提交的操作会显示在这里。" />}
       footer={
-        !limit && (
-          <Pagination
-            page={safeActivityPage}
-            pageSize={activityPageSize}
-            total={instanceJobs.length}
-            onPage={setActivityPage}
-            onPageSize={setActivityPageSize}
-          />
-        )
+        <Pagination
+          page={safeActivityPage}
+          pageSize={activityPageSize}
+          total={jobs.data?.total ?? 0}
+          onPage={setActivityPage}
+          onPageSize={setActivityPageSize}
+        />
       }
     >
       <table className="task-table">
@@ -266,13 +265,7 @@ export default function InstanceDetailPage() {
           </tr>
         </thead>
         <tbody>
-          {(limit
-            ? instanceJobs.slice(0, limit)
-            : instanceJobs.slice(
-                (safeActivityPage - 1) * activityPageSize,
-                safeActivityPage * activityPageSize,
-              )
-          ).map((job) => (
+          {instanceJobs.map((job) => (
             <tr key={job.id}>
               <td>
                 <Link href={taskHref(job.id)} className="name-link">

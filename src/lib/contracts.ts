@@ -196,6 +196,25 @@ export interface InventoryRefreshAccount {
   lastSyncedAt: string | null;
   nextRefreshAt: string | null;
 }
+export interface JobListQuery {
+  page: number;
+  pageSize: number;
+  query?: string;
+  accountId?: string;
+  resourceId?: string;
+  state?: JobState;
+  sort: "ascending" | "descending";
+}
+export interface JobPage {
+  jobs: JobSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+export interface InstanceJobContext {
+  jobs: JobSummary[];
+  recentJobs: JobSummary[];
+}
 export interface InventoryRefreshResult {
   jobs: JobSummary[];
   accounts: InventoryRefreshAccount[];

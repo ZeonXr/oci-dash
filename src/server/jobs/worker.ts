@@ -351,8 +351,6 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
   heartbeat.unref();
   try {
     while (!shutdown.signal.aborted) {
-      // Demo is enforced at the execution boundary too: pre-existing real jobs
-      // remain queued while this worker only maintains its health heartbeat.
       // The database enforces the two-read/one-write limits across all workers;
       // this local bound only caps execution objects owned by this process.
       const capacity = options.once ? 1 : MAX_CONCURRENT_ACCOUNT_SYNCS + 1;

@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AccountSummary, OperationRequest } from "@/lib/contracts";
 import { createJobStore, JobError, LeaseLostError } from "@/server/jobs/store";
+import { parseJobQuery } from "@/server/jobs/query";
+import { spawn } from "node:child_process";
 
 const handles: Database.Database[] = [];
 const directories: { directory: string; base: string }[] = [];
@@ -170,6 +172,7 @@ describe("durable job store", () => {
     f.db
       .prepare("INSERT INTO job_resources(job_id,resource_key) VALUES(?,?)")
       .run(older.id, legacyKey);
+    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
     const upgraded = f.open();
     const refresh = upgraded.store.enqueueOperation(
       {
@@ -350,6 +353,195 @@ describe("durable job store", () => {
     });
     f.advance(30_001);
     expect(f.store.getWorkerStatus().online).toBe(false);
+  });
+});
+
+describe("job history queries and migrations", () => {
+  const query = (text = "") => {
+    const parsed = parseJobQuery(new URLSearchParams(text));
+    if (parsed === "active") throw new Error("Expected a paginated query");
+    return parsed;
+  };
+
+  it("paginates all history and finds the oldest active task beyond the recent 100", () => {
+    const f = fixture();
+    const oldest = f.store.enqueueOperation(operation("oldest"), "admin");
+    f.store.claimNext("worker");
+    for (let index = 1; index <= 104; index++) {
+      f.advance(1);
+      const next = f.store.enqueueOperation(operation(`newer-${index}`), "admin");
+      f.store.cancelJob(next.id);
+    }
+    expect(f.store.listJobs()).toHaveLength(100);
+    const last = f.store.queryJobs(query("page=11&pageSize=10"));
+    expect(last).toMatchObject({ total: 105, page: 11, pageSize: 10 });
+    expect(last.jobs).toHaveLength(5);
+    expect(last.jobs.at(-1)?.id).toBe(oldest.id);
+    expect(f.store.queryJobs(query("state=running&pageSize=10")).jobs.map((job) => job.id)).toEqual(
+      [oldest.id],
+    );
+    expect(f.store.listActiveJobs().map((job) => job.id)).toEqual([oldest.id]);
+    expect(f.store.queryJobs(query("page=999&pageSize=10")).page).toBe(11);
+  });
+
+  it("filters before counting and preserves Chinese labels, Unicode case and literal wildcard text", () => {
+    const second = { ...account, id: "b", name: "ÉCOLE %_" };
+    const f = fixture([second]);
+    const first = f.store.enqueueOperation(operation("literal%_target"), "admin");
+    const other = f.store.enqueueOperation(
+      { ...operation("plain-target"), accountId: second.id },
+      "admin",
+    );
+    f.store.cancelJob(other.id);
+    expect(
+      f.store
+        .queryJobs(query("query=%25_"))
+        .jobs.map((job) => job.id)
+        .sort(),
+    ).toEqual([first.id, other.id].sort());
+    expect(f.store.queryJobs(query("query=école")).jobs.map((job) => job.id)).toEqual([other.id]);
+    expect(
+      f.store.queryJobs(
+        query("query=重命名实例&state=queued&accountId=account-a&resourceId=literal%25_target"),
+      ),
+    ).toMatchObject({ total: 1, jobs: [{ id: first.id }] });
+    expect(f.store.queryJobs(query("query=none&page=5"))).toEqual({
+      jobs: [],
+      total: 0,
+      page: 1,
+      pageSize: 100,
+    });
+  });
+
+  it("uses stable ID ordering for equal timestamps and excludes automatic refresh history", () => {
+    const f = fixture();
+    const jobs = ["one", "two", "three"].map((name) =>
+      f.store.enqueueOperation(operation(name), "admin"),
+    );
+    f.store.refreshInventory([account.id], "auto", "admin");
+    const expected = jobs.map((job) => job.id).sort();
+    expect(f.store.queryJobs(query("sort=ascending&pageSize=2")).jobs.map((job) => job.id)).toEqual(
+      expected.slice(0, 2),
+    );
+    expect(f.store.queryJobs(query("sort=ascending&pageSize=2&page=2"))).toMatchObject({
+      total: 3,
+      jobs: [{ id: expected[2] }],
+    });
+  });
+
+  it("retains a completed parent only while its exact same-account synchronization is pending", () => {
+    const f = fixture();
+    const parent = f.store.enqueueOperation(operation("parent-instance"), "admin");
+    f.store.claimNext("writer");
+    const sync = f.store.refreshInventory([account.id], "auto", "admin").jobs[0];
+    f.store.finish(parent.id, "writer", "succeeded", {
+      synchronization: { status: "queued", jobId: sync.id },
+    });
+    expect(f.store.listActiveJobs().map((job) => job.id)).toEqual([parent.id]);
+    f.store.claimNext("reader");
+    f.store.finish(sync.id, "reader", "succeeded");
+    expect(f.store.listActiveJobs()).toEqual([]);
+    f.db
+      .prepare("UPDATE jobs SET result_json=? WHERE id=?")
+      .run(JSON.stringify({ synchronization: { status: "queued", jobId: "missing" } }), parent.id);
+    expect(f.store.listActiveJobs()).toEqual([]);
+  });
+
+  it("does not label an exhausted interrupted task active unless its accepted operation can resume", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.db
+      .prepare(
+        "UPDATE jobs SET state='interrupted',attempt=max_attempts,next_run_at=NULL WHERE id=?",
+      )
+      .run(job.id);
+    expect(f.store.listActiveJobs()).toEqual([]);
+    f.db
+      .prepare("UPDATE jobs SET next_run_at=?,waiting_for_completion=1 WHERE id=?")
+      .run(new Date().toISOString(), job.id);
+    expect(f.store.listActiveJobs().map((value) => value.id)).toEqual([job.id]);
+  });
+
+  it.each([
+    "page=0",
+    "page=1.5",
+    "pageSize=101",
+    "pageSize=0",
+    "sort=anything",
+    "state=anything",
+    "page=1&page=2",
+    "active=false",
+    "active=true&page=1",
+    "unknown=1",
+  ])("rejects invalid or ambiguous HTTP queries: %s", (text) => {
+    expect(() => parseJobQuery(new URLSearchParams(text))).toThrowError(
+      expect.objectContaining({ code: "INVALID_JOB_QUERY" }),
+    );
+  });
+
+  it("backfills legacy resource locks once and records the version atomically across reopen", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
+    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
+    f.db.exec(
+      "CREATE TABLE backfill_attempts(n INTEGER); INSERT INTO backfill_attempts VALUES(0); CREATE TRIGGER record_backfill BEFORE INSERT ON job_resources BEGIN UPDATE backfill_attempts SET n=n+1; END;",
+    );
+    f.open();
+    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
+    f.open();
+    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
+    expect(
+      f.db.prepare("SELECT count(*) FROM schema_migrations WHERE version=3").pluck().get(),
+    ).toBe(1);
+  });
+
+  it("does not mark a failed legacy backfill complete", () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    const original = f.db.prepare("SELECT operation_json FROM jobs WHERE id=?").pluck().get(job.id);
+    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
+    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
+    f.db.prepare("UPDATE jobs SET operation_json='invalid' WHERE id=?").run(job.id);
+    expect(() => f.open()).toThrow();
+    expect(f.db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()).toBeUndefined();
+    expect(f.db.prepare("SELECT 1 FROM job_resources WHERE job_id=?").get(job.id)).toBeUndefined();
+    f.db.prepare("UPDATE jobs SET operation_json=? WHERE id=?").run(original, job.id);
+    f.open();
+    expect(f.db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()).toBeTruthy();
+  });
+
+  it("serializes simultaneous process startup so the legacy lock backfill runs only once", async () => {
+    const f = fixture();
+    const job = f.store.enqueueOperation(operation(), "admin");
+    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
+    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
+    f.db.exec(
+      "CREATE TABLE backfill_attempts(n INTEGER); INSERT INTO backfill_attempts VALUES(0); CREATE TRIGGER record_backfill BEFORE INSERT ON job_resources BEGIN UPDATE backfill_attempts SET n=n+1; END;",
+    );
+    const code =
+      "import Database from 'better-sqlite3';import {ensureJobSchema} from './src/server/jobs/store.ts';const d=new Database(process.argv[1]);d.pragma('busy_timeout=10000');ensureJobSchema(d);d.close();";
+    const run = () =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "-e", code, f.path],
+          { cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        let error = "";
+        child.stderr.on("data", (value) => (error += String(value)));
+        child.once("error", reject);
+        child.once("close", (status) =>
+          status === 0
+            ? resolve()
+            : reject(new Error(error || `Migration process exited ${status}`)),
+        );
+      });
+    await Promise.all([run(), run()]);
+    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
+    expect(
+      f.db.prepare("SELECT count(*) FROM schema_migrations WHERE version=3").pluck().get(),
+    ).toBe(1);
   });
 });
 

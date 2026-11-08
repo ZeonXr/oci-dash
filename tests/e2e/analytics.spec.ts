@@ -86,6 +86,7 @@ interface AnalyticsFixture {
   trafficFactor: number;
   trafficPartial: boolean;
   failTrafficPost: boolean;
+  failAccounts: boolean;
   costMode: CostMode;
   completedDelayed: number;
   accountsGate?: Promise<void>;
@@ -262,6 +263,7 @@ const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
       trafficFactor: 1,
       trafficPartial: false,
       failTrafficPost: false,
+      failAccounts: false,
       costMode: "normal",
       completedDelayed: 0,
       count(path, method = "GET") {
@@ -307,6 +309,7 @@ const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
           });
         if (method === "GET" && url.pathname === "/api/accounts") {
           if (state.accountsGate) await state.accountsGate;
+          if (state.failAccounts) return json({ error: "模拟账号读取失败" }, 503);
           return json({ accounts, syncJobs: [] });
         }
         if (method === "GET" && url.pathname === "/api/instances") return json({ instances });
@@ -351,6 +354,95 @@ for (const target of [
   { path: "/traffic", accountLabel: "流量账号", regionLabel: "流量区域" },
   { path: "/costs", accountLabel: "成本账号", regionLabel: "成本区域" },
 ]) {
+  test(`${target.path} 日期预设在刷新和恢复可见时更新，自定义范围保持不变`, async ({
+    page,
+    analyticsApi,
+  }) => {
+    const apiPath = `/api/analytics${target.path}`;
+    await page.goto(target.path);
+    const refresh = page.getByRole("button", { name: "刷新数据", exact: true });
+    await expect(refresh).toBeEnabled();
+    await page.clock.setFixedTime(new Date("2026-11-08T12:30:00Z"));
+    await refresh.click();
+    await expect.poll(() => analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-08");
+    await page.getByLabel("时间范围", { exact: true }).selectOption("last7");
+    await expect
+      .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
+      .toBe("2026-11-02");
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.clock.setFixedTime(new Date("2026-11-09T12:30:00Z"));
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect
+      .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
+      .toBe("2026-11-03");
+    await expect.poll(() => analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-09");
+    await page.getByLabel("时间范围", { exact: true }).selectOption("custom");
+    await page.getByLabel("开始日期（UTC）", { exact: true }).fill("2026-11-01");
+    await page.getByLabel("结束日期（UTC）", { exact: true }).fill("2026-11-03");
+    await page.getByRole("button", { name: "应用日期", exact: true }).click();
+    await expect.poll(() => analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-03");
+    await expect(refresh).toBeEnabled();
+    await page.clock.setFixedTime(new Date("2026-11-10T12:30:00Z"));
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await refresh.click();
+    await expect.poll(() => analyticsApi.count(apiPath, "POST")).toBe(1);
+    expect(analyticsApi.latest(apiPath)?.query.get("startDate")).toBe("2026-11-01");
+    expect(analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-03");
+    await expect(page.getByLabel("时间范围", { exact: true })).toHaveValue("custom");
+  });
+
+  test(`${target.path} 常驻页面跨UTC日界时自动更新今天`, async ({ page, analyticsApi }) => {
+    const apiPath = `/api/analytics${target.path}`;
+    await page.clock.install({ time: new Date("2026-11-30T23:59:58Z") });
+    await page.goto(target.path);
+    await page.getByLabel("时间范围", { exact: true }).selectOption("today");
+    await expect
+      .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
+      .toBe("2026-11-30");
+    await expect(page.getByRole("button", { name: "刷新数据", exact: true })).toBeEnabled();
+    await page.clock.fastForward(3000);
+    await expect
+      .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
+      .toBe("2026-12-01");
+    expect(analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-12-01");
+    expect(analyticsApi.count(apiPath, "POST")).toBe(0);
+  });
+
+  test(`${target.path} 首次账号读取失败保留账号链接并可原范围重试`, async ({
+    page,
+    analyticsApi,
+  }) => {
+    analyticsApi.failAccounts = true;
+    await page.goto(`${target.path}?accountId=${accounts[0].id}`);
+    await expect(page.locator("#main-content .alert-error")).toContainText("账号读取失败");
+    await expect(page.getByRole("heading", { name: "先添加 OCI 账号", exact: true })).toHaveCount(
+      0,
+    );
+    await expect(page).toHaveURL((url) => url.searchParams.get("accountId") === accounts[0].id);
+    await expect(page.getByLabel(target.accountLabel, { exact: true })).toBeDisabled();
+    expect(analyticsApi.count(`/api/analytics${target.path}`)).toBe(0);
+    analyticsApi.failAccounts = false;
+    await page.locator("#main-content .alert-error").getByRole("button", { name: "重试" }).click();
+    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveValue(accounts[0].id);
+    await expect(page.locator("#main-content .alert-error")).toHaveCount(0);
+    await expect
+      .poll(() => analyticsApi.latest(`/api/analytics${target.path}`)?.query.get("accountId"))
+      .toBe(accounts[0].id);
+    await expect(page).toHaveURL((url) => url.searchParams.get("accountId") === accounts[0].id);
+  });
+
   test(`${target.path} 总览账号链接等待校验，切换、前进后退和重载保留请求范围`, async ({
     page,
     analyticsApi,
@@ -619,6 +711,23 @@ test("月成本默认过去12完整月，自定义拒绝非完整月", async ({ 
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
     .toBe("2026-09-01");
   expect(analyticsApi.latest("/api/analytics/costs")?.query.get("endDate")).toBe("2026-09-30");
+});
+
+test("月成本常驻跨月后滚动过去12个完整月", async ({ page, analyticsApi }) => {
+  await page.clock.install({ time: new Date("2026-11-30T23:59:58Z") });
+  await page.goto("/costs");
+  await page.getByLabel("成本统计粒度", { exact: true }).selectOption("monthly");
+  await expect
+    .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
+    .toBe("2025-11-01");
+  expect(analyticsApi.latest("/api/analytics/costs")?.query.get("endDate")).toBe("2026-10-31");
+  await expect(page.getByRole("button", { name: "刷新数据", exact: true })).toBeEnabled();
+  await page.clock.fastForward(3000);
+  await expect
+    .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
+    .toBe("2025-12-01");
+  expect(analyticsApi.latest("/api/analytics/costs")?.query.get("endDate")).toBe("2026-11-30");
+  await expect(page.getByLabel("时间范围", { exact: true })).toHaveValue("last12Months");
 });
 
 for (const pageName of ["traffic", "costs"] as const) {

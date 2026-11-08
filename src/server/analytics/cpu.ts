@@ -22,6 +22,11 @@ interface Selection {
   account: AccountSummary;
   access: Access;
 }
+interface PendingCpuQuery {
+  value: Promise<CpuReport>;
+  controller: AbortController;
+  waiters: number;
+}
 export type CpuClientFactory = (
   credentials: OciCredentials,
   region: string,
@@ -97,15 +102,20 @@ function accountFilter(input: unknown): string | undefined {
 function stopError() {
   return new Error("CPU query deadline reached");
 }
-function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+const cancelled = () => new AppError("CPU 查询已取消", 499, "CPU_CANCELLED");
+function bounded<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+  reason: () => Error = stopError,
+): Promise<T> {
   if (signal.aborted) {
     void promise.catch(() => undefined);
-    return Promise.reject(stopError());
+    return Promise.reject(reason());
   }
   return new Promise<T>((resolve, reject) => {
     const abort = () => {
       signal.removeEventListener("abort", abort);
-      reject(stopError());
+      reject(reason());
     };
     signal.addEventListener("abort", abort, { once: true });
     promise.then(
@@ -334,13 +344,18 @@ export function createCpuService(options: CpuServiceOptions = {}) {
     throw new Error("CPU deadline must be positive");
   const limited = rpcLimiter();
   const cache = new Map<string, CpuReport>();
-  const inflight = new Map<string, Promise<CpuReport>>();
+  const inflight = new Map<string, PendingCpuQuery>();
   function assertCurrent(selected: Selection[]) {
     if (selected.some((item) => !current(item.account.id, item.access.revision)))
       throw new AppError("账号配置已变更，请重新查询", 409, "ACCOUNT_CHANGED");
   }
   return {
-    async query(input: unknown, force = false): Promise<CpuReport> {
+    query: async function query(
+      input: unknown,
+      force = false,
+      callerSignal?: AbortSignal,
+    ): Promise<CpuReport> {
+      if (callerSignal?.aborted) throw cancelled();
       const accountId = accountFilter(input),
         time = now();
       if (!Number.isFinite(time) || !Number.isFinite(new Date(time).getTime()))
@@ -402,12 +417,25 @@ export function createCpuService(options: CpuServiceOptions = {}) {
         ]),
       ]);
       assertCurrent(selected);
+      const subscribe = async (entry: PendingCpuQuery): Promise<CpuReport> => {
+        entry.waiters++;
+        try {
+          const report = callerSignal
+            ? await bounded(entry.value, callerSignal, cancelled)
+            : await entry.value;
+          assertCurrent(selected);
+          return structuredClone(report);
+        } finally {
+          entry.waiters--;
+          if (!entry.waiters) entry.controller.abort(cancelled());
+        }
+      };
       const pending = inflight.get(key);
-      if (pending) {
-        const value = await pending;
-        assertCurrent(selected);
-        return structuredClone(value);
+      if (pending?.controller.signal.reason?.code === "CPU_CANCELLED") {
+        await pending.value.catch(() => undefined);
+        return query(input, force, callerSignal);
       }
+      if (pending) return subscribe(pending);
       const cached = cache.get(key);
       if (
         cached &&
@@ -417,10 +445,10 @@ export function createCpuService(options: CpuServiceOptions = {}) {
         return { ...structuredClone(cached), cached: true };
       if (inflight.size >= 4)
         throw new AppError("已有 CPU 查询正在执行，请稍后重试", 429, "CPU_BUSY");
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      timer.unref();
       const promise = (async () => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        timer.unref();
         const rows = targets.map(({ instance }) => rowFor(instance, start));
         const failures = new Set<number>(),
           warnings = new Set<string>();
@@ -494,6 +522,7 @@ export function createCpuService(options: CpuServiceOptions = {}) {
         } finally {
           clearTimeout(timer);
         }
+        if (controller.signal.reason?.code === "CPU_CANCELLED") throw cancelled();
         const statuses: AnalyticsAccountStatus[] = selected.map(({ account }) => {
           const indices = targets.flatMap((target, index) =>
             target.instance.accountId === account.id ? [index] : [],
@@ -528,12 +557,15 @@ export function createCpuService(options: CpuServiceOptions = {}) {
         cache.set(key, structuredClone(result));
         return result;
       })();
-      inflight.set(key, promise);
-      try {
-        return structuredClone(await promise);
-      } finally {
-        if (inflight.get(key) === promise) inflight.delete(key);
-      }
+      const entry: PendingCpuQuery = { value: promise, controller, waiters: 0 };
+      inflight.set(key, entry);
+      void promise
+        .finally(() => {
+          clearTimeout(timer);
+          if (inflight.get(key) === entry) inflight.delete(key);
+        })
+        .catch(() => undefined);
+      return subscribe(entry);
     },
   };
 }

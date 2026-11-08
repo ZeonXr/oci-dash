@@ -35,7 +35,7 @@ type InstanceView = "table" | "cards";
 const viewPreference = "oci-dash:instances:view";
 
 function InstancesContent() {
-  const { accounts, accountsLoading } = useApp();
+  const { accounts, accountsReady, accountsError, reloadAccounts } = useApp();
   const params = useSearchParams();
   const resource = useResource<{ instances: InstanceSummary[] }>("/api/instances", 30000);
   const [query, setQuery] = useState(params.get("q") || "");
@@ -68,7 +68,7 @@ function InstancesContent() {
   const sync = useInventoryRefresh({
     accountIds: account ? [account] : undefined,
     onUpdated: resource.reload,
-    enabled: !accountsLoading,
+    enabled: accountsReady,
   });
   const requestedQuery = params.get("q") || "";
   const requestedRegion = params.get("region") || "";
@@ -150,18 +150,21 @@ function InstancesContent() {
         <RefreshButton
           onClick={sync.refresh}
           loading={resource.refreshing || sync.refreshing}
-          disabled={accountsLoading || !accounts.length}
+          disabled={!accountsReady || !accounts.length}
         />
         <Button
           variant="primary"
           icon={<Plus size={16} />}
-          disabled={!accounts.length}
-          title={!accounts.length ? "请先添加 OCI 账号" : undefined}
+          disabled={!accountsReady || !accounts.length}
+          title={accountsReady && !accounts.length ? "请先添加 OCI 账号" : undefined}
           onClick={() => setCreating(true)}
         >
           创建实例
         </Button>
       </PageHeader>
+      {accountsError && (
+        <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
+      )}
       {(resource.error || sync.error) && (
         <div style={{ marginBottom: 18 }}>
           <ErrorState message={sync.error || resource.error!} retry={sync.refresh} />
@@ -188,7 +191,7 @@ function InstancesContent() {
         <Select
           aria-label="筛选账号"
           value={account}
-          disabled={accountsLoading}
+          disabled={!accountsReady}
           onChange={(e) => setAccount(e.target.value)}
         >
           <option value="">全部账号</option>

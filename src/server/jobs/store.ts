@@ -7,9 +7,12 @@ import type {
   JobState,
   JobSummary,
   InventoryRefreshResult,
+  JobListQuery,
+  JobPage,
   OperationKind,
   OperationRequest,
 } from "@/lib/contracts";
+import { operationLabels } from "@/lib/operation-labels";
 
 const kinds = new Set<OperationKind>([
   "sync-account",
@@ -37,6 +40,12 @@ export const COMPLETION_TIMEOUT_MESSAGE =
 const PRIVATE_KEY = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g;
 const secretField =
   /(?:private[_-]?key|password|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|^secret$|^credentials?$|^cookies?$)/i;
+const queryFunctions = new WeakSet<Database.Database>();
+const pendingCondition = (alias: string) =>
+  `(${alias}.state IN ('queued','running','retrying','cancel_requested') OR (${alias}.state='interrupted' AND ${alias}.next_run_at IS NOT NULL AND (${alias}.waiting_for_completion=1 OR ${alias}.attempt<${alias}.max_attempts)))`;
+const labelCase = `CASE kind ${Object.entries(operationLabels)
+  .map(([kind, label]) => `WHEN '${kind}' THEN '${label.replaceAll("'", "''")}'`)
+  .join(" ")} ELSE kind END`;
 
 export class JobError extends Error {
   constructor(
@@ -194,6 +203,7 @@ function resourceKeys(operation: OperationRequest): string[] {
 }
 export function ensureJobSchema(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
       region TEXT NOT NULL, resource_id TEXT, resource_lock TEXT NOT NULL,
@@ -233,7 +243,8 @@ export function ensureJobSchema(db: Database.Database): void {
       manual_job_id TEXT
     );
   `);
-  // Backfill locks for jobs saved before a worker was started or after a schema upgrade.
+  // Column checks retain compatibility with old databases. Resource-lock backfill
+  // runs once per database, under the same cross-process migration transaction.
   db.transaction(() => {
     const columns = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
     if (!columns.some((column) => column.name === "background"))
@@ -247,15 +258,26 @@ export function ensureJobSchema(db: Database.Database): void {
     db.exec(
       "CREATE INDEX IF NOT EXISTS jobs_background_history ON jobs(account_id,background,finished_at)",
     );
-    const insert = db.prepare(
-      "INSERT OR IGNORE INTO job_resources(job_id,resource_key) VALUES(?,?)",
-    );
-    for (const job of db.prepare("SELECT id,operation_json FROM jobs").all() as {
-      id: string;
-      operation_json: string;
-    }[]) {
-      for (const key of resourceKeys(JSON.parse(job.operation_json) as OperationRequest))
-        insert.run(job.id, key);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS jobs_manual_history
+        ON jobs(created_at DESC,id DESC) WHERE background=0;
+      CREATE INDEX IF NOT EXISTS jobs_manual_resource_history
+        ON jobs(account_id,resource_id,created_at DESC,id DESC) WHERE background=0;
+    `);
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()) {
+      const insert = db.prepare(
+        "INSERT OR IGNORE INTO job_resources(job_id,resource_key) VALUES(?,?)",
+      );
+      for (const job of db.prepare("SELECT id,operation_json FROM jobs").all() as {
+        id: string;
+        operation_json: string;
+      }[]) {
+        for (const key of resourceKeys(JSON.parse(job.operation_json) as OperationRequest))
+          insert.run(job.id, key);
+      }
+      db.prepare("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?)").run(
+        new Date().toISOString(),
+      );
     }
   }).immediate();
 }
@@ -269,6 +291,14 @@ export function createJobStore({
   if (!Number.isFinite(completionTimeoutMs) || completionTimeoutMs <= 0)
     throw new JobError("The completion timeout must be finite and positive.", "INVALID_TIMEOUT");
   ensureJobSchema(db);
+  if (!queryFunctions.has(db)) {
+    // Keep the previous JavaScript includes semantics, including Unicode case
+    // folding and literal %/_ characters, while filtering before pagination.
+    db.function("job_search_includes", { deterministic: true }, (text, query) =>
+      String(text).toLowerCase().includes(String(query).toLowerCase()) ? 1 : 0,
+    );
+    queryFunctions.add(db);
+  }
   const timestamp = () => now().toISOString();
   const row = (id: string) =>
     db.prepare("SELECT * FROM jobs WHERE id=?").get(id) as JobRow | undefined;
@@ -948,6 +978,64 @@ export function createJobStore({
           .all(
             Math.max(1, Math.min(1000, Math.floor(Number.isFinite(limit) ? limit : 100))),
           ) as JobRow[]
+      ).map(summary);
+    },
+    queryJobs(input: JobListQuery): JobPage {
+      const conditions = ["background=0"];
+      const values: (string | number)[] = [];
+      for (const [column, value] of [
+        ["account_id", input.accountId],
+        ["resource_id", input.resourceId],
+        ["state", input.state],
+      ]) {
+        if (value) {
+          conditions.push(`${column}=?`);
+          values.push(value);
+        }
+      }
+      if (input.query) {
+        conditions.push(
+          `job_search_includes(id || ' ' || ${labelCase} || ' ' || account_name || ' ' || COALESCE(resource_id,'') || ' ' || COALESCE(last_error,''), ?)`,
+        );
+        values.push(input.query);
+      }
+      const where = conditions.join(" AND ");
+      const order = input.sort === "ascending" ? "ASC" : "DESC";
+      return db.transaction(() => {
+        const total = db
+          .prepare(`SELECT count(*) FROM jobs WHERE ${where}`)
+          .pluck()
+          .get(...values) as number;
+        const pageSize = Math.max(1, Math.min(100, input.pageSize));
+        const page = Math.max(1, Math.min(input.page, Math.max(1, Math.ceil(total / pageSize))));
+        const rows = db
+          .prepare(
+            `SELECT * FROM jobs WHERE ${where} ORDER BY created_at ${order},id ${order} LIMIT ? OFFSET ?`,
+          )
+          .all(...values, pageSize, (page - 1) * pageSize) as JobRow[];
+        return { jobs: rows.map(summary), total, page, pageSize };
+      })();
+    },
+    listActiveJobs(): JobSummary[] {
+      return (
+        db
+          .prepare(
+            `
+        SELECT j.* FROM jobs j WHERE j.background=0 AND (
+          ${pendingCondition("j")} OR (
+            j.state='succeeded' AND EXISTS (
+              SELECT 1 FROM jobs sync
+              WHERE sync.id=json_extract(j.result_json,'$.synchronization.jobId')
+                AND sync.account_id=j.account_id
+                AND sync.kind='sync-account'
+                AND json_extract(j.result_json,'$.synchronization.status')='queued'
+                AND ${pendingCondition("sync")}
+            )
+          )
+        ) ORDER BY j.created_at DESC,j.id DESC
+      `,
+          )
+          .all() as JobRow[]
       ).map(summary);
     },
     getJobEvents(id: string): JobEvent[] {

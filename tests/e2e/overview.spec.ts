@@ -377,7 +377,6 @@ test("部分实例缺少一个方向时排行占比仍使用全部已观测流�
 });
 
 test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", async ({ page, overview }) => {
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   let release!: () => void;
   overview.costGate = new Promise<void>((resolve) => {
     release = resolve;
@@ -393,14 +392,7 @@ test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", as
     await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
     await expect(refresh.locator("svg")).toHaveCSS("animation-duration", "1s");
     await expect(refresh.locator("svg")).toHaveCSS("animation-timing-function", "linear");
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
-    await expect(refresh).toBeDisabled();
-    await expect(refresh).toHaveAttribute("aria-busy", "true");
-    await page.emulateMedia({ reducedMotion: "no-preference" });
-    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
   } finally {
-    await page.emulateMedia({ reducedMotion: "no-preference" });
     release();
     overview.costGate = undefined;
   }

@@ -36,6 +36,9 @@ import {
   getJob,
   getJobEvents,
   listJobs,
+  queryJobs,
+  listInstanceJobs,
+  parseJobQuery,
   cancelJob,
   retryJob,
   getWorkerStatus,
@@ -109,7 +112,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         path === "analytics/traffic"
           ? await analyticsService.traffic(input, method === "POST", request.signal)
           : path === "analytics/cpu"
-            ? await cpuService.query(input, method === "POST")
+            ? await cpuService.query(input, method === "POST", request.signal)
             : await analyticsService.costs(input, method === "POST", request.signal);
       return json(report);
     }
@@ -268,7 +271,10 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       audit(user.username, operation.kind, operation.resourceId ?? account.name, "操作已排队");
       return json({ job }, 202);
     }
-    if (method === "GET" && path === "jobs") return json({ jobs: listJobs() });
+    if (method === "GET" && path === "jobs") {
+      const query = parseJobQuery(url.searchParams);
+      return json(query === "active" ? listInstanceJobs() : queryJobs(query));
+    }
     if (segments[0] === "jobs" && segments[1]) {
       const id = segments[1],
         job = getJob(id);

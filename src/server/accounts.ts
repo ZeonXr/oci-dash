@@ -1,9 +1,7 @@
 import { randomUUID, createPrivateKey, createPublicKey, createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
 import type { AccountSummary } from "@/lib/contracts";
 import type { OciCredentials } from "./oci/types";
-import { getDatabase, getOrm, audit } from "./db";
-import { accounts } from "./schema";
+import { getDatabase, audit } from "./db";
 import { encryptSecret, decryptSecret } from "./crypto";
 import { AppError } from "./errors";
 
@@ -17,22 +15,38 @@ export interface AccountInput {
   privateKey: string;
 }
 export type AccountPatchInput = Partial<AccountInput> & { recoverConsoleCleanup?: boolean };
-function publicAccount(row: typeof accounts.$inferSelect): AccountSummary {
+type AccountRecord = AccountSummary & { credential: string; revision: number };
+type AccountRow = Omit<AccountRecord, "regions"> & { regions: string };
+const accountColumns = `id,name,tenancy_id AS tenancyId,user_id AS userId,fingerprint,
+  home_region AS homeRegion,regions,credential,status,last_sync_at AS lastSyncAt,
+  last_error AS lastError,created_at AS createdAt,revision`;
+
+function readAccount(row: AccountRow): AccountRecord {
+  return { ...row, regions: JSON.parse(row.regions) as string[] };
+}
+function storedAccount(id: string): AccountRecord | undefined {
+  const row = getDatabase().prepare(`SELECT ${accountColumns} FROM accounts WHERE id=?`).get(id) as
+    AccountRow | undefined;
+  return row && readAccount(row);
+}
+function publicAccount(row: AccountRecord): AccountSummary {
   const { credential: _secret, revision: _revision, ...rest } = row;
-  return { ...rest, status: rest.status as AccountSummary["status"] };
+  return rest;
 }
 export function listAccounts(): AccountSummary[] {
-  return getOrm().select().from(accounts).all().map(publicAccount);
+  return (getDatabase().prepare(`SELECT ${accountColumns} FROM accounts`).all() as AccountRow[])
+    .map(readAccount)
+    .map(publicAccount);
 }
 export function getAccount(id: string): AccountSummary | null {
-  const row = getOrm().select().from(accounts).where(eq(accounts.id, id)).get();
+  const row = storedAccount(id);
   return row ? publicAccount(row) : null;
 }
 export function getCredentialSnapshot(
   id: string,
   region?: string,
 ): { credentials: OciCredentials; revision: number } {
-  const row = getOrm().select().from(accounts).where(eq(accounts.id, id)).get();
+  const row = storedAccount(id);
   if (!row) throw new AppError("账号不存在", 404, "ACCOUNT_NOT_FOUND");
   const chosen = region || row.homeRegion;
   if (!row.regions.includes(chosen) && chosen !== row.homeRegion)
@@ -128,28 +142,31 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
   return getDatabase()
     .transaction(() => {
       assertUniqueTenancy(input.tenancyId);
-      getOrm()
-        .insert(accounts)
-        .values({
+      getDatabase()
+        .prepare(
+          `INSERT INTO accounts
+          (id,name,tenancy_id,user_id,fingerprint,home_region,regions,credential,status,created_at)
+          VALUES(@id,@name,@tenancyId,@userId,@fingerprint,@homeRegion,@regions,@credential,@status,@createdAt)`,
+        )
+        .run({
           id,
           name: input.name,
           tenancyId: input.tenancyId,
           userId: input.userId,
           fingerprint: input.fingerprint.toLowerCase(),
           homeRegion: input.homeRegion,
-          regions: [...new Set([input.homeRegion, ...input.regions])],
+          regions: JSON.stringify([...new Set([input.homeRegion, ...input.regions])]),
           credential: encryptSecret(input.privateKey.trim()),
           status: "unchecked",
           createdAt,
-        })
-        .run();
+        });
       audit(actor, "account.create", input.name, "账号配置已保存");
       return getAccount(id)!;
     })
     .immediate();
 }
 export function updateAccount(id: string, input: AccountPatchInput, actor: string): AccountSummary {
-  const existing = getOrm().select().from(accounts).where(eq(accounts.id, id)).get();
+  const existing = storedAccount(id);
   if (!existing) throw new AppError("账号不存在", 404);
   const credentialChanged = !!input.privateKey;
   if (
@@ -181,7 +198,7 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
       400,
       "CONSOLE_RECOVERY_SCOPE_MISMATCH",
     );
-  const changes: Partial<typeof accounts.$inferInsert> = {
+  const changes: Partial<AccountRecord> = {
     name: input.name ?? existing.name,
     homeRegion,
     regions,
@@ -198,8 +215,7 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
     });
   getDatabase()
     .transaction(() => {
-      const current = getDatabase().prepare("SELECT revision FROM accounts WHERE id=?").get(id) as
-        { revision: number } | undefined;
+      const current = storedAccount(id);
       if (!current || current.revision !== existing.revision)
         throw new AppError("账号配置已变更，请刷新后重试", 409, "ACCOUNT_CHANGED");
       if (input.tenancyId && input.tenancyId !== existing.tenancyId)
@@ -209,7 +225,14 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
         else assertAccountIdle(id);
         changes.revision = existing.revision + 1;
       }
-      getOrm().update(accounts).set(changes).where(eq(accounts.id, id)).run();
+      const next = { ...current, ...changes };
+      getDatabase()
+        .prepare(
+          `UPDATE accounts SET name=@name,tenancy_id=@tenancyId,user_id=@userId,
+          fingerprint=@fingerprint,home_region=@homeRegion,regions=@regions,credential=@credential,
+          status=@status,last_sync_at=@lastSyncAt,last_error=@lastError,revision=@revision WHERE id=@id`,
+        )
+        .run({ ...next, regions: JSON.stringify(next.regions) });
       if (recovering)
         getDatabase()
           .prepare(
@@ -240,7 +263,7 @@ export function deleteAccount(id: string, actor: string): void {
   const db = getDatabase();
   db.transaction(() => {
     assertAccountIdle(id);
-    getOrm().delete(accounts).where(eq(accounts.id, id)).run();
+    db.prepare("DELETE FROM accounts WHERE id=?").run(id);
   }).immediate();
   audit(actor, "account.delete", account.name, "已移除本地配置，云资源未删除");
 }
@@ -250,14 +273,9 @@ export function setAccountStatus(
   error: string | null,
   expectedRevision: number,
 ): boolean {
-  const changes: Partial<typeof accounts.$inferInsert> = { status, lastError: error };
-  return getDatabase()
-    .transaction(() => {
-      const current = getDatabase().prepare("SELECT revision FROM accounts WHERE id=?").get(id) as
-        { revision: number } | undefined;
-      if (!current || current.revision !== expectedRevision) return false;
-      getOrm().update(accounts).set(changes).where(eq(accounts.id, id)).run();
-      return true;
-    })
-    .immediate();
+  return (
+    getDatabase()
+      .prepare("UPDATE accounts SET status=?,last_error=? WHERE id=? AND revision=?")
+      .run(status, error, id, expectedRevision).changes === 1
+  );
 }

@@ -1,6 +1,6 @@
 # 架构与 API
 
-OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
+OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
 
 ## 模块
 
@@ -25,11 +25,13 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI T
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.2.1`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.3.0`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
 
 镜像以 UID/GID `1000:1000` 的 `node` 用户运行，Tini 作为 PID 1；Compose 保留 35 秒停止期限、容器级 `no-new-privileges:true`、`cap_drop: ALL` 和 `local` 日志驱动。Linux 数据目录由部署者预先创建并赋权，Windows Docker Desktop 使用宿主 ACL；入口不以 root 运行或自动更改所有者。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
+
+数据库访问统一使用 `better-sqlite3` 和参数化 SQL。`schema_migrations` 记录一次性升级；任务资源锁的历史回填在版本 3 的迁移事务中完成，后续启动不再遍历全部历史任务。新任务仍在创建事务内写入资源锁。
 
 空数据库默认没有管理员，等待浏览器首次初始化，不生成账号、实例或指标样例。运行代码不读取旧 `DEMO_MODE`，不存在演示开关或假数据分支；测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
 
@@ -61,6 +63,8 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 错误重试预算与 OCI 等待完成分开计数。重启后依据租约、完成期限和检查点恢复；取消不回滚已受理的云操作，手动重试也不是创建无关联的新操作。公共 pending 状态判定包含仍可自动恢复的 `interrupted`。
 
+任务列表在服务端筛选、排序和分页，返回完整筛选结果的总数。实例操作锁使用独立的活动任务查询，包含仍在执行或等待后续同步的任务，不受历史页大小限制。按任务 ID 读取仍可查看全部历史记录。
+
 ## HTTP API
 
 业务 API 使用 JSON；错误通常为 `{error,code}`。除健康检查、首次初始化状态与提交、登录和允许清除过期会话的注销接口外，均要求登录。首次初始化提交仅在未初始化的空数据库中开放；非 GET/HEAD 请求还要求同源。响应不再包含 `demo` 字段；统计与指标的 `source` 只允许 `oci`。
@@ -88,7 +92,9 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 | `GET/POST /api/analytics/costs`                         | 费用报告；按币种分开。                                                                                                                         |
 | `GET/POST /api/analytics/cpu`                           | 仅可选 `accountId`，固定最近 24 个完整 UTC 小时。                                                                                              |
 | `POST /api/operations`                                  | `OperationRequest` → `{job}`，HTTP 202。                                                                                                       |
-| `GET /api/jobs`、`GET /api/jobs/:id`                    | `{jobs}` 或 `{job,events}`。                                                                                                                   |
+| `GET /api/jobs`                                         | 分页查询，返回 `{jobs,total,page,pageSize}`；查询参数见下方。                                                                                  |
+| `GET /api/jobs?active=true`                             | `{jobs,recentJobs}`；`jobs` 为全部活动任务及等待后续同步的父任务；`recentJobs` 保留最近 100 条手动任务供实例恢复操作提示。                     |
+| `GET /api/jobs/:id`                                     | `{job,events}`；读取单个持久任务及事件。                                                                                                       |
 | `POST /api/jobs/:id/cancel`、`POST /api/jobs/:id/retry` | 请求取消或继续现有任务。                                                                                                                       |
 | `GET /api/settings`                                     | `{username,mfaEnabled,version,worker}`。                                                                                                       |
 | `POST /api/settings/password`                           | `{currentPassword,newPassword}`；成功后撤销全部登录会话。                                                                                      |
@@ -97,6 +103,8 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 | `POST /api/settings/mfa/disable`                        | `{password,code}`；需验证密码及验证码/恢复码。                                                                                                 |
 
 具体 DTO 与校验以 [contracts.ts](../src/lib/contracts.ts)、[validation.ts](../src/server/validation.ts)、[analytics-contracts.ts](../src/lib/analytics-contracts.ts) 和 [cpu-contracts.ts](../src/lib/cpu-contracts.ts) 为准。统计口径见[统计说明](ANALYTICS.md)。GET 可能更新本地读取缓存，但不会提交实例或网络写操作。
+
+任务查询接受 `page`、`pageSize`、`query`、`accountId`、`resourceId`、`state` 和 `sort`。默认第 1 页、每页 100 条，每页最多 100 条；任务页默认每页显示 10 条，筛选和页数由服务端结果决定。`sort` 为 `ascending` 或 `descending`，默认后者；`state` 使用 `JobState`。`active=true` 必须单独使用，不与分页或筛选参数组合。重复、未知或无效查询参数返回 HTTP 400。旧的 `/api/jobs` 调用仍能读取 `jobs`，调用者需要完整历史时应处理新的分页字段。
 
 `PATCH /api/accounts/:id` 的控制台清理恢复模式接受 `recoverConsoleCleanup:true`、新 `privateKey` 和 `fingerprint`；如包含 `tenancyId`、`userId`，必须与原账号相同，区域也不得变化。仅在待清理失败会话已无在途工作、账号无未结束任务时允许，返回 `{account,consoleCleanupRecovery:true}`，不排自动同步。该操作保留控制台锁，由后续清理读取新凭据；详见[运维恢复流程](OPERATIONS.md#旧-api-密钥已失效时)。
 

@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
-import type { JobSummary } from "@/lib/contracts";
+import type { JobPage } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
 import { SortableHeader, TablePanel } from "@/components/table";
@@ -11,6 +12,7 @@ import {
   RefreshButton,
   EmptyState,
   ErrorState,
+  LoadingState,
   PageHeader,
   Pagination,
   Select,
@@ -19,37 +21,58 @@ import {
 import { formatDate, operationLabels, shortId, taskHref } from "@/components/format";
 import { RegionLabel } from "@/components/region-label";
 export default function TasksPage() {
-  const { accounts } = useApp();
-  const resource = useResource<{ jobs: JobSummary[] }>("/api/jobs", 5000);
-  const [query, setQuery] = useState("");
-  const [account, setAccount] = useState("");
-  const [state, setState] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [sort, setSort] = useState<"ascending" | "descending">("descending");
-  const jobs = useMemo(
-    () =>
-      (resource.data?.jobs || [])
-        .filter(
-          (job) =>
-            (!account || job.accountId === account) &&
-            (!state || job.state === state) &&
-            [job.id, operationLabels[job.kind], job.accountName, job.resourceId, job.lastError]
-              .join(" ")
-              .toLowerCase()
-              .includes(query.toLowerCase()),
-        )
-        .sort((a, b) => {
-          const order = a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-          return sort === "ascending" ? order : -order;
-        }),
-    [resource.data, query, account, state, sort],
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <TasksContent />
+    </Suspense>
   );
-  useEffect(() => setPage(1), [query, account, state, pageSize, sort]);
-  const safePage = Math.min(page, Math.max(1, Math.ceil(jobs.length / pageSize)));
+}
+
+function positiveInteger(value: string | null, fallback: number): number {
+  return value && /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 1_000_000
+    ? Number(value)
+    : fallback;
+}
+
+function TasksContent() {
+  const { accounts } = useApp();
+  const params = useSearchParams();
+  const query = params.get("query") || "";
+  const account = params.get("accountId") || "";
+  const state = params.get("state") || "";
+  const page = positiveInteger(params.get("page"), 1);
+  const requestedSize = positiveInteger(params.get("pageSize"), 10);
+  const pageSize = [10, 20, 50].includes(requestedSize) ? requestedSize : 10;
+  const sort = params.get("sort") === "ascending" ? "ascending" : "descending";
+  const search = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort });
+  if (query) search.set("query", query);
+  if (account) search.set("accountId", account);
+  if (state) search.set("state", state);
+  const resource = useResource<JobPage>(`/api/jobs?${search}`, 5000);
+  const jobs = resource.data?.jobs || [];
+  const safePage = resource.data?.page ?? page;
+  const total = resource.data?.total ?? 0;
+  const update = (changes: Record<string, string>, replace = false) => {
+    const url = new URL(window.location.href);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
+    window.history[replace ? "replaceState" : "pushState"](
+      null,
+      "",
+      url.pathname + url.search + url.hash,
+    );
+  };
+  const filter = (key: string, value: string, replace = false) =>
+    update({ [key]: value, page: "" }, replace);
   useEffect(() => {
-    if (!resource.loading && page !== safePage) setPage(safePage);
-  }, [page, safePage, resource.loading]);
+    if (!resource.data || resource.data.page === page) return;
+    const url = new URL(window.location.href);
+    if (positiveInteger(url.searchParams.get("page"), 1) !== page) return;
+    url.searchParams.set("page", String(resource.data.page));
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, [page, resource.data]);
   return (
     <>
       <PageHeader title="任务" description="追踪云操作的执行进度、结果与重试记录。">
@@ -69,14 +92,15 @@ export default function TasksPage() {
           <Search size={16} />
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => filter("query", e.target.value, true)}
+            maxLength={200}
             aria-label="搜索任务"
             placeholder="搜索任务、资源或错误"
           />
         </div>
         <Select
           value={account}
-          onChange={(e) => setAccount(e.target.value)}
+          onChange={(e) => filter("accountId", e.target.value)}
           aria-label="按账号筛选任务"
         >
           <option value="">全部账号</option>
@@ -88,7 +112,7 @@ export default function TasksPage() {
         </Select>
         <Select
           value={state}
-          onChange={(e) => setState(e.target.value)}
+          onChange={(e) => filter("state", e.target.value)}
           aria-label="按状态筛选任务"
         >
           <option value="">全部状态</option>
@@ -105,9 +129,7 @@ export default function TasksPage() {
           <Button
             variant="ghost"
             onClick={() => {
-              setQuery("");
-              setAccount("");
-              setState("");
+              update({ query: "", accountId: "", state: "", page: "" });
             }}
           >
             重置筛选
@@ -129,9 +151,9 @@ export default function TasksPage() {
           <Pagination
             page={safePage}
             pageSize={pageSize}
-            total={jobs.length}
-            onPage={setPage}
-            onPageSize={setPageSize}
+            total={total}
+            onPage={(value) => update({ page: String(value) })}
+            onPageSize={(value) => filter("pageSize", String(value))}
           />
         }
       >
@@ -144,13 +166,13 @@ export default function TasksPage() {
               <SortableHeader
                 label="提交时间"
                 direction={sort}
-                onSort={() => setSort(sort === "ascending" ? "descending" : "ascending")}
+                onSort={() => filter("sort", sort === "ascending" ? "descending" : "ascending")}
               />
               <th scope="col">操作</th>
             </tr>
           </thead>
           <tbody>
-            {jobs.slice((safePage - 1) * pageSize, safePage * pageSize).map((job) => (
+            {jobs.map((job) => (
               <tr key={job.id}>
                 <td>
                   <Link href={taskHref(job.id)} className="name-link">

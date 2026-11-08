@@ -50,7 +50,10 @@ export default function AccountsPage() {
     accounts: AccountSummary[];
     syncJobs?: JobSummary[];
   }>("/api/accounts", pollMs);
-  const inventory = useInventoryRefresh({ onUpdated: resource.reload });
+  const inventory = useInventoryRefresh({
+    onUpdated: resource.reload,
+    enabled: resource.data !== undefined,
+  });
   useEffect(() => {
     const active = resource.data?.syncJobs?.some(pendingSync);
     setPollMs(active ? 3000 : 30000);
@@ -113,7 +116,7 @@ export default function AccountsPage() {
         {action.error && !removing && <ErrorState message={action.error} />}
         {resource.loading ? (
           <LoadingState />
-        ) : resource.data?.accounts.length ? (
+        ) : !resource.data ? null : resource.data.accounts.length ? (
           <div className="grid-3">
             {resource.data.accounts.map((account) => {
               const job = syncJobs.get(account.id);

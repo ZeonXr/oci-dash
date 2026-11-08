@@ -51,16 +51,28 @@ afterEach(() => {
     throw Error("Unexpected cleanup target");
   rmSync(directory, { recursive: true, force: true });
 });
-function request(path: string, method = "GET", signed = true, requestOrigin = origin) {
+function request(
+  path: string,
+  method = "GET",
+  signed = true,
+  requestOrigin = origin,
+  signal?: AbortSignal,
+) {
   const headers: Record<string, string> = {};
   if (signed) headers.Cookie = `${SESSION_COOKIE}=${token}`;
   if (method !== "GET") headers.Origin = requestOrigin;
   return handleApi(
-    new Request(origin + "/api/" + path, { method, headers }),
+    new Request(origin + "/api/" + path, { method, headers, signal }),
     path.split("?")[0].split("/"),
   );
 }
 describe("analytics API boundaries", () => {
+  it("passes HTTP cancellation to the CPU reader before it can access cloud credentials", async () => {
+    const response = await request("analytics/cpu", "GET", true, origin, AbortSignal.abort());
+    expect(response.status).toBe(499);
+    expect(await response.json()).toMatchObject({ code: "CPU_CANCELLED" });
+    expect(forbidden).not.toHaveBeenCalled();
+  });
   it("requires login for all report types", async () => {
     for (const kind of ["traffic", "costs", "cpu"])
       expect((await request(`analytics/${kind}`, "GET", false)).status).toBe(401);

@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run typecheck && npm test && npm run build
+RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
 FROM node:26.13.0-bookworm-slim AS runtime

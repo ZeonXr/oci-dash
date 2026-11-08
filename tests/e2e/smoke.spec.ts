@@ -15,6 +15,7 @@ import {
   fixtureTrafficReport,
 } from "../fixtures/analytics-data";
 import { parseCostQuery, parseTrafficQuery } from "../../src/server/analytics/query";
+import { jobPageFixture } from "../fixtures/job-page";
 
 // Authentication and empty-state checks use a fresh isolated server. Populated
 // screens receive synthetic responses from Playwright, never from the app runtime.
@@ -100,7 +101,7 @@ async function guardNetwork(context: BrowserContext, origin: string, allowSetup 
           if (path === "/api/dashboard") return json(samples);
           if (path === "/api/accounts") return json({ accounts, syncJobs: [] });
           if (path === "/api/instances") return json({ instances });
-          if (path === "/api/jobs") return json({ jobs: samples.jobs });
+          if (path === "/api/jobs") return json(jobPageFixture(samples.jobs, url.searchParams));
           if (path === "/api/settings")
             return json({
               username: process.env.ADMIN_USERNAME,

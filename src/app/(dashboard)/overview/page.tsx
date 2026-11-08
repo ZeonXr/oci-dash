@@ -72,7 +72,7 @@ function PanelContent({
 }
 
 export default function OverviewPage() {
-  const { accounts, accountsLoading } = useApp();
+  const { accounts, accountsLoading, accountsReady, accountsError, reloadAccounts } = useApp();
   const [account, setAccount] = useState("");
   const [period, setPeriod] = useState<Period>("7d");
   const [range, setRange] = useState(() => dateRange("7d"));
@@ -96,7 +96,7 @@ export default function OverviewPage() {
     };
   }, [period]);
   const accountId = accounts.some((item) => item.id === account) ? account : "";
-  const enabled = !accountsLoading && accounts.length > 0;
+  const enabled = accountsReady && accounts.length > 0;
   const query = new URLSearchParams({
     startDate: range.startDate,
     endDate: range.endDate,
@@ -150,7 +150,7 @@ export default function OverviewPage() {
           aria-label="总览账号"
           value={accountId}
           onChange={(event) => setAccount(event.target.value)}
-          disabled={accountsLoading}
+          disabled={!accountsReady}
         >
           <option value="">全部账号</option>
           {accounts.map((item) => (
@@ -193,9 +193,12 @@ export default function OverviewPage() {
           }}
         />
       </PageHeader>
+      {accountsError && (
+        <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
+      )}
       {accountsLoading ? (
         <LoadingState />
-      ) : !accounts.length ? (
+      ) : !accountsReady ? null : !accounts.length ? (
         <Card>
           <EmptyState
             title="添加账号后查看用量"

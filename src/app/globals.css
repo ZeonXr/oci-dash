@@ -2449,9 +2449,6 @@ pre {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none !important;
-  }
   *,
   *::before,
   *::after {

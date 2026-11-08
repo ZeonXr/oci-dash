@@ -1,4 +1,4 @@
-import type { OperationRequest } from "@/lib/contracts";
+import type { JobListQuery, OperationRequest } from "@/lib/contracts";
 import { getDatabase } from "@/server/db";
 import { getAccount } from "@/server/accounts";
 import { createJobStore, type JobStore } from "./store";
@@ -21,6 +21,16 @@ export const enqueueAccountSync = (accountId: string, requestedBy: string) =>
   getJobStore().enqueueAccountSync(accountId, requestedBy);
 export const listAccountSyncJobs = () => getJobStore().listAccountSyncJobs();
 export const listJobs = (limit?: number) => getJobStore().listJobs(limit);
+export const queryJobs = (query: JobListQuery) => getJobStore().queryJobs(query);
+export const listActiveJobs = () => getJobStore().listActiveJobs();
+export function listInstanceJobs() {
+  const store = getJobStore();
+  return getDatabase().transaction(() => ({
+    jobs: store.listActiveJobs(),
+    recentJobs: store.listJobs(),
+  }))();
+}
+export { parseJobQuery } from "./query";
 export const getJob = (id: string) => getJobStore().getJob(id);
 export const getJobEvents = (id: string) => getJobStore().getJobEvents(id);
 export const cancelJob = (id: string) => getJobStore().cancelJob(id);
