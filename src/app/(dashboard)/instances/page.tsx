@@ -15,6 +15,7 @@ import {
 import type { InstanceSummary } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
+import { useAccountFilter } from "@/components/account-filter";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
 import {
@@ -42,7 +43,7 @@ type InstanceView = "table" | "cards";
 const viewPreference = "oci-dash:instances:view";
 
 function InstancesContent() {
-  const { demo, accounts } = useApp();
+  const { demo, accounts, accountsLoading } = useApp();
   const params = useSearchParams();
   const resource = useResource<{ instances: InstanceSummary[]; demo: boolean }>(
     "/api/instances",
@@ -50,7 +51,7 @@ function InstancesContent() {
   );
   const [query, setQuery] = useState(params.get("q") || "");
   const [region, setRegion] = useState(params.get("region") || "");
-  const [account, setAccount] = useState("");
+  const [account, setAccount] = useAccountFilter();
   const [state, setState] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -78,11 +79,14 @@ function InstancesContent() {
   const sync = useInventoryRefresh({
     accountIds: account ? [account] : undefined,
     onUpdated: resource.reload,
+    enabled: !accountsLoading,
   });
+  const requestedQuery = params.get("q") || "";
+  const requestedRegion = params.get("region") || "";
   useEffect(() => {
-    setQuery(params.get("q") || "");
-    setRegion(params.get("region") || "");
-  }, [params]);
+    setQuery(requestedQuery);
+    setRegion(requestedRegion);
+  }, [requestedQuery, requestedRegion]);
   const instances = resource.data?.instances || [];
   const filtered = useMemo(
     () =>
@@ -154,7 +158,11 @@ function InstancesContent() {
           }
           title="当前筛选实例中最新的 OCI 资源快照时间"
         />
-        <Button onClick={sync.refresh} loading={resource.refreshing || sync.refreshing}>
+        <Button
+          onClick={sync.refresh}
+          loading={resource.refreshing || sync.refreshing}
+          disabled={accountsLoading}
+        >
           <RefreshCw size={15} />
           刷新
         </Button>
@@ -191,7 +199,12 @@ function InstancesContent() {
             placeholder="搜索名称、IP 或 OCID"
           />
         </div>
-        <Select aria-label="筛选账号" value={account} onChange={(e) => setAccount(e.target.value)}>
+        <Select
+          aria-label="筛选账号"
+          value={account}
+          disabled={accountsLoading}
+          onChange={(e) => setAccount(e.target.value)}
+        >
           <option value="">全部账号</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>

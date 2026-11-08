@@ -29,6 +29,7 @@ export function AccountDialog({
   const { demo, notify } = useApp();
   const action = useAction();
   const [replaceCredentials, setReplaceCredentials] = useState(!account);
+  const [recoverConsoleCleanup, setRecoverConsoleCleanup] = useState(false);
   const [configText, setConfigText] = useState("");
   const [keyFile, setKeyFile] = useState<File | null>(null);
   const [name, setName] = useState(account?.name ?? "");
@@ -71,9 +72,16 @@ export function AccountDialog({
             name.trim() || account?.name || suggestedName(keyFile) || `OCI-${config.homeRegion}`,
           regions: [...new Set([config.homeRegion, ...selectedRegions])],
           privateKey,
+          ...(account && recoverConsoleCleanup
+            ? {
+                recoverConsoleCleanup: true,
+                homeRegion: account.homeRegion,
+                regions: account.regions,
+              }
+            : {}),
         };
       }
-      return send<{ account: AccountSummary; job?: JobSummary }>(
+      return send<{ account: AccountSummary; job?: JobSummary; consoleCleanupRecovery?: boolean }>(
         account ? `/api/accounts/${encodeURIComponent(account.id)}` : "/api/accounts",
         body,
         account ? "PATCH" : "POST",
@@ -83,11 +91,13 @@ export function AccountDialog({
       setKeyFile(null);
       setConfigText("");
       notify(
-        account
-          ? response.job
-            ? "配置已保存，正在重新连接并同步资源。"
-            : "账号配置已保存。"
-          : "账号已添加，正在连接并同步资源。",
+        response.consoleCleanupRecovery
+          ? "恢复凭据已保存，后台将继续清理控制台。清理完成后请再连接并同步账号。"
+          : account
+            ? response.job
+              ? "配置已保存，正在重新连接并同步资源。"
+              : "账号配置已保存。"
+            : "账号已添加，正在连接并同步资源。",
         response.job ? taskHref(response.job.id) : undefined,
       );
       onSaved();
@@ -113,8 +123,8 @@ export function AccountDialog({
       <textarea
         className="mono"
         rows={2}
-        value={regions}
-        disabled={action.pending}
+        value={recoverConsoleCleanup ? (account?.regions.join("\n") ?? regions) : regions}
+        disabled={action.pending || recoverConsoleCleanup}
         onChange={(event) => setRegions(event.target.value)}
         placeholder={parsedConfig?.homeRegion || account?.homeRegion || "留空时仅同步配置中的区域"}
       />
@@ -164,6 +174,7 @@ export function AccountDialog({
               disabled={action.pending}
               onChange={(event) => {
                 setReplaceCredentials(event.target.checked);
+                if (!event.target.checked) setRecoverConsoleCleanup(false);
                 action.clearError();
               }}
             />
@@ -172,6 +183,25 @@ export function AccountDialog({
         )}
         {replaceCredentials && (
           <>
+            {account && (
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={recoverConsoleCleanup}
+                  disabled={action.pending}
+                  onChange={(event) => {
+                    setRecoverConsoleCleanup(event.target.checked);
+                    action.clearError();
+                  }}
+                />
+                恢复控制台清理（旧 API 密钥已失效）
+              </label>
+            )}
+            {account && recoverConsoleCleanup && (
+              <p className="muted">
+                先断开控制台并等待清理请求结束。仅可上传同一租户、同一用户的新密钥，区域保持原值；控制台占用会在验证清理成功后解除。
+              </p>
+            )}
             <Field
               label="OCI 配置文本"
               required

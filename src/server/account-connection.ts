@@ -1,5 +1,11 @@
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
-import { createAccount, getAccount, updateAccount, type AccountInput } from "./accounts";
+import {
+  createAccount,
+  getAccount,
+  updateAccount,
+  type AccountInput,
+  type AccountPatchInput,
+} from "./accounts";
 import { audit, getDatabase } from "./db";
 import { AppError } from "./errors";
 import { getJobStore } from "./jobs";
@@ -7,6 +13,7 @@ import { getJobStore } from "./jobs";
 export interface AccountConnectionResult {
   account: AccountSummary;
   job?: JobSummary;
+  consoleCleanupRecovery?: boolean;
 }
 
 const regionSet = (account: AccountSummary) =>
@@ -30,7 +37,7 @@ export function createAccountConnection(
 
 export function updateAccountConnection(
   id: string,
-  input: Partial<AccountInput>,
+  input: AccountPatchInput,
   actor: string,
 ): AccountConnectionResult {
   const store = getJobStore();
@@ -39,6 +46,9 @@ export function updateAccountConnection(
       const previous = getAccount(id);
       if (!previous) throw new AppError("账号不存在", 404, "ACCOUNT_NOT_FOUND");
       const account = updateAccount(id, input, actor);
+      // Leave the account free for cleanup retries. Users can sync after the
+      // console's verified deletion has released its slot.
+      if (input.recoverConsoleCleanup) return { account, consoleCleanupRecovery: true };
       const reconnect =
         Boolean(input.privateKey) ||
         account.homeRegion !== previous.homeRegion ||

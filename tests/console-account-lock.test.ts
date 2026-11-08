@@ -47,6 +47,8 @@ beforeEach(() => {
     ownerSessionHash: "test-session",
     state: "connected",
     connectionId: "test-connection",
+    compartmentId: null,
+    credentialRecoveryReady: false,
     creationState: "created",
     createdAt: now,
     expiresAt: now,

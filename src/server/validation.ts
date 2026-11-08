@@ -22,9 +22,10 @@ export const accountSchema = z.object({
   regions: z.array(regionSchema).max(100).default([]),
   privateKey: z.string().min(100, "请选择 API 私钥文件").max(32768),
 });
-export const accountPatchSchema = accountSchema
-  .partial()
-  .extend({ regions: z.array(regionSchema).max(100).optional() });
+export const accountPatchSchema = accountSchema.partial().extend({
+  regions: z.array(regionSchema).max(100).optional(),
+  recoverConsoleCleanup: z.boolean().optional(),
+});
 const port = z.number().int().min(1).max(65535);
 const securityRuleSchema = z
   .object({

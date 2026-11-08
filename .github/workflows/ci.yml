@@ -10,7 +10,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       E2E_BROWSER_CHANNEL: chrome
     steps:
@@ -26,18 +26,13 @@ jobs:
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
-      - run: node scripts/bootstrap.mjs
       - name: Check runner-provided Chrome
         run: google-chrome --version
-      - name: Start local demonstration application
-        run: docker compose up -d --build --wait --wait-timeout 60
+      - name: Build local application image
+        run: docker build -t oci-dash:local .
       - name: Verify isolated container lifecycle
         run: npm run test:runtime
-      - name: Browser smoke tests against Docker
-        run: node --env-file=.env node_modules/@playwright/test/cli.js test
-      - name: Container status
-        if: always()
-        run: docker compose ps && docker compose logs --tail 60 app
-      - name: Clean up CI services
-        if: always()
-        run: docker compose down -v --remove-orphans
+      - name: Verify isolated backup and restore
+        run: npm run test:backup
+      - name: Browser tests in an isolated demonstration deployment
+        run: npm run test:e2e:isolated -- --no-build

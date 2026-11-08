@@ -17,6 +17,7 @@ import {
   consoleTags,
   getConsole,
   listConsoles,
+  legacyConsoleCompartments,
   ownsConsole,
   requireOwnedConsole,
   validateConsoleIdentity,
@@ -79,6 +80,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     sessionId: string,
     signal: AbortSignal,
     knownCompartmentId?: string,
+    onCompartmentVerified?: (compartmentId: string) => void,
   ): Promise<CloudDocument | null> {
     try {
       return await getConsole(clients, id, signal);
@@ -90,14 +92,31 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     // list in the same scope; an access failure or a still-visible ID retains
     // the durable cleanup slot. Never authorize deletion using a list item.
     let compartmentId = knownCompartmentId;
-    if (!compartmentId) {
-      const response = await clients.compute.call("getInstance", { instanceId: target.instanceId });
-      cancelled(signal);
-      if (response.instance?.id !== target.instanceId)
-        throw new CloudError("OCI 返回的实例与控制台目标不一致", "CONSOLE_TARGET_MISMATCH");
-      compartmentId = ocid(response.instance.compartmentId, ["tenancy", "compartment"]);
+    let scopes: string[];
+    if (compartmentId) {
+      scopes = [ocid(compartmentId, ["tenancy", "compartment"])];
+    } else {
+      try {
+        const response = await clients.compute.call("getInstance", {
+          instanceId: target.instanceId,
+        });
+        cancelled(signal);
+        if (response.instance?.id !== target.instanceId)
+          throw new CloudError("OCI 返回的实例与控制台目标不一致", "CONSOLE_TARGET_MISMATCH");
+        compartmentId = ocid(response.instance.compartmentId, ["tenancy", "compartment"]);
+        onCompartmentVerified?.(compartmentId);
+        scopes = [compartmentId];
+      } catch (error) {
+        if (errorStatus(error) !== 404) throw error;
+        // Legacy rows have no verified scope. ACCESSIBLE alone could omit the
+        // original compartment after permission loss. Enumerate ANY and require
+        // successful complete console lists in *every* returned compartment.
+        scopes = await legacyConsoleCompartments(clients, target, signal);
+      }
     }
-    const listed = await listConsoles(clients, target, compartmentId, signal);
+    const listed: CloudDocument[] = [];
+    for (const scope of scopes)
+      listed.push(...(await listConsoles(clients, target, scope, signal)));
     const existing = listed.find((connection) => connection.id === id);
     if (existing) {
       requireOwnedConsole(existing, target, sessionId);
@@ -152,6 +171,8 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     target,
     sessionId,
     connectionId,
+    compartmentId,
+    onCompartmentVerified,
     creationState,
     onCreationResolved,
     signal,
@@ -167,9 +188,22 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       clients = await clientFactory(target.credentials, target.region);
       if (connectionId) {
         // The exact ID was persisted from this create. Re-fetch and verify session,
-        // account and instance immediately before delete; no tenancy-wide scan is needed.
-        const connection = await getForCleanup(clients, connectionId, target, sessionId, signal);
-        if (connection) await removeOwned(clients, connection, target, sessionId, signal);
+        // account and instance immediately before delete. Only legacy rows with
+        // no readable parent or stored compartment require a tenancy-wide scan.
+        const connection = await getForCleanup(
+          clients,
+          connectionId,
+          target,
+          sessionId,
+          signal,
+          compartmentId ?? undefined,
+          onCompartmentVerified,
+        );
+        if (connection) {
+          requireOwnedConsole(connection, target, sessionId);
+          onCompartmentVerified?.(ocid(connection.compartmentId, ["tenancy", "compartment"]));
+          await removeOwned(clients, connection, target, sessionId, signal);
+        }
         if (creationState === "uncertain") onCreationResolved?.();
         return;
       }
@@ -198,6 +232,8 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
         );
         if (!current) continue;
         requireCompartment(current.compartmentId, available);
+        requireOwnedConsole(current, target, sessionId);
+        onCompartmentVerified?.(current.compartmentId);
         await removeOwned(clients, current, target, sessionId, signal);
       }
       if (creationState === "uncertain") {
@@ -223,6 +259,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     sessionId,
     signal,
     onCreationState,
+    onCompartmentVerified,
     onConnectionCreated,
   }: Parameters<ConsoleTransport["start"]>[0]): Promise<ConsoleTunnel> {
     validateConsoleIdentity(target, sessionId);
@@ -232,9 +269,11 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     let connectionId: string | null = null;
     let creationAttempted = false;
     let creationState: ConsoleCreationState = "not_attempted";
+    let compartmentId: string | undefined;
     try {
       clients = await clientFactory(target.credentials, target.region);
-      const compartmentId = await verifyConsoleTarget(clients, target, signal);
+      compartmentId = await verifyConsoleTarget(clients, target, signal);
+      onCompartmentVerified?.(compartmentId);
       const existing = await listConsoles(clients, target, compartmentId, signal);
       if (existing.some((connection) => connection.lifecycleState !== "DELETED")) {
         // Even a same-session record must be cleaned first: it was created with a different key.
@@ -357,6 +396,8 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
           target,
           sessionId,
           connectionId,
+          compartmentId,
+          onCompartmentVerified,
           creationState,
           onCreationResolved() {
             onCreationState?.("created");

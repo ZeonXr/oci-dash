@@ -69,6 +69,7 @@ interface Runtime {
   tunnel?: ConsoleTunnel;
   stream?: Duplex;
   connecting: boolean;
+  localClosed: boolean;
   closing?: Promise<void>;
   cleanupOperation?: Promise<void>;
   lastCleanupAt: number;
@@ -139,6 +140,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         controller: new AbortController(),
         preparePending: false,
         connecting: false,
+        localClosed: true,
         lastCleanupAt: -Infinity,
         terminal: row.state === "failed" ? "failed" : "closed",
         terminalError: row.lastError,
@@ -205,6 +207,11 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
     }
   }
 
+  function allowCredentialRecovery(runtime: Runtime) {
+    if (runtime.preparePending || runtime.cleanupOperation || !runtime.localClosed) return;
+    store.allowCredentialRecovery(runtime.id);
+  }
+
   function cleanup(
     runtime: Runtime,
     terminal: "closed" | "failed" = runtime.terminal,
@@ -220,7 +227,12 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
     if (runtime.closing) return runtime.closing;
     const row = store.get(runtime.id);
     if (!row || row.slot !== 1) return Promise.resolve();
-    store.update(row.id, { state: "closing", cleanupPending: true, lastError: error });
+    store.update(row.id, {
+      state: "closing",
+      cleanupPending: true,
+      credentialRecoveryReady: false,
+      lastError: error,
+    });
     runtime.lastCleanupAt = clock();
     runtime.closing = Promise.resolve().then(async () => {
       const abort = new AbortController();
@@ -232,12 +244,33 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
             if (runtime.preparePending) throw new Error("Console preparation still running");
             if (isDemo()) throw new Error("Cloud cleanup is disabled in demo mode");
             if (runtime.tunnel) await runtime.tunnel.close();
+            runtime.localClosed = true;
             const latest = store.get(runtime.id)!;
-            const target = runtime.target ?? resolveCleanupTarget(latest);
+            // The Web process may have committed a controlled credential recovery.
+            // Read again for every attempt, including retries of an in-memory session.
+            const target = resolveCleanupTarget(latest);
+            if (
+              target.accountId !== latest.accountId ||
+              target.instanceId !== latest.instanceId ||
+              target.region !== latest.region ||
+              (runtime.target &&
+                (target.credentials.tenancyId !== runtime.target.credentials.tenancyId ||
+                  target.credentials.userId !== runtime.target.credentials.userId))
+            )
+              throw new AppError(
+                "控制台清理身份已变更，已拒绝操作",
+                409,
+                "CONSOLE_TARGET_MISMATCH",
+              );
+            runtime.target = target;
             await options.transport.cleanup({
               target,
               sessionId: runtime.id,
               connectionId: latest.connectionId,
+              compartmentId: latest.compartmentId,
+              onCompartmentVerified(compartmentId) {
+                store.update(runtime.id, { compartmentId });
+              },
               creationState: latest.creationState,
               onCreationResolved() {
                 store.update(runtime.id, { creationState: "created" });
@@ -249,6 +282,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
           void operation
             .finally(() => {
               if (runtime.cleanupOperation === operation) runtime.cleanupOperation = undefined;
+              allowCredentialRecovery(runtime);
             })
             .catch(() => undefined);
         }
@@ -266,11 +300,13 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         store.update(runtime.id, {
           state: "failed",
           cleanupPending: true,
+          credentialRecoveryReady: false,
           lastError:
             error instanceof CloudError && error.code === "CONSOLE_CREATE_UNCERTAIN"
               ? "OCI 创建结果仍不明确，已保留会话并将继续核对清理。"
               : "控制台清理尚未完成，将自动重试；也可再次关闭会话重试。",
         });
+        allowCredentialRecovery(runtime);
       } finally {
         runtime.closing = undefined;
       }
@@ -284,6 +320,9 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         target: runtime.target!,
         sessionId: runtime.id,
         signal: runtime.controller.signal,
+        onCompartmentVerified(compartmentId) {
+          store.update(runtime.id, { compartmentId });
+        },
         onCreationState(creationState) {
           store.update(runtime.id, { creationState });
         },
@@ -401,6 +440,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         ownerSessionHash: actor.sessionHash,
         state: "preparing",
         connectionId: null,
+        compartmentId: null,
         creationState: "not_attempted",
         createdAt: now,
         expiresAt: new Date(clock() + limits.maxDurationMs).toISOString(),
@@ -408,6 +448,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         readyAt: null,
         lastError: null,
         cleanupPending: false,
+        credentialRecoveryReady: false,
         slot: 1,
       };
       store.reserve(row, () => {
@@ -424,6 +465,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
       });
       const runtime = runtimeFor(row);
       runtime.target = target;
+      runtime.localClosed = false;
       runtime.preparePending = true;
       runtime.prepared = Promise.resolve().then(() => prepare(runtime));
       return consoleSummary(row);

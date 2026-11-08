@@ -73,6 +73,26 @@ export async function consoleCompartments(
   return compartments(clients, target.credentials, context(signal));
 }
 
+/** Legacy cleanup needs all compartments, not a permission-filtered accessible subset. */
+export async function legacyConsoleCompartments(
+  clients: OciClients,
+  target: ConsoleTarget,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const root = ocid(target.credentials.tenancyId, "tenancy");
+  const all = await allPages(
+    clients.identity,
+    "listCompartments",
+    {
+      compartmentId: root,
+      compartmentIdInSubtree: true,
+      accessLevel: "ANY",
+    },
+    context(signal),
+  );
+  return [...new Set([root, ...all.map((row) => ocid(row.id, "compartment"))])];
+}
+
 export async function verifyConsoleTarget(
   clients: OciClients,
   target: ConsoleTarget,

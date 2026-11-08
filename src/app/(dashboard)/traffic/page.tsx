@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowDownToLine, ArrowUpFromLine, ArrowLeftRight, RefreshCw } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { TrafficReport } from "@/lib/analytics-contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
+import { useAccountFilter } from "@/components/account-filter";
 import { useAnalytics } from "@/components/analytics-query";
 import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart, analyticsNumber, utcTimestamp } from "@/components/analytics-chart";
@@ -32,13 +33,17 @@ const gib = (value: number | null | undefined) => (value == null ? null : value 
 const totalBytes = (received: number | null, sent: number | null) =>
   received == null || sent == null ? null : received + sent;
 
-export default function TrafficPage() {
+function TrafficContent() {
   const { accounts, accountsLoading } = useApp();
   const inventory = useResource<{ instances: InstanceSummary[] }>("/api/instances");
-  const [account, setAccount] = useState("");
-  const [region, setRegion] = useState("");
-  const [instance, setInstance] = useState("");
-  const [vnic, setVnic] = useState("");
+  const [account, setAccount] = useAccountFilter();
+  const [filters, setFilters] = useState({ account, region: "", instance: "", vnic: "" });
+  // History navigation can change account without invoking the select handler.
+  // Never send another account's dependent filters with the new query.
+  const { region, instance, vnic } =
+    filters.account === account ? filters : { region: "", instance: "", vnic: "" };
+  const changeFilters = (updates: Partial<{ region: string; instance: string; vnic: string }>) =>
+    setFilters({ account, region, instance, vnic, ...updates });
   const [range, setRange] = useState(() => analyticsRange("month"));
   const [granularity, setGranularity] = useState<"hourly" | "daily">("daily");
   const [page, setPage] = useState(1);
@@ -115,11 +120,10 @@ export default function TrafficPage() {
           <Select
             aria-label="流量账号"
             value={account}
+            disabled={accountsLoading}
             onChange={(event) => {
               setAccount(event.target.value);
-              setRegion("");
-              setInstance("");
-              setVnic("");
+              setFilters({ account: event.target.value, region: "", instance: "", vnic: "" });
             }}
           >
             <option value="">全部账号</option>
@@ -133,9 +137,7 @@ export default function TrafficPage() {
             aria-label="流量区域"
             value={region}
             onChange={(event) => {
-              setRegion(event.target.value);
-              setInstance("");
-              setVnic("");
+              changeFilters({ region: event.target.value, instance: "", vnic: "" });
             }}
           >
             <option value="">全部区域</option>
@@ -149,8 +151,7 @@ export default function TrafficPage() {
             aria-label="流量实例"
             value={instance}
             onChange={(event) => {
-              setInstance(event.target.value);
-              setVnic("");
+              changeFilters({ instance: event.target.value, vnic: "" });
             }}
           >
             <option value="">全部实例</option>
@@ -163,7 +164,7 @@ export default function TrafficPage() {
           <Select
             aria-label="流量网卡"
             value={vnic}
-            onChange={(event) => setVnic(event.target.value)}
+            onChange={(event) => changeFilters({ vnic: event.target.value })}
           >
             <option value="">全部网卡</option>
             {vnics.map((item) => (
@@ -370,5 +371,13 @@ export default function TrafficPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+export default function TrafficPage() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <TrafficContent />
+    </Suspense>
   );
 }

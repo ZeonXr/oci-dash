@@ -78,6 +78,7 @@ interface RefreshFixture {
   failedRequests: string[];
   unexpected: string[];
   jobsGate?: Promise<void>;
+  accountsGate?: Promise<void>;
   refreshGate?: Promise<void>;
   instancesGate?: Promise<void>;
   jobGates: Map<string, Promise<void>>;
@@ -223,12 +224,14 @@ const test = base.extend<{ refreshApi: RefreshFixture }>({
           user: { id: "refresh-user", username: "fixture", mfaEnabled: false },
           demo: false,
         });
-      if (method === "GET" && path === "/api/accounts")
+      if (method === "GET" && path === "/api/accounts") {
+        if (state.accountsGate) await state.accountsGate;
         return json({
           accounts: state.accounts,
           syncJobs: state.syncJobs,
           demo: false,
         });
+      }
       if (method === "GET" && path === "/api/instances") {
         const snapshot = structuredClone(state.rows);
         state.activeInstanceReads++;
@@ -410,6 +413,71 @@ async function advance(page: Page, fixture: RefreshFixture, milliseconds = 1100)
   fixture.now += milliseconds;
   await page.clock.runFor(milliseconds);
 }
+
+test("实例总览账号链接校验后限定同步，历史切换保留搜索并可重载", async ({ page, refreshApi }) => {
+  const slow = twoAccounts(refreshApi);
+  let release!: () => void;
+  refreshApi.accountsGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await page.goto(`/instances?accountId=${account.id}&keep=1#scope`);
+    await expect.poll(() => refreshApi.count("/api/accounts")).toBeGreaterThan(0);
+    expect(refreshApi.count("/api/inventory/refresh", "POST")).toBe(0);
+    refreshApi.accountsGate = undefined;
+    release();
+    await page.getByRole("button", { name: "表格视图", exact: true }).click();
+    const selector = page.getByLabel("筛选账号", { exact: true });
+    const search = page.getByLabel("搜索实例名称、地址或 OCID", { exact: true });
+    await expect(selector).toHaveValue(account.id);
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page)).toContainText("Fixture-01");
+    await expect.poll(() => refreshApi.count("/api/inventory/refresh", "POST")).toBe(1);
+    expect(
+      refreshApi.requests.filter((request) => request.path === "/api/inventory/refresh")[0].body,
+    ).toMatchObject({ accountIds: [account.id] });
+    await search.fill("01");
+    await selector.selectOption(slow.id);
+    await expect(page).toHaveURL(new RegExp(`/instances\\?accountId=${slow.id}&keep=1#scope$`));
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page)).toContainText("Slow-01");
+    await expect(search).toHaveValue("01");
+    await page.goBack();
+    await expect(selector).toHaveValue(account.id);
+    await expect(rows(page)).toContainText("Fixture-01");
+    await expect(search).toHaveValue("01");
+    await page.goForward();
+    await expect(selector).toHaveValue(slow.id);
+    await expect(rows(page)).toContainText("Slow-01");
+    await page.reload();
+    await expect(selector).toHaveValue(slow.id);
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page)).toContainText("Slow-01");
+    expect(
+      refreshApi.requests
+        .filter((request) => request.path === "/api/inventory/refresh")
+        .every((request) => request.body?.accountIds?.length === 1),
+    ).toBe(true);
+  } finally {
+    release();
+    refreshApi.accountsGate = undefined;
+  }
+});
+
+test("实例失效账号链接校验后回到全部账号，不向已移除账号提交同步", async ({ page, refreshApi }) => {
+  twoAccounts(refreshApi);
+  await page.goto("/instances?accountId=removed-account&keep=1#scope");
+  await expect(page).toHaveURL(/\/instances\?keep=1#scope$/);
+  await expect(page.getByLabel("筛选账号", { exact: true })).toHaveValue("");
+  await page.getByRole("button", { name: "表格视图", exact: true }).click();
+  await expect(rows(page)).toHaveCount(2);
+  await expect.poll(() => refreshApi.count("/api/inventory/refresh", "POST")).toBeGreaterThan(0);
+  expect(
+    refreshApi.requests
+      .filter((request) => request.path === "/api/inventory/refresh")
+      .every((request) => request.body?.accountIds === undefined),
+  ).toBe(true);
+});
 
 test("手动刷新提交 OCI 同步任务，终态后重新读取快照，等待期间保留原行", async ({
   page,

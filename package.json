@@ -2,6 +2,7 @@
   "name": "oci-dash",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "A self-hosted OCI management console built with Next.js and TypeScript.",
   "engines": {
@@ -19,7 +20,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:isolated": "node scripts/verify-e2e.mjs",
     "test:runtime": "node scripts/verify-runtime.mjs",
+    "test:backup": "node scripts/verify-backup.mjs",
+    "backup": "node scripts/backup.mjs",
     "bootstrap": "node scripts/bootstrap.mjs"
   },
   "dependencies": {

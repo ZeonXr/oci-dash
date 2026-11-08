@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { PassThrough } from "node:stream";
+import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { InstanceSummary } from "@/lib/contracts";
@@ -18,6 +20,9 @@ import { getJobStore } from "@/server/jobs";
 import { saveInventory } from "@/server/inventory";
 import { AppError } from "@/server/errors";
 import { handleApi } from "@/server/router";
+import { createConsoleStore } from "@/server/console/store";
+import { createConsoleManager } from "@/server/console/manager";
+import type { ConsoleTarget, ConsoleTransport } from "@/server/console/types";
 
 const cloud = vi.hoisted(() => ({
   verify: vi.fn(),
@@ -130,8 +135,211 @@ function failAfterEnqueue() {
 function storedAccount(id: string) {
   return getDatabase().prepare("SELECT * FROM accounts WHERE id=?").get(id);
 }
+function failedConsole(accountId: string) {
+  const account = getAccount(accountId)!;
+  const store = createConsoleStore();
+  const now = new Date().toISOString();
+  store.reserve({
+    id: "11111111-1111-4111-8111-111111111111",
+    instanceId: ocid("instance"),
+    instanceName: "Recovery fixture",
+    accountId,
+    region: account.homeRegion,
+    ownerUserId: "test-owner",
+    ownerUsername: USERNAME,
+    ownerSessionHash: "test-login",
+    state: "failed",
+    connectionId: ocid("instanceconsoleconnection"),
+    compartmentId: account.tenancyId,
+    creationState: "created",
+    createdAt: now,
+    expiresAt: now,
+    lastActivityAt: now,
+    readyAt: null,
+    lastError: "API key revoked",
+    cleanupPending: true,
+    credentialRecoveryReady: true,
+    slot: 1,
+  });
+  return store;
+}
 
 describe("atomic account save and background connection", () => {
+  it("recovers a revoked key through PATCH and lets the live manager clean with the replacement", async () => {
+    const account = createAccount(input(), USERNAME);
+    const store = createConsoleStore();
+    const actor = { userId: "test-owner", username: USERNAME, sessionHash: "test-login" };
+    const resolveTarget = (): ConsoleTarget => ({
+      instanceId: ocid("instance"),
+      instanceName: "Recovery fixture",
+      accountId: account.id,
+      region: account.homeRegion,
+      credentials: getCredentials(account.id),
+    });
+    let closed!: () => void;
+    const transport: ConsoleTransport = {
+      start: async (request) => {
+        request.onConnectionCreated(ocid("instanceconsoleconnection"));
+        request.onCompartmentVerified?.(account.tenancyId);
+        return {
+          connectionId: ocid("instanceconsoleconnection"),
+          connect: async () => new PassThrough(),
+          close: async () => closed(),
+          closed: new Promise<void>((resolve) => {
+            closed = resolve;
+          }),
+        };
+      },
+      cleanup: vi.fn(async ({ target }) => {
+        if (target.credentials.fingerprint !== replacementKey.fingerprint)
+          throw new Error("API key revoked");
+      }),
+    };
+    const manager = createConsoleManager({
+      store,
+      transport,
+      resolveTarget,
+      isActorValid: () => true,
+    });
+    try {
+      await manager.initialize();
+      const session = await manager.create(ocid("instance"), actor);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(store.active()?.state).toBe("ready");
+      // Normal replacement must not bypass the live session lock.
+      expect((await call("PATCH", `accounts/${account.id}`, replacementKey)).status).toBe(409);
+      await manager.close(session.id, actor);
+      expect(store.active()?.credentialRecoveryReady).toBe(true);
+      const response = await call("PATCH", `accounts/${account.id}`, {
+        ...replacementKey,
+        recoverConsoleCleanup: true,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        consoleCleanupRecovery: true,
+        account: { id: account.id },
+      });
+      expect(getJobStore().listJobs()).toEqual([]);
+      expect(store.active()).toMatchObject({
+        slot: 1,
+        cleanupPending: true,
+        credentialRecoveryReady: false,
+      });
+      await manager.close(session.id, actor);
+      expect(transport.cleanup).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: expect.objectContaining({
+            credentials: expect.objectContaining({ fingerprint: replacementKey.fingerprint }),
+          }),
+        }),
+      );
+      expect(store.active()).toBeNull();
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it.each([
+    { tenancyId: ocid("tenancy") + "different" },
+    { userId: ocid("user") + "different" },
+    { homeRegion: "uk-london-1" },
+    { regions: ["ap-singapore-1"] },
+  ])("rejects a recovery changing OCI identity or scope: %j", async (change) => {
+    const account = createAccount(input(), USERNAME),
+      store = failedConsole(account.id);
+    const before = storedAccount(account.id);
+    const response = await call("PATCH", `accounts/${account.id}`, {
+      ...replacementKey,
+      ...change,
+      recoverConsoleCleanup: true,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "CONSOLE_RECOVERY_SCOPE_MISMATCH" });
+    expect(storedAccount(account.id)).toEqual(before);
+    expect(store.active()?.credentialRecoveryReady).toBe(true);
+    expect(getJobStore().listJobs()).toEqual([]);
+  });
+
+  it("keeps active jobs protected even when a failed console permits recovery", async () => {
+    const account = createAccount(input(), USERNAME),
+      store = failedConsole(account.id);
+    getJobStore().enqueueAccountSync(account.id, USERNAME);
+    const before = storedAccount(account.id);
+    const response = await call("PATCH", `accounts/${account.id}`, {
+      ...replacementKey,
+      recoverConsoleCleanup: true,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "ACCOUNT_BUSY" });
+    expect(storedAccount(account.id)).toEqual(before);
+    expect(store.active()?.credentialRecoveryReady).toBe(true);
+  });
+
+  it("rejects mismatched replacement key material without consuming the recovery permission", async () => {
+    const account = createAccount(input(), USERNAME),
+      store = failedConsole(account.id);
+    const before = storedAccount(account.id);
+    const response = await call("PATCH", `accounts/${account.id}`, {
+      privateKey: firstKey.privateKey,
+      fingerprint: replacementKey.fingerprint,
+      recoverConsoleCleanup: true,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "KEY_FINGERPRINT_MISMATCH" });
+    expect(storedAccount(account.id)).toEqual(before);
+    expect(store.active()?.credentialRecoveryReady).toBe(true);
+    expect(getJobStore().listJobs()).toEqual([]);
+  });
+
+  it("does not use a different account's cleanup lock to authorize recovery", async () => {
+    const account = createAccount(input(), USERNAME);
+    const other = createAccount(input({ tenancyId: ocid("tenancy") + "other" }), USERNAME);
+    failedConsole(other.id);
+    const response = await call("PATCH", `accounts/${account.id}`, {
+      ...replacementKey,
+      recoverConsoleCleanup: true,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "CONSOLE_RECOVERY_NOT_READY" });
+    expect(getCredentials(account.id).fingerprint).toBe(firstKey.fingerprint);
+  });
+
+  it("observes another SQLite connection starting cleanup instead of trusting stale recovery state", async () => {
+    const account = createAccount(input(), USERNAME),
+      store = failedConsole(account.id);
+    const peer = new Database(process.env.DATABASE_PATH!);
+    try {
+      const peerStore = createConsoleStore(peer);
+      peerStore.update(store.active()!.id, { state: "closing", credentialRecoveryReady: false });
+      const before = storedAccount(account.id);
+      const response = await call("PATCH", `accounts/${account.id}`, {
+        ...replacementKey,
+        recoverConsoleCleanup: true,
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "CONSOLE_RECOVERY_NOT_READY" });
+      expect(storedAccount(account.id)).toEqual(before);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it.each(["preparing", "ready", "connected", "closing"] as const)(
+    "rejects explicit recovery while the console is %s",
+    async (state) => {
+      const account = createAccount(input(), USERNAME),
+        store = failedConsole(account.id);
+      store.update(store.active()!.id, { state });
+      const response = await call("PATCH", `accounts/${account.id}`, {
+        ...replacementKey,
+        recoverConsoleCleanup: true,
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "CONSOLE_RECOVERY_NOT_READY" });
+      expect(getCredentials(account.id).fingerprint).toBe(firstKey.fingerprint);
+    },
+  );
+
   it("POST saves an encrypted account and a durable queued sync without contacting OCI", async () => {
     const response = await call("POST", "accounts", input());
     expect(response.status).toBe(201);

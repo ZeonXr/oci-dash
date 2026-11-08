@@ -88,6 +88,7 @@ interface AnalyticsFixture {
   failTrafficPost: boolean;
   costMode: CostMode;
   completedDelayed: number;
+  accountsGate?: Promise<void>;
   delayedTraffic?: { accountId: string; gate: Promise<void> };
   count(path: string, method?: string): number;
   latest(path: string): Record | undefined;
@@ -305,8 +306,10 @@ const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
             user: { id: "analytics-user", username: "fixture", mfaEnabled: false },
             demo: false,
           });
-        if (method === "GET" && url.pathname === "/api/accounts")
+        if (method === "GET" && url.pathname === "/api/accounts") {
+          if (state.accountsGate) await state.accountsGate;
           return json({ accounts, syncJobs: [], demo: false });
+        }
         if (method === "GET" && url.pathname === "/api/instances")
           return json({ instances, demo: false });
         if (["GET", "POST"].includes(method) && url.pathname === "/api/analytics/traffic") {
@@ -345,6 +348,103 @@ const metric = (page: Page, label: string) =>
     .locator(".metric-card")
     .filter({ has: page.getByText(label, { exact: true }) })
     .locator(".metric-value");
+
+for (const target of [
+  { path: "/traffic", accountLabel: "流量账号", regionLabel: "流量区域" },
+  { path: "/costs", accountLabel: "成本账号", regionLabel: "成本区域" },
+]) {
+  test(`${target.path} 总览账号链接等待校验，切换、前进后退和重载保留请求范围`, async ({
+    page,
+    analyticsApi,
+  }) => {
+    const apiPath = `/api/analytics${target.path}`;
+    let release!: () => void;
+    analyticsApi.accountsGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await page.goto(`${target.path}?accountId=${accounts[0].id}&keep=1#scope`);
+      await expect.poll(() => analyticsApi.count("/api/accounts")).toBeGreaterThan(0);
+      expect(analyticsApi.count(apiPath)).toBe(0);
+      analyticsApi.accountsGate = undefined;
+      release();
+      const selector = page.getByLabel(target.accountLabel, { exact: true });
+      await expect(selector).toHaveValue(accounts[0].id);
+      await expect
+        .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
+        .toBe(accounts[0].id);
+      expect(
+        analyticsApi.calls
+          .filter((call) => call.path === apiPath)
+          .every((call) => call.query.get("accountId") === accounts[0].id),
+      ).toBe(true);
+
+      await selector.selectOption(accounts[1].id);
+      await expect
+        .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
+        .toBe(accounts[1].id);
+      await expect(page).toHaveURL(
+        new RegExp(`${target.path}\\?accountId=${accounts[1].id}&keep=1#scope$`),
+      );
+      await page
+        .getByLabel(target.regionLabel, { exact: true })
+        .selectOption(accounts[1].homeRegion);
+      if (target.path === "/traffic") {
+        await page.getByLabel("流量实例", { exact: true }).selectOption(instances[1].id);
+        await page.getByLabel("流量网卡", { exact: true }).selectOption("analytics-vnic-3");
+        await expect
+          .poll(() => analyticsApi.latest(apiPath)?.query.get("vnicId"))
+          .toBe("analytics-vnic-3");
+      }
+      const beforeBack = analyticsApi.calls.length;
+      await page.goBack();
+      await expect(selector).toHaveValue(accounts[0].id);
+      await expect(page.getByLabel(target.regionLabel, { exact: true })).toHaveValue("");
+      await expect
+        .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
+        .toBe(accounts[0].id);
+      expect(
+        analyticsApi.calls
+          .slice(beforeBack)
+          .filter((call) => call.path === apiPath)
+          .every(
+            (call) =>
+              call.query.get("accountId") === accounts[0].id &&
+              !call.query.has("region") &&
+              !call.query.has("instanceId") &&
+              !call.query.has("vnicId"),
+          ),
+      ).toBe(true);
+      await page.goForward();
+      await expect(selector).toHaveValue(accounts[1].id);
+      await expect
+        .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
+        .toBe(accounts[1].id);
+      await page.reload();
+      await expect(selector).toHaveValue(accounts[1].id);
+      await expect
+        .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
+        .toBe(accounts[1].id);
+    } finally {
+      release();
+      analyticsApi.accountsGate = undefined;
+    }
+  });
+
+  test(`${target.path} 失效账号链接回到有效的全部账号范围`, async ({ page, analyticsApi }) => {
+    const apiPath = `/api/analytics${target.path}`;
+    await page.goto(`${target.path}?accountId=removed-account&keep=1#scope`);
+    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveValue("");
+    await expect(page).toHaveURL(new RegExp(`${target.path}\\?keep=1#scope$`));
+    await expect.poll(() => analyticsApi.count(apiPath)).toBeGreaterThan(0);
+    expect(
+      analyticsApi.calls
+        .filter((call) => call.path === apiPath)
+        .every((call) => !call.query.has("accountId")),
+    ).toBe(true);
+  });
+}
+
 async function capture(page: Page, info: TestInfo, name: string) {
   if (process.env.E2E_SCREENSHOTS === "1")
     await page.screenshot({

@@ -213,6 +213,8 @@ describe("console manager ownership and connection admission", () => {
         ownerSessionHash: "old-real-login",
         state,
         connectionId: "previous-real-oci-connection",
+        compartmentId: null,
+        credentialRecoveryReady: false,
         creationState: "created",
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 1_000).toISOString(),
@@ -290,6 +292,54 @@ describe("console cleanup and recovery", () => {
     expect(f.transport.cleanup).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes cached runtime credentials after failed cleanup while preserving its target identity", async () => {
+    const f = fixture(),
+      session = await ready(f);
+    f.transport.cleanup.mockRejectedValueOnce(new Error("old API key revoked"));
+    await f.manager.close(session.id, actor);
+    expect(f.store.active()?.credentialRecoveryReady).toBe(true);
+    const replacement = {
+      ...target,
+      credentials: {
+        ...target.credentials,
+        fingerprint: "new-fp",
+        privateKey: "REPLACEMENT-TEST-KEY",
+      },
+    };
+    f.resolveTarget.mockReturnValue(replacement);
+    await f.manager.close(session.id, actor);
+    expect(f.transport.cleanup).toHaveBeenLastCalledWith(
+      expect.objectContaining({ target: replacement }),
+    );
+    expect(f.store.active()).toBeNull();
+  });
+
+  it("does not enable credential recovery until an aborted cloud request actually settles", async () => {
+    const f = fixture({ cleanupRetryMs: 10_000 }),
+      session = await ready(f),
+      pending = deferred<void>();
+    f.transport.cleanup.mockImplementationOnce(() => pending.promise);
+    const closing = f.manager.close(session.id, actor);
+    await vi.advanceTimersByTimeAsync(100);
+    await closing;
+    expect(f.store.active()).toMatchObject({ state: "failed", credentialRecoveryReady: false });
+    pending.reject(new Error("request finally ended"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.active()?.credentialRecoveryReady).toBe(true);
+  });
+
+  it("does not enable recovery if the local tunnel failed to close", async () => {
+    const f = fixture(),
+      session = await ready(f);
+    vi.mocked(f.tunnel.close).mockRejectedValueOnce(new Error("local process still alive"));
+    await f.manager.close(session.id, actor);
+    expect(f.store.active()).toMatchObject({
+      cleanupPending: true,
+      credentialRecoveryReady: false,
+    });
+    expect(f.transport.cleanup).not.toHaveBeenCalled();
+  });
+
   it("waits for a cancelled create to finish before deleting its late OCI connection", async () => {
     const f = fixture(),
       pending = deferred<ConsoleTunnel>();
@@ -304,6 +354,7 @@ describe("console cleanup and recovery", () => {
     await vi.advanceTimersByTimeAsync(100);
     await closing;
     expect(f.store.active()?.cleanupPending).toBe(true);
+    expect(f.store.active()?.credentialRecoveryReady).toBe(false);
     expect(f.transport.cleanup).not.toHaveBeenCalled();
     created("late-created-connection");
     f.tunnel.connectionId = "late-created-connection";
@@ -386,6 +437,8 @@ describe("console cleanup and recovery", () => {
       ownerSessionHash: "revoked-old-login",
       state: "connected",
       connectionId: "previous-oci-connection",
+      compartmentId: null,
+      credentialRecoveryReady: false,
       creationState: "created",
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),

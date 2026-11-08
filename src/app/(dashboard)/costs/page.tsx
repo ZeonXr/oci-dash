@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { CircleDollarSign, RefreshCw } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { CostReport } from "@/lib/analytics-contracts";
 import { useApp } from "@/components/app-provider";
+import { useAccountFilter } from "@/components/account-filter";
 import { useResource } from "@/components/api";
 import { useAnalytics } from "@/components/analytics-query";
 import { AnalyticsRange, analyticsRange } from "@/components/analytics-range";
@@ -39,12 +40,14 @@ const missing = "__unknown__";
 const matches = (selected: string, value: string | null) =>
   !selected || (selected === missing ? value == null : selected === value);
 
-export default function CostsPage() {
+function CostsContent() {
   const { accounts, accountsLoading } = useApp();
   const inventory = useResource<{ instances: InstanceSummary[] }>("/api/instances");
-  const [account, setAccount] = useState("");
-  const [region, setRegion] = useState("");
-  const [service, setService] = useState("");
+  const [account, setAccount] = useAccountFilter();
+  const [filters, setFilters] = useState({ account, region: "", service: "" });
+  const { region, service } = filters.account === account ? filters : { region: "", service: "" };
+  const changeFilters = (updates: Partial<{ region: string; service: string }>) =>
+    setFilters({ account, region, service, ...updates });
   const [range, setRange] = useState(() => analyticsRange("month"));
   const [granularity, setGranularity] = useState<"daily" | "monthly">("daily");
   const [page, setPage] = useState(1);
@@ -159,10 +162,10 @@ export default function CostsPage() {
           <Select
             aria-label="成本账号"
             value={account}
+            disabled={accountsLoading}
             onChange={(event) => {
               setAccount(event.target.value);
-              setRegion("");
-              setService("");
+              setFilters({ account: event.target.value, region: "", service: "" });
             }}
           >
             <option value="">全部账号</option>
@@ -175,7 +178,7 @@ export default function CostsPage() {
           <Select
             aria-label="成本区域"
             value={region}
-            onChange={(event) => setRegion(event.target.value)}
+            onChange={(event) => changeFilters({ region: event.target.value })}
           >
             <option value="">全部区域</option>
             {regions.map((item) => (
@@ -187,7 +190,7 @@ export default function CostsPage() {
           <Select
             aria-label="成本服务"
             value={service}
-            onChange={(event) => setService(event.target.value)}
+            onChange={(event) => changeFilters({ service: event.target.value })}
           >
             <option value="">全部服务</option>
             {services.map((item) => (
@@ -200,8 +203,7 @@ export default function CostsPage() {
             <Button
               variant="ghost"
               onClick={() => {
-                setRegion("");
-                setService("");
+                changeFilters({ region: "", service: "" });
               }}
             >
               重置筛选
@@ -437,5 +439,13 @@ export default function CostsPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+export default function CostsPage() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <CostsContent />
+    </Suspense>
   );
 }

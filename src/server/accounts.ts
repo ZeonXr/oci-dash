@@ -16,6 +16,7 @@ export interface AccountInput {
   regions: string[];
   privateKey: string;
 }
+export type AccountPatchInput = Partial<AccountInput> & { recoverConsoleCleanup?: boolean };
 function publicAccount(row: typeof accounts.$inferSelect): AccountSummary {
   const { credential: _secret, revision: _revision, ...rest } = row;
   return { ...rest, status: rest.status as AccountSummary["status"] };
@@ -69,6 +70,10 @@ function assertAccountIdle(id: string): void {
     db.prepare("SELECT id FROM console_sessions WHERE account_id=? AND slot=1").get(id)
   )
     throw new AppError("账号仍有控制台会话或清理任务，请先断开并等待清理完成", 409, "ACCOUNT_BUSY");
+  assertAccountTasksIdle(id);
+}
+function assertAccountTasksIdle(id: string): void {
+  const db = getDatabase();
   if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").get())
     return;
   if (
@@ -79,6 +84,24 @@ function assertAccountIdle(id: string): void {
       .get(id)
   )
     throw new AppError("账号仍有未结束的任务，请先取消或等待任务结束", 409, "ACCOUNT_BUSY");
+}
+function assertConsoleCredentialRecovery(id: string): void {
+  assertAccountTasksIdle(id);
+  const db = getDatabase();
+  const columns = db.prepare("PRAGMA table_info(console_sessions)").all() as { name: string }[];
+  const ready =
+    columns.some((column) => column.name === "credential_recovery_ready") &&
+    db
+      .prepare(
+        "SELECT id FROM console_sessions WHERE account_id=? AND slot=1 AND state='failed' AND cleanup_pending=1 AND credential_recovery_ready=1",
+      )
+      .get(id);
+  if (!ready)
+    throw new AppError(
+      "请先断开控制台，并等待当前清理请求结束后再恢复凭据；此操作仅适用于清理失败的会话",
+      409,
+      "CONSOLE_RECOVERY_NOT_READY",
+    );
 }
 export function checkPrivateKey(privateKey: string, fingerprint: string): void {
   try {
@@ -125,11 +148,7 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
     })
     .immediate();
 }
-export function updateAccount(
-  id: string,
-  input: Partial<AccountInput>,
-  actor: string,
-): AccountSummary {
+export function updateAccount(id: string, input: AccountPatchInput, actor: string): AccountSummary {
   const existing = getOrm().select().from(accounts).where(eq(accounts.id, id)).get();
   if (!existing) throw new AppError("账号不存在", 404);
   const credentialChanged = !!input.privateKey;
@@ -148,6 +167,20 @@ export function updateAccount(
     credentialChanged ||
     homeRegion !== existing.homeRegion ||
     JSON.stringify([...regions].sort()) !== JSON.stringify([...existing.regions].sort());
+  const recovering = input.recoverConsoleCleanup === true;
+  if (
+    recovering &&
+    (!credentialChanged ||
+      (input.tenancyId !== undefined && input.tenancyId !== existing.tenancyId) ||
+      (input.userId !== undefined && input.userId !== existing.userId) ||
+      homeRegion !== existing.homeRegion ||
+      JSON.stringify([...regions].sort()) !== JSON.stringify([...existing.regions].sort()))
+  )
+    throw new AppError(
+      "恢复控制台清理只能替换同一租户、同一用户的 API 密钥，不能修改区域范围",
+      400,
+      "CONSOLE_RECOVERY_SCOPE_MISMATCH",
+    );
   const changes: Partial<typeof accounts.$inferInsert> = {
     name: input.name ?? existing.name,
     homeRegion,
@@ -172,11 +205,18 @@ export function updateAccount(
       if (input.tenancyId && input.tenancyId !== existing.tenancyId)
         assertUniqueTenancy(input.tenancyId, id);
       if (scopeChanged) {
-        assertAccountIdle(id);
+        if (recovering) assertConsoleCredentialRecovery(id);
+        else assertAccountIdle(id);
         changes.revision = existing.revision + 1;
       }
       getOrm().update(accounts).set(changes).where(eq(accounts.id, id)).run();
-      if (credentialChanged)
+      if (recovering)
+        getDatabase()
+          .prepare(
+            "UPDATE console_sessions SET credential_recovery_ready=0 WHERE account_id=? AND slot=1",
+          )
+          .run(id);
+      else if (credentialChanged)
         getDatabase().prepare("DELETE FROM resources WHERE account_id=?").run(id);
       else if (scopeChanged)
         getDatabase()
@@ -186,7 +226,12 @@ export function updateAccount(
           .run(id, ...regions);
     })
     .immediate();
-  audit(actor, "account.update", existing.name, "账号配置已更新");
+  audit(
+    actor,
+    recovering ? "account.console-credential-recovery" : "account.update",
+    existing.name,
+    recovering ? "同一 OCI 身份的恢复凭据已保存，控制台仍等待验证清理" : "账号配置已更新",
+  );
   return getAccount(id)!;
 }
 export function deleteAccount(id: string, actor: string): void {

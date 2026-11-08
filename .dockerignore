@@ -14,4 +14,7 @@ playwright-report
 .tools
 *.log
 .test-tmp
+backups
+*.tar.gz
+*.tgz
 *.tsbuildinfo

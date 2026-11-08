@@ -55,6 +55,8 @@ function persisted(id = "11111111-1111-4111-8111-111111111111"): ConsoleSessionR
     ownerSessionHash: actor.sessionHash,
     state: "preparing",
     connectionId: null,
+    compartmentId: null,
+    credentialRecoveryReady: false,
     creationState: "uncertain",
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
@@ -75,14 +77,27 @@ function fixture() {
     visible: true,
     readDenied: false,
     listDenied: false,
+    parentMissing: false,
+    compartments: [] as CloudDocument[],
+    deniedCompartments: new Set<string>(),
+    compartmentListDenied: false,
+    compartmentNextPageDenied: false,
     outcomes: [] as ("success" | number | "timeout")[],
     creates: 0,
   };
   const history: { operation: string; request: CloudDocument }[] = [];
   const call = vi.fn(async (operation: string, request: CloudDocument): Promise<CloudDocument> => {
     history.push({ operation, request: structuredClone(request) });
-    if (operation === "listCompartments") return { items: [] };
-    if (operation === "getInstance")
+    if (operation === "listCompartments") {
+      if (state.compartmentListDenied) throw { statusCode: 403 };
+      if (state.compartmentNextPageDenied) {
+        if (request.page) throw { statusCode: 403 };
+        return { items: state.compartments, opcNextPage: "inaccessible-page" };
+      }
+      return { items: state.compartments };
+    }
+    if (operation === "getInstance") {
+      if (state.parentMissing) throw { statusCode: 404 };
       return {
         instance: {
           id: target.instanceId,
@@ -90,14 +105,17 @@ function fixture() {
           lifecycleState: "RUNNING",
         },
       };
+    }
     if (operation === "listInstanceConsoleConnections") {
-      if (state.listDenied) throw { statusCode: 404, code: "NotAuthorizedOrNotFound" };
+      if (state.listDenied || state.deniedCompartments.has(request.compartmentId))
+        throw { statusCode: 404, code: "NotAuthorizedOrNotFound" };
       return {
         items: state.visible ? [...records.values()].map((row) => structuredClone(row)) : [],
       };
     }
     if (operation === "createInstanceConsoleConnection") {
       expect(store.active()?.creationState).toBe("uncertain");
+      expect(store.active()?.compartmentId).toBe(target.credentials.tenancyId);
       const outcome = state.outcomes[state.creates++] ?? "success";
       if (outcome === "timeout") throw timeout();
       if (typeof outcome === "number")
@@ -175,6 +193,87 @@ afterEach(async () => {
 });
 
 describe("durable recovery of ambiguous OCI console creates", () => {
+  it("uses the durable compartment after restart when the instance and console were deleted", async () => {
+    const f = fixture(),
+      row = {
+        ...persisted(),
+        connectionId,
+        compartmentId: target.credentials.tenancyId,
+        creationState: "created" as const,
+      };
+    f.store.reserve(row);
+    f.state.parentMissing = true;
+    await f.makeManager().initialize();
+    expect(f.store.active()).toBeNull();
+    expect(f.history.filter((entry) => entry.operation === "getInstance")).toHaveLength(0);
+    expect(f.history.filter((entry) => entry.operation === "listCompartments")).toHaveLength(0);
+    expect(
+      f.history.find((entry) => entry.operation === "listInstanceConsoleConnections")?.request,
+    ).toMatchObject({ compartmentId: row.compartmentId, instanceId: row.instanceId });
+    expect(f.history.some((entry) => entry.operation === "deleteInstanceConsoleConnection")).toBe(
+      false,
+    );
+  });
+
+  it("recovers a legacy row only after complete ANY-compartment scans when the parent is absent", async () => {
+    const f = fixture(),
+      row = { ...persisted(), connectionId, creationState: "created" as const };
+    const child = "ocid1.compartment.oc1..legacychild";
+    f.store.reserve(row);
+    // Simulate an old schema and exercise the real migration, not only null data.
+    f.db.exec("ALTER TABLE console_sessions DROP COLUMN compartment_id");
+    f.db.exec("ALTER TABLE console_sessions DROP COLUMN credential_recovery_ready");
+    f.state.parentMissing = true;
+    f.state.compartments = [{ id: child, lifecycleState: "ACTIVE" }];
+    await f.makeManager().initialize();
+    expect(f.store.active()).toBeNull();
+    expect(
+      f.history.find((entry) => entry.operation === "listCompartments")?.request,
+    ).toMatchObject({ accessLevel: "ANY", compartmentIdInSubtree: true });
+    expect(
+      f.history
+        .filter((entry) => entry.operation === "listInstanceConsoleConnections")
+        .map((entry) => entry.request.compartmentId),
+    ).toEqual([target.credentials.tenancyId, child]);
+  });
+
+  it.each(["enumeration", "next-page", "child-list"])(
+    "retains a legacy cleanup lock when %s is unauthorized",
+    async (denial) => {
+      const f = fixture(),
+        row = { ...persisted(), connectionId, creationState: "created" as const };
+      const child = "ocid1.compartment.oc1..inaccessiblechild";
+      f.store.reserve(row);
+      f.state.parentMissing = true;
+      f.state.compartments = [{ id: child, lifecycleState: "ACTIVE" }];
+      if (denial === "enumeration") f.state.compartmentListDenied = true;
+      else if (denial === "next-page") f.state.compartmentNextPageDenied = true;
+      else f.state.deniedCompartments.add(child);
+      await f.makeManager().initialize();
+      expect(f.store.active()).toMatchObject({
+        slot: 1,
+        cleanupPending: true,
+        credentialRecoveryReady: true,
+      });
+      expect(f.history.some((entry) => entry.operation === "deleteInstanceConsoleConnection")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("persists the recovered scope before deleting a legacy owned connection", async () => {
+    const f = fixture(),
+      row = { ...persisted(), connectionId, creationState: "created" as const };
+    f.store.reserve(row);
+    f.records.set(connectionId, connection(row.id));
+    await f.makeManager().initialize();
+    expect(f.store.get(row.id)).toMatchObject({
+      compartmentId: target.credentials.tenancyId,
+      slot: null,
+    });
+    expect(f.records.size).toBe(0);
+  });
+
   it.each([false, true])(
     "holds the slot after access is revoked and cleans after restoration (list denied: %s)",
     async (listDenied) => {

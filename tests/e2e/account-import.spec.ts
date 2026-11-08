@@ -80,7 +80,10 @@ const test = base.extend<{ mockApi: MockApi }>({
             state.syncJobs = [syncJob];
             return json({ account, job: syncJob });
           }
-          return json({ account }); // Metadata edits never echo a private key or invent a job.
+          return json({
+            account,
+            ...(body.recoverConsoleCleanup ? { consoleCleanupRecovery: true } : {}),
+          }); // Never echo a private key or invent a job.
         }
         if (method === "DELETE" && url.pathname === `/api/accounts/${sample.id}`) {
           state.writes.push({ method, path: url.pathname, body: {} });
@@ -308,6 +311,53 @@ test("编辑名称不读取或提交现有私钥，也不重新连接", async ({
   expect(body.name).toBe("Renamed account");
   expect(body.regions).toEqual(["ap-tokyo-1"]);
   await expect(page.locator(".account-card").getByRole("heading")).toHaveText("Renamed account");
+});
+
+test("控制台凭据恢复保留原区域并明确等待清理，不自动连接", async ({ page, mockApi }) => {
+  mockApi.accounts = [{ ...sample, regions: ["ap-tokyo-1", "ap-singapore-1"] }];
+  await page.goto("/settings/accounts");
+  await page.locator(".account-card").getByRole("button", { name: "编辑", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑账号" });
+  await dialog.getByRole("checkbox", { name: "替换连接凭据", exact: true }).check();
+  await dialog.getByLabel(/^同步区域/).fill("uk-london-1");
+  await dialog
+    .getByRole("checkbox", { name: "恢复控制台清理（旧 API 密钥已失效）", exact: true })
+    .check();
+  await expect(dialog.getByLabel(/^同步区域/)).toBeDisabled();
+  await expect(dialog.getByLabel(/^同步区域/)).toHaveValue("ap-tokyo-1\nap-singapore-1");
+  await expect(dialog).toContainText("先断开控制台并等待清理请求结束");
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { format: "pem", type: "pkcs8" },
+    publicKeyEncoding: { format: "der", type: "spki" },
+  });
+  const fingerprint = createHash("md5").update(publicKey).digest("hex").match(/.{2}/g)!.join(":");
+  await dialog
+    .getByLabel(/^OCI 配置文本/)
+    .fill(config(fingerprint).replace("ap-tokyo-1", "uk-london-1"));
+  await dialog.getByLabel(/^API 私钥文件/).setInputFiles({
+    name: "recovery-test.pem",
+    mimeType: "application/x-pem-file",
+    buffer: Buffer.from(privateKey),
+  });
+  await dialog.getByRole("button", { name: "保存更改", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page.getByText("恢复凭据已保存，后台将继续清理控制台。清理完成后请再连接并同步账号。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(mockApi.writes).toHaveLength(1);
+  const { method, body } = mockApi.writes[0];
+  expect(method).toBe("PATCH");
+  expect(body.recoverConsoleCleanup).toBe(true);
+  expect(body.homeRegion).toBe(sample.homeRegion);
+  expect(body.regions).toEqual(["ap-tokyo-1", "ap-singapore-1"]);
+  expect(body.tenancyId).toBe(sample.tenancyId);
+  expect(body.userId).toBe(sample.userId);
+  expect(body.fingerprint).toBe(fingerprint);
+  expect(body.privateKey === privateKey.trim()).toBe(true);
+  expect(mockApi.syncJobs).toEqual([]);
 });
 
 test("390×480 短屏仅内容滚动，标题与操作栏可见，遮罩点击关闭", async ({ page, mockApi }, info) => {

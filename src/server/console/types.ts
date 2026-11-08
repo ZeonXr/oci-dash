@@ -32,6 +32,7 @@ export interface ConsoleTransport {
     target: ConsoleTarget;
     sessionId: string;
     signal: AbortSignal;
+    onCompartmentVerified?(compartmentId: string): void;
     onCreationState?(state: ConsoleCreationState): void;
     onConnectionCreated(connectionId: string): void;
   }): Promise<ConsoleTunnel>;
@@ -40,6 +41,8 @@ export interface ConsoleTransport {
     target: ConsoleTarget;
     sessionId: string;
     connectionId: string | null;
+    compartmentId?: string | null;
+    onCompartmentVerified?(compartmentId: string): void;
     creationState?: ConsoleCreationState;
     /** Called only after finding and deleting every connection for an uncertain create. */
     onCreationResolved?(): void;

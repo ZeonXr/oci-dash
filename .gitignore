@@ -17,4 +17,7 @@ playwright/.auth/
 *.log
 *.tsbuildinfo
 .test-tmp/
+backups/
+*.tar.gz
+*.tgz
 .DS_Store

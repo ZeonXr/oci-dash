@@ -1,61 +1,105 @@
-# OCI Dash implementation scope
+# 架构与 API
 
-Private project. Next.js App Router, TypeScript, SQLite/Drizzle, official OCI TypeScript SDK, and a durable background worker. The default Docker deployment runs Web and Worker in one application container under a Node process supervisor. Navigation includes overview, instances, traffic, costs, accounts, tasks and settings. Network, security rules and storage are inside instance details.
+OCI Dash 采用 Next.js App Router、TypeScript、SQLite/Drizzle 和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
 
-Excluded by the user: AI chat, Telegram interactive management, automatic rescue, maps. VNC has subsequently been authorized as an integrated OCI console feature. Telegram notifications and other integrations are not part of this release. Do not copy production credentials, data, or logs into this repository.
+## 模块
 
-First usable release must include authenticated account import/verification, multi-region inventory including accessible compartments, real instance list/details, instance creation and lifecycle actions, explicit public IP binding protection/rotation, boot-volume configuration, security rules, native OCI metrics where available, durable jobs and history, and local Docker deployment. Demo data is explicitly labeled and cannot execute cloud operations. Existing services are not modified by development verification.
+| 路径                                         | 职责                                       |
+| -------------------------------------------- | ------------------------------------------ |
+| `src/app/`、`src/components/`                | 页面、交互、筛选、渐进刷新和确认界面。     |
+| `src/server/router.ts`、`auth.ts`、`http.ts` | 业务 API、会话、MFA、同源检查和请求边界。  |
+| `src/server/accounts.ts`、`inventory.ts`     | 加密凭据、账号版本、库存合并和资源归属。   |
+| `src/server/oci/`                            | SDK 客户端、范围校验、库存读取和资源操作。 |
+| `src/server/jobs/`                           | 持久队列、租约、资源锁、检查点和 Worker。  |
+| `src/server/analytics/`                      | 流量、费用、CPU、查询期限与有界缓存。      |
+| `src/server/console/`                        | VNC 会话、OCI 控制台、SSH 和 WebSocket。   |
+| `src/runtime.ts`、`src/health.ts`            | 容器进程管理、统一网关和整体健康检查。     |
 
-## Default runtime contract
+主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
 
-- Compose project: `oci-dash`; sole service: `app`; local image: `oci-dash:local`. Preserve the `app-data` volume and `/data/oci-dash.db` database path.
-- The container starts `node dist/runtime.mjs`. It supervises the standalone Web server (`node server.js`) and background worker (`node dist/worker.mjs`) as separate business processes with the same database and environment. Consolidating deployment does not remove the worker or imply a substantial memory reduction.
-- Any child exit outside coordinated shutdown, including exit code 0, stops the other child and causes a nonzero supervisor exit. Docker uses `restart: unless-stopped` to restart the container. An explicitly stopped container remains stopped until restarted by the operator.
-- `SIGTERM` and `SIGINT` are forwarded and child exit is awaited. The worker has a 25-second hard-stop limit, the supervisor a 30-second limit, and Compose a 35-second stop grace period. Shutdown must not leave an unmanaged Web or Worker process behind; interrupted cloud operations still require checkpoint reconciliation.
-- Container health runs `node dist/health.mjs`, checking Web/SQLite availability and a recent worker heartbeat. HTTP `GET /api/health` retains its Web/SQLite-only meaning. `dist/worker-health.mjs` may remain for standalone development diagnostics. An unhealthy status alone does not activate Docker's restart policy.
-- Development may continue to use `npm run dev` and `npm run worker` in separate terminals. Default deployment, logs, recreation and backup commands target `app`.
-- Migration from the old two-service layout stops the old services after active jobs finish, retains the project/data volume, `.env` and original `MASTER_KEY`, starts and checks `app`, then removes the old containers. No account re-import or manual data conversion is required for this runtime change.
-- Restore backups in isolation and reconcile nonterminal jobs against OCI before enabling the default runtime. Starting `app` normally starts the worker too. A temporary Web-only inspection must explicitly override the command, for example `docker compose run --service-ports --rm --no-deps app node server.js`; it is not a read-only API mode.
+## 运行与存储
 
-Operational commands and migration/restore sequencing are documented in [OPERATIONS.md](OPERATIONS.md). Verification evidence belongs in [VERIFICATION.md](VERIFICATION.md); this runtime contract does not claim acceptance results.
+默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-## VNC console contract
+SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
-- The runtime also serves the public HTTP/WebSocket gateway; Next standalone binds only a private loopback port. The gateway handles `/api/console/**` and forwards other HTTP traffic. No custom `next()` server is mixed with standalone output. Compose mounts `/tmp` as tmpfs for ephemeral console SSH material.
-- Frontend: noVNC loaded only in the client at `/instances/[id]/console`; creating a console requires a user click.
-- Transport: the official OCI SDK creates a session-tagged console connection using a temporary RSA key. OpenSSH runs with structured arguments and private loopback forwards. The OCI command string is parsed as data, never executed through a shell. The public service key must match the OCI API fingerprint. Only the inner loopback connection uses `accept-new` to record its key through that authenticated channel; it does not open a separate keyscan connection that would compete with OCI's single-channel limit.
-- `GET /api/console/session` returns `{session,demo}`; `POST /api/console/sessions` accepts `{instanceId}` and returns `{session}` with status 202. `GET /api/console/sessions/:id`, `DELETE` on the same path, and `POST .../:id/close` return `{session}`. `POST .../:id/touch` records user interaction.
-- `POST .../:id/ticket` returns `{ticket,expiresAt,path}`. The WebSocket uses protocols `oci-console` and `ticket.<value>`, with a single-use 30-second ticket. The handshake checks login, exact Origin, owner/session binding, path and standard WebSocket headers. Authentication is rechecked for live sockets; tickets and private keys are never placed in URLs or persisted in the session table.
-- SQLite `console_sessions` retains ownership and cleanup metadata, not private credentials. A unique active slot enforces one application-wide session, including unfinished cleanup. Account scope changes/removal remain blocked while that slot references the account.
-- Disconnect, logout, timeout and shutdown close SSH streams and request deletion only of matching session-tagged OCI connections. Startup reconciles unfinished cleanup. Demonstration mode preserves existing records without performing cloud operations. Real OCI acceptance is limited to the explicitly authorized temporary console connection; instance lifecycle, networking and guest configuration are outside these tests.
+正常读取使用服务端凭据；账号读取 API 不返回密钥。账号配置版本用于阻止异步读取结果或缓存跨越凭据和范围变化。部署、停止期限和恢复流程见[运维说明](OPERATIONS.md)。
 
-## API contract
+## 账号与库存流程
 
-Analytics uses `GET /api/analytics/traffic` and `GET /api/analytics/costs` with explicit date and scope filters; `POST` on the same URL refreshes the query. Both require login, with same-origin checks for POST. Demonstration responses never access real credentials. `src/lib/analytics-contracts.ts` defines public reports; server readers, date validation and bounded caches are in `src/server/analytics/`. This release queries current-inventory VNIC history and reported Usage API costs on demand; it does not implement long-term archives, forecasts or credit accounting. Statistical semantics and accepted limitations are documented in [ANALYTICS.md](ANALYTICS.md).
+保存账号和排入连接任务在同一事务内完成。新账号或租户变更会检查重复租户；旧重复配置保留供显式处理。凭据和区域变化会排队同步，单纯改名不会触发云请求。
 
-All responses are JSON. Errors: `{error, code?}` with an appropriate HTTP status. Routes except login/health require a session. Mutations enforce same-origin requests. Public DTOs are in `src/lib/contracts.ts`.
+账号未连接或没有同步记录时，Worker 先验证身份和区域订阅；正常已连接账号直接读取库存。同步只发布仍持有有效租约的结果。
 
-- `GET /api/auth/me` → `{user, demo}`; `POST /api/auth/login` with `{username,password,code?}`; `POST /api/auth/logout`.
-- `GET /api/dashboard` → `DashboardData`.
-- `GET /api/accounts` → `{accounts,syncJobs,demo}`; `syncJobs` contains each account's active sync task, or latest finished one. `POST /api/accounts` with `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}` atomically saves the account and queues its initial connection task, returning `{account,job}`. The form parses pasted OCI configuration and reads the selected PEM file. Never fetch the key back.
-- `PATCH /api/accounts/:id` accepts name/regions and optional replacement credentials. Credential or actual region changes atomically queue a connection task; a rename does not. `DELETE /api/accounts/:id` removes only this application's account configuration, not cloud resources.
-- `POST /api/accounts/:id/sync` queues a durable connection/resource refresh task, reusing an active task for that account. The worker verifies credentials before reading inventory and reports failures on the account. `POST /api/accounts/:id/verify` remains available for API diagnostics; normal onboarding needs no separate verification request.
-- `GET /api/instances` → `{instances,demo}`; `GET /api/instances/:id` → `{instance,demo}` (IDs URL encoded).
-- `POST /api/inventory/refresh` accepts `{mode:"auto"|"manual",accountIds?:string[]}` and returns `InventoryRefreshResult` with queued/reused jobs and per-account freshness/backoff status. GETs remain side-effect free. Visible resource pages request automatic checks every 60 seconds; manual refresh waits for the durable job before reloading the snapshot. Automatic jobs are deduplicated across tabs, excluded from ordinary history, and retain only the latest terminal record per account. Explicit user jobs retain their history.
-- `GET /api/instances/:id/metrics?range=1h|24h|7d` → `MetricsResult`.
-- `GET /api/instances/:id/security` → `{groups,demo}`.
-- `GET /api/accounts/:id/create-options?region=...&compartmentId=...` → `CreateOptions`.
-- `POST /api/operations` with `OperationRequest` → `{job}` (HTTP 202). User confirmation is part of a concrete action dialog. Terminate requires typing the resource name. Rotation must identify the instance, VNIC, private IP and expected old public IP; reserved/protected addresses are refused.
-- `GET /api/jobs` → `{jobs,demo}`; `GET /api/jobs/:id` → `{job,events}`; `POST /api/jobs/:id/cancel`; `POST /api/jobs/:id/retry`.
-- `GET /api/settings` → `{username,mfaEnabled,demo,version,worker}`; password/MFA controls are supplied by the main implementation.
+库存读取共用四个 RPC 槽、两个区域生命周期槽，每区域最多处理两个实例。网络、启动卷和镜像详情并行，同一网卡的 IPv6 与 IPv4 链独立，公网绑定最多并行两个。取消后不派发新读取，已发请求结束后才释放槽和关闭客户端。
 
-OCI adapter contract is `src/server/oci/types.ts`; implementation belongs in `src/server/oci/adapter.ts`, exporting `ociAdapter`. Credentials are decrypted only server-side. Common exception text must never include credentials or request Authorization headers.
+只有成功枚举的 `(region, compartmentId)` 范围允许删除缺失实例。详情失败不会阻断这个范围的清理，也不会用空值覆盖旧详情；`staleFields` 标记未更新字段。显式禁用区域在配置事务内清理其本地库存。
 
-## Parallel ownership
+镜像系统信息有一小时、最多 256 项的身份隔离缓存；只保存成功的最小元数据。公网 IP、磁盘配置、创建选项和写操作校验使用新鲜读取。
 
-- Frontend: `src/components/**`, `src/app/(dashboard)/**`, `src/app/login/**`, `src/app/globals.css`, UI utility hooks. Main agent owns root layout/page and API routes.
-- OCI adapter: `src/server/oci/**` except initially shared `types.ts`; adapter tests in `tests/oci-*.test.ts`.
-- Jobs: `src/server/jobs/**`, `src/worker.ts`, jobs tests. Main agent provides DB/auth/accounts/inventory services.
-- Main: package/config, DB/schema/migrations, auth/credentials, API routes, Docker/CI, integration tests, GitHub and final verification.
+## 任务与页面刷新
 
-Automated tests use simulated OCI clients and never perform real cloud writes. Explicitly authorized manual VNC acceptance may create and delete a temporary instance console connection; it must confirm cleanup afterward and must not modify instance lifecycle, networking or guest configuration. Read-only integration may use an existing authorized account, with secrets kept outside Git. Unit/contract tests must cover lifecycle, concurrency, partial failures and protection boundaries with a replaceable OCI client.
+页面提交云操作后获得任务编号，Worker 持久执行并记录检查点。写任务全局串行；同账号的同步与写入互斥。单个 Worker 可并行同步两个账号。
+
+库存自动检查由可见页面触发，同一账号的任务合并，失败退避。手动刷新按账号完成逐个读取快照，无需等待最慢账号。页面隐藏或等待超时只暂停浏览器检查，不撤销后台任务。自动同步隐藏于普通历史，只保留每个账号最近的终态记录；手动任务保留历史。
+
+错误重试预算与 OCI 等待完成分开计数。重启后依据租约、完成期限和检查点恢复；取消不回滚已受理的云操作，手动重试也不是创建无关联的新操作。公共 pending 状态判定包含仍可自动恢复的 `interrupted`。
+
+## HTTP API
+
+业务 API 使用 JSON；错误通常为 `{error,code}`。除健康检查、登录和允许清除过期会话的注销接口外，均要求登录。非 GET/HEAD 请求还要求同源。演示模式拒绝真实账号保存、云写入和安全设置修改。
+
+| 方法与路径                                              | 请求或响应要点                                                                                                  |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GET /api/health`                                       | Web 与 SQLite 可用性；不代替 Worker 健康检查。                                                                  |
+| `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user,demo}` 并设置会话 Cookie。                                             |
+| `GET /api/auth/me`、`POST /api/auth/logout`             | 当前会话；注销会撤销 Cookie 对应会话。                                                                          |
+| `GET /api/accounts`                                     | `{accounts,syncJobs,demo}`；每账号当前或最近同步任务。                                                          |
+| `POST /api/accounts`                                    | `{name,tenancyId,userId,fingerprint,homeRegion,regions,privateKey}`；原子保存并返回 `{account,job}`，HTTP 201。 |
+| `PATCH /api/accounts/:id`                               | 修改名称、区域或替换凭据；通常返回 `{account,job?}`。                                                           |
+| `DELETE /api/accounts/:id`                              | 移除本地配置，不删除云资源；活动任务或控制台清理可阻止移除。                                                    |
+| `POST /api/accounts/:id/sync`                           | 创建或复用持久同步，返回 `{job}`，HTTP 202。                                                                    |
+| `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                          |
+| `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`；返回 `CreateOptions`。                                                          |
+| `GET /api/instances`、`GET /api/instances/:id`          | `{instances,demo}` 或 `{instance,demo}`，ID 需要 URL 编码。                                                     |
+| `POST /api/inventory/refresh`                           | `{mode:"auto"                                                                                                   | "manual",accountIds?:string[]}`；返回任务和各账号的新鲜度/退避状态。 |
+| `GET /api/instances/:id/metrics`                        | `range=1h                                                                                                       | 24h                                                                  | 7d`，返回 `MetricsResult`。 |
+| `GET /api/instances/:id/security`                       | `{groups,demo}`。                                                                                               |
+| `GET /api/dashboard`                                    | 资源总量和近期活动的 `DashboardData`；图表总览使用下列统计接口。                                                |
+| `GET/POST /api/analytics/traffic`                       | 流量报告；POST 刷新相同 URL 查询范围。                                                                          |
+| `GET/POST /api/analytics/costs`                         | 费用报告；按币种分开。                                                                                          |
+| `GET/POST /api/analytics/cpu`                           | 仅可选 `accountId`，固定最近 24 个完整 UTC 小时。                                                               |
+| `POST /api/operations`                                  | `OperationRequest` → `{job}`，HTTP 202。                                                                        |
+| `GET /api/jobs`、`GET /api/jobs/:id`                    | `{jobs,demo}` 或 `{job,events,demo}`。                                                                          |
+| `POST /api/jobs/:id/cancel`、`POST /api/jobs/:id/retry` | 请求取消或继续现有任务。                                                                                        |
+| `GET /api/settings`                                     | `{username,mfaEnabled,demo,version,worker}`。                                                                   |
+| `POST /api/settings/password`                           | `{currentPassword,newPassword}`；成功后撤销全部登录会话。                                                       |
+| `POST /api/settings/mfa/setup`                          | `{password}` → 临时验证器配置。                                                                                 |
+| `POST /api/settings/mfa/confirm`                        | `{code}` → 一次性展示恢复码，撤销其他登录会话。                                                                 |
+| `POST /api/settings/mfa/disable`                        | `{password,code}`；需验证密码及验证码/恢复码。                                                                  |
+
+具体 DTO 与校验以 [contracts.ts](../src/lib/contracts.ts)、[validation.ts](../src/server/validation.ts)、[analytics-contracts.ts](../src/lib/analytics-contracts.ts) 和 [cpu-contracts.ts](../src/lib/cpu-contracts.ts) 为准。统计口径见[统计说明](ANALYTICS.md)。GET 可能更新本地读取缓存，但不会提交实例或网络写操作。
+
+`PATCH /api/accounts/:id` 的控制台清理恢复模式接受 `recoverConsoleCleanup:true`、新 `privateKey` 和 `fingerprint`；如包含 `tenancyId`、`userId`，必须与原账号相同，区域也不得变化。仅在待清理失败会话已无在途工作、账号无未结束任务时允许，返回 `{account,consoleCleanupRecovery:true}`，不排自动同步。该操作保留控制台锁，由后续清理读取新凭据；详见[运维恢复流程](OPERATIONS.md#旧-api-密钥已失效时)。
+
+## VNC 通道
+
+页面位于 `/instances/[id]/console`。只有用户点击连接后才创建 OCI 控制台，临时 RSA 密钥不进入持久数据表。OpenSSH 使用结构化参数；OCI 命令仅作为数据解析，不交给 shell 执行。
+
+| 接口                                                     | 行为                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /api/console/session`                               | `{session,demo}`，查看全局占用。                                   |
+| `POST /api/console/sessions`                             | `{instanceId}` → `{session}`，HTTP 202。                           |
+| `GET /api/console/sessions/:id`                          | 登录会话所有者读取状态。                                           |
+| `DELETE /api/console/sessions/:id`、`POST .../:id/close` | 关闭并清理，返回 `{session}`。                                     |
+| `POST .../:id/touch`                                     | 记录用户操作。                                                     |
+| `POST .../:id/ticket`                                    | `{ticket,expiresAt,path}`；票据单次使用、有效 30 秒。              |
+| `GET .../:id/socket` 的 WebSocket Upgrade                | 使用 `oci-console` 和 `ticket.<value>` 协议，传输二进制 RFB 数据。 |
+
+握手检查登录、Origin、所有者/登录会话绑定及标准 WebSocket 头；存活连接会再次验证登录。票据和私钥不放入 URL。全局唯一槽覆盖活动会话及未完成清理，不能借新会话绕过清理失败。
+
+外层 SSH 主机密钥与 OCI API 指纹匹配；内层仅通过认证外层通道使用本次私有 known_hosts。清理只删除账号、实例和会话标签都匹配的连接。权限不足或创建结果不明确时保留记录和锁，演示模式不执行云端恢复或清理。
+
+控制台记录保留已验证的所属区间。对于缺少该信息且父实例已不可读的旧记录，清理要求 `accessLevel=ANY` 的完整区间枚举及每个区间的连接枚举；失败或权限不足不能作为资源已经消失的证据。
+
+返回[README](../README.md) · [贡献指南](../CONTRIBUTING.md)

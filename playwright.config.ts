@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { join } from "node:path";
 
 const requestedBaseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 const parsed = new URL(requestedBaseURL);
@@ -14,16 +15,18 @@ if (
   throw new Error("E2E_BASE_URL must be the origin of a local OCI Dash demo server.");
 }
 
+const outputDirectory = process.env.E2E_OUTPUT_DIR || "./test-results";
+
 export default defineConfig({
   testDir: "./tests/e2e",
-  outputDir: "./test-results/playwright",
+  outputDir: join(outputDirectory, "playwright"),
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
   expect: { timeout: 15_000 },
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
-  reporter: [["list"], ["html", { outputFolder: "test-results/report", open: "never" }]],
+  reporter: [["list"], ["html", { outputFolder: join(outputDirectory, "report"), open: "never" }]],
   use: {
     baseURL: parsed.origin,
     browserName: "chromium",
