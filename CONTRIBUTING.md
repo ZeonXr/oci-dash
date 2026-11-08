@@ -51,7 +51,7 @@ npm test
 npm run build
 ```
 
-`npm run typecheck` 分别检查应用和工具脚本：应用使用 `tsconfig.json`，工具脚本使用独立的严格配置 `tsconfig.scripts.json`。Node.js 执行脚本时不进行类型检查，提交前应运行该命令。`dist/*.mjs` 是运行时 TypeScript 的构建产物，部署命令保留这些文件名。
+`npm run typecheck` 分别检查应用和工具脚本：应用使用 `tsconfig.json`，工具脚本使用独立的严格配置 `scripts/tsconfig.json`。脚本目录中的配置也供编辑器自动识别 NodeNext 和可擦除语法约束。Node.js 执行脚本时不进行类型检查，提交前应运行该命令。`dist/*.mjs` 是运行时 TypeScript 的构建产物，部署命令保留这些文件名。
 
 使用 `npm run format` 修正格式。项目的 Prettier、EditorConfig 和忽略规则决定格式与扫描范围，不要格式化环境文件、私钥、数据库或构建产物。
 

@@ -16,7 +16,7 @@
     "worker": "tsx --env-file=.env src/worker.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit && tsc --project tsconfig.scripts.json",
+    "typecheck": "tsc --noEmit && tsc --project scripts/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
