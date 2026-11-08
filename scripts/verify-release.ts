@@ -38,7 +38,12 @@ function json(text: string): ObjectValue {
   return result;
 }
 function keys(value: ObjectValue, allowed: string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
+  // Compose may materialize omitted defaults such as command: null or ipam: {}.
+  // The source precheck still rejects unknown input fields before normalization.
+  return Object.entries(value).every(
+    ([key, field]) =>
+      allowed.includes(key) || field === null || (object(field) && Object.keys(field).length === 0),
+  );
 }
 function sha256(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -253,8 +258,14 @@ function verifyResolved(config: ObjectValue, project: string, image: string, por
       "volumes",
       "logging",
       "networks",
+      "command",
+      "entrypoint",
     ]),
     "Release app contains unsupported overrides or privileges.",
+  );
+  check(
+    app.command == null && app.entrypoint == null,
+    "Release must use the image's default command and entrypoint.",
   );
   check(
     app.image === image && app.restart === "unless-stopped" && app.stop_grace_period === "35s",

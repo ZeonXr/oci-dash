@@ -1,0 +1,33 @@
+name: Verify published release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published version to verify, for example v0.1.1
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-public:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OCI_DASH_RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - name: Verify anonymous image access and standalone deployment
+        run: npm run test:release

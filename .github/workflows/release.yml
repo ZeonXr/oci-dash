@@ -291,18 +291,8 @@ jobs:
 
   verify-public:
     needs: [metadata, publish]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    uses: ./.github/workflows/verify-release.yml
     permissions:
       contents: read
-    env:
-      OCI_DASH_RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "26.13.0"
-      - name: Verify the public image and downloaded standalone deployment
-        run: npm run test:release
+    with:
+      tag: ${{ needs.metadata.outputs.tag }}
