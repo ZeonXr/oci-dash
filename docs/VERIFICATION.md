@@ -75,6 +75,17 @@ npm run test:e2e:isolated -- --no-build
 
 本版本精简设置内的账号卡片：仅展示账号名称、连接状态、同步区域摘要和更新时间。同步区域改用国旗与名称，最多展示三个，其他区域以数量汇总；配置主区域、完整 OCID 与区域代码继续在详情弹窗查看。点击账号名称打开详情，卡片底部保留刷新和编辑，将移除操作独立放在右侧。
 
+**2026-11-09**，源码 [`b09e72f`](https://github.com/ZeonXr/oci-dash/commit/b09e72f39e605851135984f8b13648d7d0222d99) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/42607414467) 通过：格式、类型、本地文档链接、725 项 Linux 单元测试及 115 项 Chrome 浏览器检查成功，容器生命周期与备份恢复验证通过。本机另完成 10 项账号和 23 项刷新专项，覆盖区域不重复、完整详情保留、名称点击和键盘操作、窄屏右侧移除按钮以及分账号刷新状态。
+
+[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42607421225) 成功：AMD64、ARM64 原生构建及各 5 项运行检查通过；匿名部署验收完成后，推广日志确认 `promoted: true`。[发布附件](https://github.com/ZeonXr/oci-dash/releases/tag/v0.5.2) 的独立 Compose 为 312 字节，与源码按 LF 换行比较一致。
+
+- 多架构索引：`sha256:e90f53ce44ec08ff3fd5c1814576f1bc9e5d05fd4c9010490febb233c7f7724a`
+- `linux/amd64`：`sha256:af787fbce26df4b73c66d9f9d5d8c6fd167ac3c04a0ad37cbc1be360f9bd903c`
+- `linux/arm64`：`sha256:589b5c04e0da6c9cfcddc0e1b07a3cd6d825492451fd8d4405d0010b214f912b`
+- Compose：`sha256:4b9767035fcac0937fa9c751e965567a97bfc7880ba173c44636c47c144ad37f`
+
+本机 Windows Docker Desktop 完整备份后更新至正式 v0.5.2 镜像并达到健康状态。升级前后管理员密码与 MFA、加密 OCI 凭据、主密钥和资源归属的合并哈希一致。测试容器、网络、临时数据、报告、下载附件及候选镜像已清理，升级备份保留。全部交互回归使用合成数据和 API 拦截。
+
 ### v0.5.0 发布验收
 
 本版本将 IP 查看与操作统一到详情弹窗，移除卡片及网络行的独立更换按钮；所有已显示的公网、私网 IPv4 和 IPv6 都可查看详情，不可更换时禁用弹窗内操作并说明原因。
