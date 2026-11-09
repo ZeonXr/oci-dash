@@ -149,6 +149,13 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
   await page.goto("/settings/accounts");
   const trigger = page.getByRole("button", { name: `查看 ${account.name} 详情` });
   await expect(trigger).toBeVisible();
+  await expect(trigger).toHaveText(account.name);
+  const card = page.locator(".account-card");
+  await expect(card.getByRole("button", { name: "详情", exact: true })).toHaveCount(0);
+  await expect(card.getByText("凤凰城", { exact: true })).toHaveCount(1);
+  await expect(card.getByText("东京", { exact: true })).toHaveCount(1);
+  await expect(card.getByText("配置主区域", { exact: true })).toHaveCount(0);
+  await expect(card.getByText("租户", { exact: true })).toHaveCount(0);
   expect(detailsApi.reads).toBe(0);
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
@@ -206,10 +213,29 @@ test("账号详情的局部失败可重试，刷新失败仍保留已取得的�
   await expect(dialog).toHaveCount(0);
 });
 
-test("账号详情在小屏展示长标识时仍可阅读和关闭", async ({ page }) => {
+test("账号卡片在小屏保持操作间距，名称可通过键盘打开详情并恢复焦点", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings/accounts");
-  await page.getByRole("button", { name: `查看 ${account.name} 详情` }).click();
+  const card = page.locator(".account-card");
+  await expect(card).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const remove = card.getByRole("button", { name: "移除", exact: true });
+  const edit = card.getByRole("button", { name: "编辑", exact: true });
+  const removeBounds = await remove.boundingBox();
+  const editBounds = await edit.boundingBox();
+  const contentRight = await card.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return bounds.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+  });
+  expect(removeBounds).not.toBeNull();
+  expect(editBounds).not.toBeNull();
+  expect(Math.abs(removeBounds!.x + removeBounds!.width - contentRight)).toBeLessThanOrEqual(1);
+  expect(removeBounds!.x - (editBounds!.x + editBounds!.width)).toBeGreaterThanOrEqual(6);
+  expect(Math.abs(removeBounds!.y - editBounds!.y)).toBeLessThanOrEqual(1);
+  const trigger = page.getByRole("button", { name: `查看 ${account.name} 详情` });
+  await trigger.focus();
+  await trigger.press("Enter");
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
   await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
   const dimensions = await dialog.evaluate((element) => {
@@ -232,6 +258,7 @@ test("账号详情在小屏展示长标识时仍可阅读和关闭", async ({ pa
   expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport);
   expect(dimensions.dialogScroll).toBeLessThanOrEqual(dimensions.dialogClient + 1);
   expect(dimensions.bodyScroll).toBeLessThanOrEqual(dimensions.body + 1);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });

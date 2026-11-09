@@ -1,12 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
-import { KeyRound, Plus } from "lucide-react";
+import { ChevronRight, KeyRound, Plus } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { isJobPending as pendingSync } from "@/lib/job-state";
 import { api, send, useAction, useResource } from "@/components/api";
 import { AccountDialog } from "@/components/account-dialog";
 import { AccountDetailsDialog } from "@/components/account-details-dialog";
-import { CodeTag } from "@/components/code-tag";
 import { useApp } from "@/components/app-provider";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import {
@@ -15,7 +14,6 @@ import {
   Button,
   RefreshButton,
   Card,
-  CopyButton,
   EmptyState,
   ErrorState,
   Field,
@@ -23,8 +21,8 @@ import {
   Modal,
   Status,
 } from "@/components/ui";
-import { shortId, taskHref } from "@/components/format";
-import { RegionTag } from "@/components/region-label";
+import { taskHref } from "@/components/format";
+import { RegionLabel } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 
 function connectionLabel(account: AccountSummary, job: JobSummary): string {
@@ -136,10 +134,17 @@ export default function AccountsPage() {
                       <KeyRound size={20} />
                     </span>
                     <div className="grow">
-                      <h2>{account.name}</h2>
-                      <p className="muted small">
-                        <RegionTag region={account.homeRegion} showName={false} /> · 配置主区域
-                      </p>
+                      <h2>
+                        <button
+                          type="button"
+                          className="account-name"
+                          aria-label={`查看 ${account.name} 详情`}
+                          onClick={() => setViewing(account)}
+                        >
+                          <span>{account.name}</span>
+                          <ChevronRight size={15} aria-hidden="true" />
+                        </button>
+                      </h2>
                     </div>
                     {syncing && job ? (
                       <Badge tone="info">{connectionLabel(account, job)}</Badge>
@@ -148,15 +153,14 @@ export default function AccountsPage() {
                     )}
                   </div>
                   <div className="account-meta">
-                    <div className="row">
-                      <span>租户</span>
-                      <CodeTag title={account.tenancyId}>{shortId(account.tenancyId)}</CodeTag>
-                      <CopyButton value={account.tenancyId} />
-                    </div>
-                    <div className="region-chips">
-                      {account.regions.map((region) => (
-                        <RegionTag key={region} region={region} showName={false} />
+                    <div className="account-regions">
+                      <span>同步区域</span>
+                      {account.regions.slice(0, 3).map((region) => (
+                        <RegionLabel key={region} region={region} />
                       ))}
+                      {account.regions.length > 3 && (
+                        <span>另 {account.regions.length - 3} 个区域</span>
+                      )}
                     </div>
                     <UpdatedAt
                       value={account.lastSyncAt}
@@ -165,14 +169,6 @@ export default function AccountsPage() {
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
                   <div className="account-actions">
-                    <Button
-                      className="button-sm"
-                      variant="ghost"
-                      aria-label={`查看 ${account.name} 详情`}
-                      onClick={() => setViewing(account)}
-                    >
-                      详情
-                    </Button>
                     <RefreshButton
                       className="button-sm"
                       disabled={action.pending || syncing}
@@ -189,7 +185,7 @@ export default function AccountsPage() {
                       编辑
                     </Button>
                     <Button
-                      className="button-sm danger-text"
+                      className="button-sm danger-text account-remove"
                       variant="ghost"
                       disabled={syncing}
                       onClick={() => {

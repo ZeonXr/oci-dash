@@ -1783,9 +1783,38 @@ pre {
   align-items: center;
   gap: 12px;
 }
+.account-heading .badge {
+  flex-shrink: 0;
+}
 .account-heading h2 {
   font-size: 15px;
   overflow-wrap: anywhere;
+}
+.account-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  border-radius: 3px;
+}
+.account-name span {
+  min-width: 0;
+}
+.account-name svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.account-name:hover {
+  color: var(--primary);
+}
+.account-name:hover svg {
+  color: inherit;
 }
 .account-meta {
   font-size: 12px;
@@ -1803,10 +1832,15 @@ pre {
   margin-top: auto;
   flex-wrap: wrap;
 }
-.region-chips {
+.account-actions .account-remove {
+  margin-inline-start: auto;
+}
+.account-regions {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 8px 12px;
   flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
 .task-table {
   min-width: 820px;
