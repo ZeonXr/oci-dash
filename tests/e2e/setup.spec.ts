@@ -70,7 +70,7 @@ const test = base.extend<{ auth: AuthFixture }>({
                 "/settings/security",
                 "/settings/general",
                 "/favicon.ico",
-                "/icon.svg",
+                "/oci-logo.png",
               ].includes(path) ||
               path.startsWith("/_next/")
             )

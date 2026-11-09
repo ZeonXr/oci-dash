@@ -104,7 +104,7 @@ const test = base.extend<{ mockApi: MockApi }>({
           url.pathname.startsWith("/_next/") ||
           /^\/flags\/[a-z]{2}\.svg$/.test(url.pathname) ||
           url.pathname === "/favicon.ico" ||
-          url.pathname === "/icon.svg"
+          url.pathname === "/oci-logo.png"
         ) {
           return route.continue();
         }

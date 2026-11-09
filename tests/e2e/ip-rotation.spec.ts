@@ -273,7 +273,7 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
           method === "GET" &&
           (path.startsWith("/_next/") ||
             /^\/flags\/[a-z]{2}\.svg$/.test(path) ||
-            ["/instances", "/favicon.ico", "/icon.svg"].includes(path) ||
+            ["/instances", "/favicon.ico", "/oci-logo.png"].includes(path) ||
             /^\/instances\/[^/]+$/.test(path))
         )
           return route.continue();

@@ -63,7 +63,7 @@ const test = base.extend<{ isolatedApi: undefined }>({
             appPaths.has(path) ||
             path.startsWith("/_next/") ||
             path === "/favicon.ico" ||
-            path === "/icon.svg"
+            path === "/oci-logo.png"
           )
             return route.continue();
         }
