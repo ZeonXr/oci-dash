@@ -41,6 +41,7 @@ jobs:
           assert.match(tag, /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'Release tags must use vMAJOR.MINOR.PATCH');
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
           const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          assert.ok(readFileSync(`docs/releases/${tag}.md`, 'utf8').trim(), 'Versioned release notes are required');
           assert.equal(tag, `v${pkg.version}`, 'Tag and package version must match');
           assert.equal(lock.version, pkg.version, 'Lockfile version must match');
           assert.equal(lock.packages[''].version, pkg.version, 'Lockfile root version must match');
@@ -211,19 +212,7 @@ jobs:
       - name: Publish the immutable version and standalone deployment asset
         env:
           INDEX_DIGEST: ${{ steps.index.outputs.digest }}
-        run: |
-          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
-          提供 linux/amd64 和 linux/arm64 镜像，两种架构均已通过容器运行验证。
-
-          下载附件 compose.yaml，放入独立部署目录。数据默认保存在同目录的 ./data 中；Linux 首次部署先执行 `sudo install -d -o 1000 -g 1000 -m 0700 ./data`，Windows Docker Desktop 用户创建 data 文件夹并允许 Docker 读写，然后运行 `docker compose up -d --wait`。
-
-          首次通过 localhost:6240 或 SSH 隧道打开页面，创建管理员账号；支持生成并复制 32 位随机密码。完成初始化后再开放公共反向代理。自定义端口直接修改 Compose 的端口映射，不使用 .env。
-
-          从旧默认端口 3000 升级时，若要保留原地址，将端口映射改为 `127.0.0.1:3000:3000`；采用 6240 时同步调整反向代理上游与 SSH 隧道。
-
-          从旧版命名卷升级的部署，必须先停机备份并将完整数据恢复到 ./data，再切换挂载。迁移步骤见仓库 docs/OPERATIONS.md。
-          NOTES
-          node scripts/release.ts publish "$RUNNER_TEMP/release-notes.md"
+        run: node scripts/release.ts publish "docs/releases/$RELEASE_TAG.md"
       - name: Record candidate images for deliberate cleanup
         if: always()
         run: |
