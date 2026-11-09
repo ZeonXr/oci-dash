@@ -75,6 +75,19 @@ npm run test:e2e:isolated -- --no-build
 
 修正未覆盖库存的失效标记：旧实例保留原值及同步时间，明确标为未更新，并在账号和任务结果中提示覆盖不完整。其他成功范围的更新与清理继续独立执行；范围恢复后可清除标记。两项任务停止轮询检查在浏览器提交与绘制后建立计数基线，继续严格验证终态后无新增轮询请求。账号详情入口及区域标签文档同步更新。
 
+**2026-11-09**，本机 Windows 单元测试 40 个文件通过，722 项通过、6 项按平台跳过；两条停止轮询用例各重复 20 次，40 次全部通过。新增 3 项库存回归覆盖区间消失、区域未覆盖、恢复与确认空范围删除，并确认其他账号不受影响。全部 OCI 回归使用合成数据，未执行真实云资源写入。
+
+源码 [`b4094c8`](https://github.com/ZeonXr/oci-dash/commit/b4094c8f7ff07286a7949ab42cbe3a94cc7f01c5) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/42642141382) 和[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42642218972) 均通过格式、应用及脚本类型、文档链接、728 项 Linux 单元测试、115 项 Chrome 浏览器检查、5 项运行检查及 4 项备份恢复检查。AMD64、ARM64 原生构建与各 5 项运行检查通过；公开部署验收通过后，推广日志确认 `promoted: true`。
+
+[独立 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.5/compose.yaml) 为 312 字节，按 LF 换行与源码比较一致。
+
+- 多架构索引：`sha256:f37c417e8c5a23ecba510f4a8767dc44d526814d51bb87daa93c8732affd84ff`
+- `linux/amd64`：`sha256:2f2bc78f998cab54149b8e7aa5189c42b22de4ca823287f3a0da0ae0f3f274c0`
+- `linux/arm64`：`sha256:f82a3aeacb35a6890899a4dfef099538d24a88d59a4bd686cf72f2d89cdb2429`
+- Compose：`sha256:d1cf10d31d284c0058516988c7c6fec7bcaadd67269bdc4de8a4347c4c8f5543`
+
+Windows Docker Desktop 在完整备份后更新至正式 v0.5.5 镜像并达到健康状态；管理员密码与 MFA、加密 OCI 凭据、主密钥和资源归属的升级前后合并哈希一致。测试容器、网络、临时数据、报告、下载附件及候选镜像已清理，升级备份保留。真实 OCI 写入与异机恢复的验收边界仍见下方“尚未完成的验收”。
+
 ### v0.5.4 发布验收
 
 区域国旗与 OCI 代码由同一个标签包裹，共用边框、背景和圆角；账号、实例、任务、统计及详情中的区域展示统一使用同一组件。删除原有分离的旗帜样式和普通区域标签，长代码在标签内部换行。
