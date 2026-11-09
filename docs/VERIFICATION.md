@@ -79,6 +79,10 @@ npm run test:e2e:isolated -- --no-build
 
 **2026-11-10**，格式、应用与脚本类型、文档链接及镜像构建通过。Windows Edge 访问 Docker 自动创建数据目录的隔离部署，115 项浏览器检查通过；5 项运行检查覆盖首次设置、旧 UID 1000 数据目录下的故障恢复与密钥保留、心跳和正常停止；4 项备份恢复检查覆盖混合属主、原权限、运行状态及取消清理。全部检查使用隔离数据或模拟 OCI。
 
+源码 [`81c09b3`](https://github.com/ZeonXr/oci-dash/commit/81c09b3c464a7c1959be547c71d702beb25d54d8) 的[发布流程第三次执行](https://github.com/ZeonXr/oci-dash/actions/runs/42671705995/attempts/3) 通过完整 CI：728 项 Linux 单元测试、115 项 Chrome 浏览器检查、5 项运行检查和 4 项备份恢复检查。Linux 首次部署检查确认 Docker 自动创建的数据目录可直接使用。AMD64、ARM64 原生构建与各 5 项运行检查及公开部署验收均通过，推广日志确认 `promoted: true`。前两次执行因 GitHub 平台内部错误未能创建验证任务，源码与标签保持不变。
+
+[Compose 附件](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml) 为 240 字节，发布资产摘要与源码按 LF 换行计算的 SHA-256 一致：`27b24d102086df3b3941ef7bfc190fda641000f4a39aa1c7e3516e28d63039ed`。正式多架构镜像索引为 `sha256:0118b9e05cd5994b2b6598a73c78258e2587b167030caa1ab121b9ccf81b4ff8`。Release 正文与对应版本说明一致。
+
 ### v0.5.7 发布验收
 
 变更与升级要求见[版本说明](releases/v0.5.7.md)。应用源码为 [`87f437e`](https://github.com/ZeonXr/oci-dash/commit/87f437ee4fce8bc7d549c8653f6a86b8953fa555)。
