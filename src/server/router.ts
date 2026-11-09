@@ -27,6 +27,7 @@ import {
   getCredentialSnapshot,
   listAccounts,
   setAccountStatus,
+  setAccountTenancyName,
 } from "./accounts";
 import { createAccountConnection, updateAccountConnection } from "./account-connection";
 import { getInstance, listInstances, recentActivity } from "./inventory";
@@ -179,6 +180,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
           // Verification reports subscribed regions without changing the user's selected scope.
           if (!setAccountStatus(id, "connected", null, access.revision))
             throw new AppError("账号配置在验证期间已变更，请重新验证", 409, "ACCOUNT_CHANGED");
+          setAccountTenancyName(id, info.tenancyName, access.revision);
           audit(user.username, "account.verify", account.name, "连接验证成功");
           return json({ account: getAccount(id), ...info });
         } catch (error) {

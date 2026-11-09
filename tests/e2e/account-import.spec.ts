@@ -9,7 +9,7 @@ type MockApi = { accounts: AccountSummary[]; syncJobs: JobSummary[]; writes: Wri
 const sample: AccountSummary = {
   id: "ui-test-account",
   name: "Test account",
-  tenancyId: "ocid1.tenancy.oc1..uitest",
+  tenancyId: "ocid1.tenancy.oc1..uitest01",
   userId: "ocid1.user.oc1..uitest",
   fingerprint: "aa:".repeat(15) + "aa",
   homeRegion: "ap-tokyo-1",
@@ -72,9 +72,16 @@ const test = base.extend<{ mockApi: MockApi }>({
         ) {
           const body = request.postDataJSON() as Record<string, unknown>;
           state.writes.push({ method, path: url.pathname, body });
-          const account = { ...sample, name: String(body.name), regions: body.regions as string[] };
+          const previous = state.accounts[0];
+          const name = typeof body.name === "string" ? body.name.trim() : undefined;
+          const account: AccountSummary = {
+            ...(previous || sample),
+            name: name || previous?.name || "OCI-uitest01",
+            nameSource: name === undefined ? previous?.nameSource : name ? "custom" : "pending",
+            regions: body.regions as string[],
+          };
           state.accounts = [account];
-          if (method === "POST") {
+          if (method === "POST" || (name === "" && !body.recoverConsoleCleanup)) {
             const syncJob = { ...queuedSync, accountName: account.name };
             state.syncJobs = [syncJob];
             return json({ account, job: syncJob });
@@ -161,6 +168,17 @@ async function emptyScreenshot(page: Page, dialog: Locator, info: TestInfo, name
 function config(fingerprint: string) {
   return `[DEFAULT]\nuser=${sample.userId}\nfingerprint=${fingerprint}\ntenancy=${sample.tenancyId}\nregion=${sample.homeRegion}\nkey_file=<path to your private keyfile>`;
 }
+function credentials() {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { format: "pem", type: "pkcs8" },
+    publicKeyEncoding: { format: "der", type: "spki" },
+  });
+  return {
+    privateKey,
+    fingerprint: createHash("md5").update(publicKey).digest("hex").match(/.{2}/g)!.join(":"),
+  };
+}
 
 test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确", async ({ page, mockApi }, info) => {
   await page.setViewportSize({ width: 1691, height: 1004 });
@@ -196,15 +214,10 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
   await expect(dialog).not.toBeVisible();
   await expect(opener(page)).toBeFocused();
   dialog = await openAdd(page);
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-    privateKeyEncoding: { format: "pem", type: "pkcs8" },
-    publicKeyEncoding: { format: "der", type: "spki" },
-  });
-  const fingerprint = createHash("md5").update(publicKey).digest("hex").match(/.{2}/g)!.join(":");
+  const { privateKey, fingerprint } = credentials();
   await dialog.getByLabel(/^OCI 配置文本/).fill(config(fingerprint));
   await dialog.getByLabel(/^API 私钥文件/).setInputFiles({
-    name: "test-account-2026-11-07T00_00_00.pem",
+    name: "oci_api_key.pem",
     mimeType: "application/x-pem-file",
     buffer: Buffer.from(privateKey),
   });
@@ -214,7 +227,7 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
   const { method, body } = mockApi.writes[0];
   expect(method).toBe("POST");
   // Compare public fields separately: a failed assertion must never print a key.
-  expect(body.name).toBe("test-account");
+  expect(body.name).toBe("");
   expect(body.tenancyId).toBe(sample.tenancyId);
   expect(body.userId).toBe(sample.userId);
   expect(body.fingerprint).toBe(fingerprint);
@@ -226,11 +239,14 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
   ).toBe(true);
   expect("key_file" in body || "profileName" in body).toBe(false);
   const card = page.locator(".account-card");
-  await expect(card.getByRole("heading")).toHaveText("test-account");
+  await expect(card.getByRole("heading")).toHaveText("OCI-uitest01");
+  await expect(card).not.toContainText("oci_api_key");
   await expect(card).toContainText("等待连接");
   await expect(card.getByRole("button", { name: /^(验证|同步)$/ })).toHaveCount(0);
   mockApi.accounts[0] = {
     ...mockApi.accounts[0],
+    name: "cloud-tenancy-name",
+    nameSource: "tenancy",
     status: "connected",
     lastSyncAt: sample.createdAt,
   };
@@ -241,10 +257,36 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
   };
   // The 3-second account poll must update the card without a manual refresh.
   await expect(card.getByText("已连接", { exact: true })).toBeVisible({ timeout: 8000 });
+  await expect(card.getByRole("heading")).toHaveText("cloud-tenancy-name");
   await expect(card.getByRole("button", { name: "刷新资源", exact: true })).toBeEnabled();
   expect(mockApi.writes.map(({ method, path }) => `${method} ${path}`)).toEqual([
     "POST /api/accounts",
   ]);
+});
+
+test("添加时填写的名称优先于租户名称与私钥文件名", async ({ page, mockApi }) => {
+  await page.goto("/settings/accounts");
+  const dialog = await openAdd(page);
+  const { privateKey, fingerprint } = credentials();
+  await dialog.getByLabel(/^OCI 配置文本/).fill(config(fingerprint));
+  await dialog.getByLabel(/^API 私钥文件/).setInputFiles({
+    name: "oci_api_key.pem",
+    mimeType: "application/x-pem-file",
+    buffer: Buffer.from(privateKey),
+  });
+  await dialog.locator("summary").click();
+  await expect(dialog.getByLabel(/^账号名称/)).toHaveAttribute(
+    "placeholder",
+    "留空使用 OCI 租户名称",
+  );
+  await dialog.getByLabel(/^账号名称/).fill("My production account");
+  await dialog.getByRole("button", { name: "添加账号", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(mockApi.writes).toHaveLength(1);
+  expect(mockApi.writes[0].body.name).toBe("My production account");
+  await expect(page.locator(".account-card").getByRole("heading")).toHaveText(
+    "My production account",
+  );
 });
 
 test("连接失败可重试，排队期间禁用按钮且不重复提交", async ({ page, mockApi }) => {
@@ -312,6 +354,47 @@ test("编辑名称不读取或提交现有私钥，也不重新连接", async ({
   await expect(page.locator(".account-card").getByRole("heading")).toHaveText("Renamed account");
 });
 
+test("编辑其他设置不将自动名称变成自定义名称", async ({ page, mockApi }) => {
+  mockApi.accounts = [{ ...sample, name: "Cloud tenancy", nameSource: "tenancy" }];
+  await page.goto("/settings/accounts");
+  await page.locator(".account-card").getByRole("button", { name: "编辑", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑账号" });
+  await dialog.getByRole("button", { name: "保存更改", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(mockApi.writes).toHaveLength(1);
+  expect(Object.keys(mockApi.writes[0].body)).toEqual(["regions"]);
+  expect(mockApi.accounts[0].nameSource).toBe("tenancy");
+  await expect(page.locator(".account-card").getByRole("heading")).toHaveText("Cloud tenancy");
+});
+
+test("旧账号可清空名称恢复自动识别，读取成功前保留原名", async ({ page, mockApi }) => {
+  mockApi.accounts = [
+    { ...sample, name: "oci_api_key", status: "connected", lastSyncAt: sample.createdAt },
+  ];
+  await page.goto("/settings/accounts");
+  await page.locator(".account-card").getByRole("button", { name: "编辑", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑账号" });
+  await dialog.getByLabel(/^账号名称/).fill("");
+  await dialog.getByRole("button", { name: "保存更改", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(mockApi.writes).toHaveLength(1);
+  expect(mockApi.writes[0].body.name).toBe("");
+  const card = page.locator(".account-card");
+  await expect(card.getByRole("heading")).toHaveText("oci_api_key");
+  await expect(card.getByRole("button", { name: "等待刷新", exact: true })).toBeDisabled();
+  mockApi.accounts[0] = {
+    ...mockApi.accounts[0],
+    name: "Recovered tenancy",
+    nameSource: "tenancy",
+  };
+  mockApi.syncJobs[0] = {
+    ...mockApi.syncJobs[0],
+    state: "succeeded",
+    finishedAt: sample.createdAt,
+  };
+  await expect(card.getByRole("heading")).toHaveText("Recovered tenancy", { timeout: 8000 });
+});
+
 test("控制台凭据恢复保留原区域并明确等待清理，不自动连接", async ({ page, mockApi }) => {
   mockApi.accounts = [{ ...sample, regions: ["ap-tokyo-1", "ap-singapore-1"] }];
   await page.goto("/settings/accounts");
@@ -325,12 +408,7 @@ test("控制台凭据恢复保留原区域并明确等待清理，不自动连�
   await expect(dialog.getByLabel(/^同步区域/)).toBeDisabled();
   await expect(dialog.getByLabel(/^同步区域/)).toHaveValue("ap-tokyo-1\nap-singapore-1");
   await expect(dialog).toContainText("先断开控制台并等待清理请求结束");
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-    privateKeyEncoding: { format: "pem", type: "pkcs8" },
-    publicKeyEncoding: { format: "der", type: "spki" },
-  });
-  const fingerprint = createHash("md5").update(publicKey).digest("hex").match(/.{2}/g)!.join(":");
+  const { privateKey, fingerprint } = credentials();
   await dialog
     .getByLabel(/^OCI 配置文本/)
     .fill(config(fingerprint).replace("ap-tokyo-1", "uk-london-1"));

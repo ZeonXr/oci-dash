@@ -446,6 +446,7 @@ describe("transactional page-triggered inventory refresh", () => {
         region: "test-region",
       }),
       saveInventory: vi.fn(),
+      setAccountName: vi.fn(),
       setAccountError: vi.fn(),
     };
     await runWorker({ dependencies, once: true, signal: new AbortController().signal });

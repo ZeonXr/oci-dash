@@ -3,6 +3,8 @@ export type AccountStatus = "unchecked" | "connected" | "error";
 export interface AccountSummary {
   id: string;
   name: string;
+  /** Missing on older API responses; treat those names as custom. */
+  nameSource?: "custom" | "pending" | "tenancy";
   tenancyId: string;
   userId: string;
   fingerprint: string;

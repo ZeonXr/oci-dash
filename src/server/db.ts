@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS login_attempts (subject TEXT PRIMARY KEY, count INTEG
 CREATE TABLE IF NOT EXISTS accounts (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, tenancy_id TEXT NOT NULL, user_id TEXT NOT NULL,
  fingerprint TEXT NOT NULL, home_region TEXT NOT NULL, regions TEXT NOT NULL, credential TEXT NOT NULL,
- status TEXT NOT NULL DEFAULT 'unchecked', last_sync_at TEXT, last_error TEXT, created_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0
+ status TEXT NOT NULL DEFAULT 'unchecked', last_sync_at TEXT, last_error TEXT, created_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
+ name_source TEXT NOT NULL DEFAULT 'custom'
 );
 CREATE TABLE IF NOT EXISTS resources (
  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -54,7 +55,12 @@ export function getDatabase(): Database.Database {
       const columns = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
       if (!columns.some((column) => column.name === "revision"))
         db.exec("ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
+      if (!columns.some((column) => column.name === "name_source"))
+        db.exec("ALTER TABLE accounts ADD COLUMN name_source TEXT NOT NULL DEFAULT 'custom'");
       db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(2,?)").run(
+        new Date().toISOString(),
+      );
+      db.prepare("INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(4,?)").run(
         new Date().toISOString(),
       );
     }).immediate();

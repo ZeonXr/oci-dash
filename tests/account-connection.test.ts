@@ -13,6 +13,7 @@ import {
   getCredentialSnapshot,
   getCredentials,
   listAccounts,
+  setAccountTenancyName,
   updateAccount,
   type AccountInput,
 } from "@/server/accounts";
@@ -165,6 +166,101 @@ function failedConsole(accountId: string) {
 }
 
 describe("atomic account save and background connection", () => {
+  it("creates unnamed accounts with a stable temporary name and never requires a filename", async () => {
+    for (const [index, name] of [undefined, "   ", "  My OCI account  "].entries()) {
+      const data = input({ name, tenancyId: ocid("tenancy") + index });
+      const response = await call("POST", "accounts", data);
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.account).toMatchObject({
+        name: index === 2 ? "My OCI account" : `OCI-${data.tenancyId.slice(-8)}`,
+        nameSource: index === 2 ? "custom" : "pending",
+      });
+      expect(body.job.state).toBe("queued");
+    }
+  });
+
+  it("keeps legacy names custom when migrating a database without name sources", () => {
+    const account = createAccount(input({ name: "oci_api_key" }), USERNAME);
+    getDatabase().exec("ALTER TABLE accounts DROP COLUMN name_source");
+    closeDatabase();
+    expect(getAccount(account.id)).toMatchObject({ name: "oci_api_key", nameSource: "custom" });
+    expect(setAccountTenancyName(account.id, "Cloud tenant", 0)).toBe(false);
+    expect(getAccount(account.id)?.name).toBe("oci_api_key");
+  });
+
+  it("resets a legacy name explicitly, preserves it until verification, and reuses the queued lookup", async () => {
+    const account = createAccount(input({ name: "oci_api_key" }), USERNAME);
+    getDatabase()
+      .prepare("UPDATE accounts SET status='connected',last_sync_at=? WHERE id=?")
+      .run("2026-11-08T12:00:00.000Z", account.id);
+    const response = await call("PATCH", `accounts/${account.id}`, { name: "  " });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.account).toMatchObject({
+      name: "oci_api_key",
+      nameSource: "pending",
+      status: "connected",
+    });
+    expect(body.job).toMatchObject({ accountId: account.id, state: "queued" });
+    const repeat = await call("PATCH", `accounts/${account.id}`, { name: "" });
+    expect(repeat.status).toBe(200);
+    expect((await repeat.json()).job).toBeUndefined();
+    expect(getJobStore().listJobs()).toHaveLength(1);
+    expect(setAccountTenancyName(account.id, "Cloud tenant", 0)).toBe(true);
+    expect(getAccount(account.id)).toMatchObject({ name: "Cloud tenant", nameSource: "tenancy" });
+    expect(getJobStore().getJob(body.job.id)?.accountName).toBe("Cloud tenant");
+    const noChange = await call("PATCH", `accounts/${account.id}`, { name: "" });
+    expect((await noChange.json()).job).toBeUndefined();
+    expect(getAccount(account.id)?.nameSource).toBe("tenancy");
+  });
+
+  it("rejects switching to automatic naming during an active sync and rolls back when enqueue fails", async () => {
+    const initial = createAccountConnection(input(), USERNAME);
+    const busy = await call("PATCH", `accounts/${initial.account.id}`, { name: "" });
+    expect(busy.status).toBe(409);
+    expect(getAccount(initial.account.id)?.nameSource).toBe("custom");
+    getJobStore().cancelJob(initial.job!.id);
+    const before = storedAccount(initial.account.id);
+    const fail = failAfterEnqueue();
+    const rejected = await call("PATCH", `accounts/${initial.account.id}`, { name: "" });
+    expect(rejected.status).toBe(503);
+    expect(storedAccount(initial.account.id)).toEqual(before);
+    fail.mockRestore();
+  });
+
+  it("does not apply stale or invalid cloud names or overwrite a custom name edited during verification", () => {
+    const account = createAccount(input({ name: undefined }), USERNAME);
+    const revision = getCredentialSnapshot(account.id).revision;
+    for (const name of ["", "   ", account.tenancyId])
+      expect(setAccountTenancyName(account.id, name, revision)).toBe(false);
+    expect(getAccount(account.id)?.nameSource).toBe("pending");
+    updateAccount(account.id, replacementKey, USERNAME);
+    expect(setAccountTenancyName(account.id, "Stale tenant", revision)).toBe(false);
+    const current = getCredentialSnapshot(account.id).revision;
+    expect(setAccountTenancyName(account.id, "Verified tenant", current)).toBe(true);
+    updateAccount(account.id, { name: "My custom account" }, USERNAME);
+    expect(setAccountTenancyName(account.id, "Late cloud result", current)).toBe(false);
+    expect(getAccount(account.id)).toMatchObject({
+      name: "My custom account",
+      nameSource: "custom",
+    });
+  });
+
+  it("preserves a cloud name committed while an unrelated account edit was waiting for its lock", () => {
+    const account = createAccount(input({ name: undefined }), USERNAME);
+    const db = getDatabase();
+    const transaction = db.transaction.bind(db);
+    vi.spyOn(db, "transaction").mockImplementationOnce((operation) => {
+      db.prepare("UPDATE accounts SET name='Verified tenant',name_source='tenancy' WHERE id=?").run(
+        account.id,
+      );
+      return transaction(operation);
+    });
+    const updated = updateAccount(account.id, { regions: account.regions }, USERNAME);
+    expect(updated).toMatchObject({ name: "Verified tenant", nameSource: "tenancy" });
+  });
+
   it("preserves Worker state committed after an account edit starts", () => {
     const account = createAccount(input(), USERNAME);
     const db = getDatabase();

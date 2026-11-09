@@ -75,6 +75,12 @@ function fixture() {
       accountState.status = result.warnings.length ? "error" : "connected";
       accountState.lastError = result.warnings.length ? result.warnings.join("; ") : null;
     }),
+    setAccountName: vi.fn((_accountId: string, tenancyName: string) => {
+      if (accountState.nameSource === "pending" || accountState.nameSource === "tenancy") {
+        accountState.name = tenancyName;
+        accountState.nameSource = "tenancy";
+      }
+    }),
     setAccountError: vi.fn((_accountId: string, message: string) => {
       accountState.status = "error";
       accountState.lastError = message;
@@ -562,6 +568,61 @@ describe("accepted OCI operation completion windows", () => {
 });
 
 describe("verification during inventory refresh", () => {
+  it("resolves a pending name on an already connected account without adding verification to later refreshes", async () => {
+    const f = fixture();
+    Object.assign(f.accountState, {
+      name: "oci_api_key",
+      nameSource: "pending",
+      lastSyncAt: account.createdAt,
+    });
+    f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.adapter.verify).toHaveBeenCalledOnce();
+    expect(f.dependencies.setAccountName).toHaveBeenCalledWith(account.id, account.name);
+    expect(f.accountState).toMatchObject({ name: account.name, nameSource: "tenancy" });
+    f.store.enqueueAccountSync(account.id, "admin");
+    await f.once();
+    expect(f.adapter.verify).toHaveBeenCalledOnce();
+    expect(f.adapter.inventory).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["cancel", "shutdown", "lease-loss"] as const)(
+    "does not publish a verified name after %s",
+    async (condition) => {
+      const f = fixture();
+      f.accountState.nameSource = "pending";
+      const started = gate();
+      const finish = gate();
+      f.adapter.verify.mockImplementationOnce(async () => {
+        started.resolve();
+        await finish.promise;
+        return {
+          tenancyName: "Late tenant",
+          homeRegion: account.homeRegion,
+          regions: account.regions,
+        };
+      });
+      const shutdown = new AbortController();
+      const job = f.store.enqueueAccountSync(account.id, "admin");
+      const worker = runWorker({
+        signal: shutdown.signal,
+        once: true,
+        dependencies: f.dependencies,
+      });
+      await started.promise;
+      if (condition === "cancel") f.store.cancelJob(job.id);
+      if (condition === "shutdown") shutdown.abort();
+      if (condition === "lease-loss") {
+        f.advance(30_001);
+        expect(f.store.claimNext("replacement")?.summary.id).toBe(job.id);
+      }
+      finish.resolve();
+      await worker;
+      expect(f.dependencies.setAccountName).not.toHaveBeenCalled();
+      expect(f.accountState).toMatchObject({ name: account.name, nameSource: "pending" });
+    },
+  );
+
   it.each([
     { status: "connected" as const, lastSyncAt: "2026-01-01T00:00:00Z", checks: 0 },
     { status: "connected" as const, lastSyncAt: null, checks: 1 },

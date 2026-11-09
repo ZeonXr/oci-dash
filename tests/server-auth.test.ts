@@ -624,6 +624,30 @@ describe("credential storage, account revisions and jobs", () => {
     expect(setAccountStatus(account.id, "error", "old failure", snapshot.revision)).toBe(false);
     expect(getAccount(account.id)?.lastError).toBeNull();
   });
+  it("explicit connection verification resolves automatic names and preserves custom names", async () => {
+    const auth = loggedIn();
+    for (const [index, name] of [undefined, "My OCI account"].entries()) {
+      const account = createAccount(
+        accountInput({ name, tenancyId: fakeOcid("tenancy", "named" + index) }),
+        USERNAME,
+      );
+      cloud.verify.mockResolvedValueOnce({
+        tenancyName: "Cloud tenant",
+        homeRegion: account.homeRegion,
+        regions: account.regions,
+      });
+      const response = await handleApi(
+        request(`accounts/${account.id}/verify`, { method: "POST", token: auth.token }),
+        ["accounts", account.id, "verify"],
+      );
+      expect(response.status).toBe(200);
+      expect((await response.json()).account).toMatchObject({
+        name: name ?? "Cloud tenant",
+        nameSource: name ? "custom" : "tenancy",
+      });
+    }
+    expect(cloud.verify).toHaveBeenCalledTimes(2);
+  });
   it("connection verification reports discovered regions without expanding the configured scope", async () => {
     const auth = loggedIn(),
       account = createAccount(accountInput(), USERNAME);

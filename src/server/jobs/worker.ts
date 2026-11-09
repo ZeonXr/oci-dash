@@ -21,6 +21,7 @@ export interface WorkerDependencies {
   adapter: Pick<OciAdapter, "verify" | "inventory" | "execute">;
   getCredentials(accountId: string, region: string): OciCredentials;
   saveInventory(accountId: string, result: InventoryResult): void;
+  setAccountName(accountId: string, tenancyName: string): void;
   setAccountError(accountId: string, message: string): void;
   retryDelayMs?: (attempt: number) => number;
 }
@@ -48,7 +49,7 @@ const defaultRetryDelay = (attempt: number) =>
 async function defaultDependencies(): Promise<WorkerDependencies> {
   const [
     { getJobStore },
-    { getCredentialSnapshot, setAccountStatus },
+    { getCredentialSnapshot, setAccountStatus, setAccountTenancyName },
     { saveInventory },
     { ociAdapter },
   ] = await Promise.all([
@@ -68,6 +69,10 @@ async function defaultDependencies(): Promise<WorkerDependencies> {
       return snapshot.credentials;
     },
     saveInventory,
+    setAccountName(accountId, tenancyName) {
+      const revision = revisions.get(accountId);
+      if (revision !== undefined) setAccountTenancyName(accountId, tenancyName, revision);
+    },
     setAccountError(accountId, message) {
       const revision = revisions.get(accountId);
       if (revision !== undefined) setAccountStatus(accountId, "error", message, revision);
@@ -144,10 +149,20 @@ async function executeClaimed(
     credentials = getCredentials(account.id, job.operation.region);
     const regions = account.regions.length ? account.regions : [account.homeRegion];
     if (job.operation.kind === "sync-account") {
-      if (account.status !== "connected" || !account.lastSyncAt) {
+      if (
+        account.status !== "connected" ||
+        !account.lastSyncAt ||
+        account.nameSource === "pending"
+      ) {
         await context.progress("正在验证 OCI 账号连接。");
-        await adapter.verify(credentials);
+        const verified = await adapter.verify(credentials);
         check();
+        if (
+          !store.withActiveLease(id, workerId, () =>
+            dependencies.setAccountName(account.id, verified.tenancyName),
+          )
+        )
+          throw new CancellationError();
         await context.progress("账号连接验证成功，正在读取云资源。");
       } else await context.progress("正在读取云资源。");
       const result = await adapter.inventory(credentials, account, regions, context);

@@ -10,14 +10,6 @@ import { taskHref } from "./format";
 import { RegionTag } from "./region-label";
 import { Button, ErrorState, Field, Modal } from "./ui";
 
-function suggestedName(file: File | null): string {
-  return (file?.name ?? "")
-    .replace(/\.(pem|key|txt)$/i, "")
-    .replace(/[-_]\d{4}-\d{2}-\d{2}T.*$/, "")
-    .trim()
-    .slice(0, 80);
-}
-
 export function AccountDialog({
   account,
   onClose,
@@ -47,10 +39,11 @@ export function AccountDialog({
     event.preventDefault();
     const response = await action.run(async () => {
       const selectedRegions = regions.split(/[\s,，;；]+/).filter(Boolean);
+      const nameChange = account && name.trim() === account.name ? {} : { name: name.trim() };
       let body: Record<string, unknown>;
       if (account && !replaceCredentials) {
         body = {
-          name: name.trim(),
+          ...nameChange,
           regions: [...new Set([account.homeRegion, ...selectedRegions])],
         };
       } else {
@@ -68,8 +61,7 @@ export function AccountDialog({
         }
         body = {
           ...config,
-          name:
-            name.trim() || account?.name || suggestedName(keyFile) || `OCI-${config.homeRegion}`,
+          ...nameChange,
           regions: [...new Set([config.homeRegion, ...selectedRegions])],
           privateKey,
           ...(account && recoverConsoleCleanup
@@ -106,15 +98,14 @@ export function AccountDialog({
   };
 
   const nameField = (
-    <Field label={account ? "账号名称" : "账号名称（选填）"} required={!!account}>
+    <Field label="账号名称（选填）" hint="留空时，连接成功后使用 OCI 租户名称。">
       <input
         autoFocus={!!account}
-        required={!!account}
         maxLength={80}
         value={name}
         disabled={action.pending}
         onChange={(event) => setName(event.target.value)}
-        placeholder={suggestedName(keyFile) || "留空时使用密钥文件名"}
+        placeholder="留空使用 OCI 租户名称"
       />
     </Field>
   );

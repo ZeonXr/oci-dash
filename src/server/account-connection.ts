@@ -51,6 +51,7 @@ export function updateAccountConnection(
       if (input.recoverConsoleCleanup) return { account, consoleCleanupRecovery: true };
       const reconnect =
         Boolean(input.privateKey) ||
+        (account.nameSource === "pending" && previous.nameSource !== "pending") ||
         account.homeRegion !== previous.homeRegion ||
         regionSet(account) !== regionSet(previous);
       if (!reconnect) return { account };

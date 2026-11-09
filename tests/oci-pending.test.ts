@@ -95,6 +95,7 @@ describe("OCI accepted-operation polling", () => {
       },
       getCredentials: () => credentials,
       saveInventory: vi.fn(),
+      setAccountName: vi.fn(),
       setAccountError: vi.fn(),
     };
     const job = store.enqueueOperation(

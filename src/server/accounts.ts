@@ -6,7 +6,7 @@ import { encryptSecret, decryptSecret } from "./crypto";
 import { AppError } from "./errors";
 
 export interface AccountInput {
-  name: string;
+  name?: string;
   tenancyId: string;
   userId: string;
   fingerprint: string;
@@ -17,7 +17,7 @@ export interface AccountInput {
 export type AccountPatchInput = Partial<AccountInput> & { recoverConsoleCleanup?: boolean };
 type AccountRecord = AccountSummary & { credential: string; revision: number };
 type AccountRow = Omit<AccountRecord, "regions"> & { regions: string };
-const accountColumns = `id,name,tenancy_id AS tenancyId,user_id AS userId,fingerprint,
+const accountColumns = `id,name,name_source AS nameSource,tenancy_id AS tenancyId,user_id AS userId,fingerprint,
   home_region AS homeRegion,regions,credential,status,last_sync_at AS lastSyncAt,
   last_error AS lastError,created_at AS createdAt,revision`;
 
@@ -138,19 +138,22 @@ export function checkPrivateKey(privateKey: string, fingerprint: string): void {
 export function createAccount(input: AccountInput, actor: string): AccountSummary {
   checkPrivateKey(input.privateKey, input.fingerprint);
   const id = randomUUID(),
-    createdAt = new Date().toISOString();
+    createdAt = new Date().toISOString(),
+    customName = input.name?.trim(),
+    name = customName || `OCI-${input.tenancyId.slice(-8)}`;
   return getDatabase()
     .transaction(() => {
       assertUniqueTenancy(input.tenancyId);
       getDatabase()
         .prepare(
           `INSERT INTO accounts
-          (id,name,tenancy_id,user_id,fingerprint,home_region,regions,credential,status,created_at)
-          VALUES(@id,@name,@tenancyId,@userId,@fingerprint,@homeRegion,@regions,@credential,@status,@createdAt)`,
+          (id,name,name_source,tenancy_id,user_id,fingerprint,home_region,regions,credential,status,created_at)
+          VALUES(@id,@name,@nameSource,@tenancyId,@userId,@fingerprint,@homeRegion,@regions,@credential,@status,@createdAt)`,
         )
         .run({
           id,
-          name: input.name,
+          name,
+          nameSource: customName ? "custom" : "pending",
           tenancyId: input.tenancyId,
           userId: input.userId,
           fingerprint: input.fingerprint.toLowerCase(),
@@ -160,7 +163,7 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
           status: "unchecked",
           createdAt,
         });
-      audit(actor, "account.create", input.name, "账号配置已保存");
+      audit(actor, "account.create", name, "账号配置已保存");
       return getAccount(id)!;
     })
     .immediate();
@@ -199,7 +202,6 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
       "CONSOLE_RECOVERY_SCOPE_MISMATCH",
     );
   const changes: Partial<AccountRecord> = {
-    name: input.name ?? existing.name,
     homeRegion,
     regions,
   };
@@ -218,6 +220,24 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
       const current = storedAccount(id);
       if (!current || current.revision !== existing.revision)
         throw new AppError("账号配置已变更，请刷新后重试", 409, "ACCOUNT_CHANGED");
+      if (input.name !== undefined) {
+        const customName = input.name.trim();
+        if (customName) {
+          changes.name = customName;
+          changes.nameSource = "custom";
+        } else if (current.nameSource === "custom") {
+          // A running sync may already have skipped verification. Require a fresh
+          // task when switching an existing name to OCI's tenancy name.
+          assertAccountTasksIdle(id);
+          changes.nameSource = "pending";
+        }
+      }
+      if (
+        input.tenancyId &&
+        input.tenancyId !== current.tenancyId &&
+        (changes.nameSource ?? current.nameSource) !== "custom"
+      )
+        changes.nameSource = "pending";
       if (input.tenancyId && input.tenancyId !== existing.tenancyId)
         assertUniqueTenancy(input.tenancyId, id);
       if (scopeChanged) {
@@ -228,11 +248,12 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
       const next = { ...current, ...changes };
       getDatabase()
         .prepare(
-          `UPDATE accounts SET name=@name,tenancy_id=@tenancyId,user_id=@userId,
+          `UPDATE accounts SET name=@name,name_source=@nameSource,tenancy_id=@tenancyId,user_id=@userId,
           fingerprint=@fingerprint,home_region=@homeRegion,regions=@regions,credential=@credential,
           status=@status,last_sync_at=@lastSyncAt,last_error=@lastError,revision=@revision WHERE id=@id`,
         )
         .run({ ...next, regions: JSON.stringify(next.regions) });
+      if (next.name !== current.name) updateJobAccountNames(id, next.name);
       if (recovering)
         getDatabase()
           .prepare(
@@ -278,4 +299,34 @@ export function setAccountStatus(
       .prepare("UPDATE accounts SET status=?,last_error=? WHERE id=? AND revision=?")
       .run(status, error, id, expectedRevision).changes === 1
   );
+}
+
+function updateJobAccountNames(id: string, name: string): void {
+  const db = getDatabase();
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").get())
+    db.prepare("UPDATE jobs SET account_name=? WHERE account_id=?").run(name, id);
+}
+
+/** Apply verified OCI identity only while automatic naming and credentials are still current. */
+export function setAccountTenancyName(
+  id: string,
+  tenancyName: string,
+  expectedRevision: number,
+): boolean {
+  if (typeof tenancyName !== "string") return false;
+  const name = tenancyName.trim().slice(0, 80);
+  if (!name || name.startsWith("ocid1.")) return false;
+  const db = getDatabase();
+  return db
+    .transaction(() => {
+      const updated =
+        db
+          .prepare(
+            "UPDATE accounts SET name=?,name_source='tenancy' WHERE id=? AND revision=? AND name_source IN ('pending','tenancy')",
+          )
+          .run(name, id, expectedRevision).changes === 1;
+      if (updated) updateJobAccountNames(id, name);
+      return updated;
+    })
+    .immediate();
 }

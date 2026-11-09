@@ -14,7 +14,7 @@ const ocid = (kind: string) =>
     .max(512)
     .regex(new RegExp(`^ocid1\\.${kind}\\.[A-Za-z0-9._-]+$`), `需要有效的 ${kind} OCID`);
 export const accountSchema = z.object({
-  name: z.string().trim().min(1, "请输入账号名称").max(80),
+  name: z.string().trim().max(80).optional(),
   tenancyId: ocid("tenancy"),
   userId: ocid("user"),
   fingerprint: z.string().regex(/^(?:[a-fA-F0-9]{2}:){15}[a-fA-F0-9]{2}$/, "指纹格式不正确"),
