@@ -1,15 +1,15 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.3.1`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.4.0`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.3.1 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.3.1/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.4.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.3.1/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，先在同一目录创建可由容器用户读写的空数据目录：
@@ -25,7 +25,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v031-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v040-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
 
 打开 `http://localhost:3000`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
 
@@ -150,6 +150,10 @@ docker compose up -d app
 数据卷或宿主目录应位于支持本地文件锁的文件系统。本部署不支持多主机通过 NFS 共享 SQLite。普通 `docker compose down` 保留命名卷；`down -v` 会删除声明的命名卷，不用于日常重启。
 
 ## 账号、同步与任务
+
+账号卡片的“详情”打开时按需调用 OCI 的 `getTenancy`、`getUser` 和 `listRegionSubscriptions`，不执行云资源变更。详情信息的读取权限与资源同步权限分别检查；其中一项失败不会使其他项消失，也不会自动修改账号连接状态。弹窗中的“刷新详情”重新读取这些信息，不会启动资源同步。
+
+配置主区域与 OCI 实际主区域分别展示。资源概况来自当前配置区域的已同步库存，不包含未同步区域、已移除实例或未关联的磁盘，也不是免费额度或资源配额；缺失的 OCPU、内存和启动卷容量不补为零。
 
 同一租户保存一份配置。更新 API 密钥或增减区域时编辑已有账号；新增或更换租户时会拒绝重复配置。旧重复记录不会自动删除，资源归属冲突需要先在设置中处理。
 

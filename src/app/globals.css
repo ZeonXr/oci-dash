@@ -1324,9 +1324,6 @@ pre {
   font-size: 12px;
   flex-wrap: wrap;
 }
-.instance-card-shape {
-  overflow-wrap: anywhere;
-}
 .instance-card-specs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1414,7 +1411,8 @@ pre {
   vertical-align: middle;
   max-width: 100%;
 }
-.region-label img {
+.region-label img,
+.region-tag > img {
   display: inline-block;
   width: 18px;
   height: 12px;
@@ -1423,6 +1421,17 @@ pre {
   border-radius: 2px;
   box-shadow: 0 0 0 1px rgb(0 0 0 / 7%);
 }
+
+.region-tag {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: middle;
+}
+
 .name-link {
   color: var(--ink);
   font-weight: 550;
@@ -1583,10 +1592,14 @@ pre {
   font-size: 18px;
   font-weight: 600;
 }
+.modal-heading > div {
+  min-width: 0;
+}
 .modal-heading p {
   font-size: 13px;
   color: var(--muted);
   margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 .modal-body {
   padding: 22px 24px;
@@ -1777,6 +1790,7 @@ pre {
 }
 .account-heading h2 {
   font-size: 15px;
+  overflow-wrap: anywhere;
 }
 .account-meta {
   font-size: 12px;

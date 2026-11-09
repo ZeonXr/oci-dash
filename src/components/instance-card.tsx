@@ -7,7 +7,8 @@ import type { InstanceSummary, JobSummary, PublicIpBinding, VnicSummary } from "
 import { isJobPending } from "@/lib/job-state";
 import { Button, CopyButton, Status } from "./ui";
 import { formatDate, instanceHref, number, primaryAddress, taskHref } from "./format";
-import { RegionLabel } from "./region-label";
+import { RegionTag } from "./region-label";
+import { CodeTag } from "./code-tag";
 import { InventoryFreshness } from "./inventory-freshness";
 import { canRotatePublicIp } from "./public-ip-rotation";
 
@@ -62,10 +63,8 @@ export function InstanceCard({
         {instance.accountName}
       </p>
       <div className="instance-card-meta">
-        <RegionLabel region={instance.region} />
-        <span className="instance-card-shape" title={instance.shape}>
-          {instance.shape.replace("VM.Standard.", "")}
-        </span>
+        <RegionTag region={instance.region} showName={false} />
+        <CodeTag title={instance.shape}>{instance.shape.replace("VM.Standard.", "")}</CodeTag>
       </div>
       <dl className="instance-card-specs">
         <div>

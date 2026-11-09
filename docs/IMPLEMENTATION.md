@@ -4,19 +4,20 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 ## 模块
 
-| 路径                                           | 职责                                             |
-| ---------------------------------------------- | ------------------------------------------------ |
-| `src/app/`、`src/components/`                  | 页面、交互、筛选、渐进刷新和确认界面。           |
-| `src/server/router.ts`、`auth.ts`、`http.ts`   | 业务 API、会话、MFA、同源检查和请求边界。        |
-| `src/server/accounts.ts`、`inventory.ts`       | 加密凭据、账号版本、库存合并和资源归属。         |
-| `src/server/master-key.ts`、`initial-admin.ts` | 原子持久化主密钥、旧密钥验证及首次管理员初始化。 |
-| `src/server/oci/`                              | SDK 客户端、范围校验、库存读取和资源操作。       |
-| `src/server/jobs/`                             | 持久队列、租约、资源锁、检查点和 Worker。        |
-| `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。            |
-| `src/server/instance-metrics.ts`               | 单实例监控的共享请求、取消、期限与缓存。         |
-| `src/server/console/`                          | VNC 会话、OCI 控制台、SSH 和 WebSocket。         |
-| `src/runtime.ts`、`src/health.ts`              | 容器进程管理、统一网关和整体健康检查。           |
-| `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。               |
+| 路径                                           | 职责                                               |
+| ---------------------------------------------- | -------------------------------------------------- |
+| `src/app/`、`src/components/`                  | 页面、交互、筛选、渐进刷新和确认界面。             |
+| `src/server/router.ts`、`auth.ts`、`http.ts`   | 业务 API、会话、MFA、同源检查和请求边界。          |
+| `src/server/accounts.ts`、`inventory.ts`       | 加密凭据、账号版本、库存合并和资源归属。           |
+| `src/server/account-details.ts`                | 按需读取账号云身份与区域订阅，汇总当前范围的库存。 |
+| `src/server/master-key.ts`、`initial-admin.ts` | 原子持久化主密钥、旧密钥验证及首次管理员初始化。   |
+| `src/server/oci/`                              | SDK 客户端、范围校验、库存读取和资源操作。         |
+| `src/server/jobs/`                             | 持久队列、租约、资源锁、检查点和 Worker。          |
+| `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。              |
+| `src/server/instance-metrics.ts`               | 单实例监控的共享请求、取消、期限与缓存。           |
+| `src/server/console/`                          | VNC 会话、OCI 控制台、SSH 和 WebSocket。           |
+| `src/runtime.ts`、`src/health.ts`              | 容器进程管理、统一网关和整体健康检查。             |
+| `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。                 |
 
 主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
 
@@ -26,7 +27,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.3.1`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.4.0`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
 
 镜像以 UID/GID `1000:1000` 的 `node` 用户运行，Tini 作为 PID 1；Compose 保留 35 秒停止期限、容器级 `no-new-privileges:true`、`cap_drop: ALL` 和 `local` 日志驱动。Linux 数据目录由部署者预先创建并赋权，Windows Docker Desktop 使用宿主 ACL；入口不以 root 运行或自动更改所有者。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
@@ -84,6 +85,7 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 | `POST /api/accounts/:id/sync`                           | 创建或复用持久同步，返回 `{job}`，HTTP 202。                                                                                                     |
 | `POST /api/accounts/:id/verify`                         | 手动连接诊断，不扩大已配置的区域范围。                                                                                                           |
 | `GET /api/accounts/:id/create-options`                  | `region`、可选 `compartmentId`、`availabilityDomain`、`shape`；按可用域筛选规格、按规格筛选镜像，返回包含已确认 `selection` 的 `CreateOptions`。 |
+| `GET /api/accounts/:id/details`                         | 返回 `AccountDetails`：安全账号配置、当前配置区域的库存概况，以及独立的租户、用户和区域订阅结果；20 秒总期限，支持部分失败。                     |
 | `GET /api/instances`、`GET /api/instances/:id`          | `{instances}` 或 `{instance}`，ID 需要 URL 编码。                                                                                                |
 | `POST /api/inventory/refresh`                           | `mode` 为 `auto` 或 `manual`，可附 `accountIds` 数组；返回任务和各账号的新鲜度/退避状态。                                                        |
 | `GET /api/instances/:id/metrics`                        | `range` 可选 `1h`、`24h`、`7d`，返回含 `intervalSeconds` 的 `MetricsResult`；20 秒总期限，相同查询共享执行。                                     |

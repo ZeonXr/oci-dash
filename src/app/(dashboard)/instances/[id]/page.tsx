@@ -17,7 +17,8 @@ import { useApp } from "@/components/app-provider";
 import { send, useAction, useResource } from "@/components/api";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
+import { CodeTag } from "@/components/code-tag";
 import {
   Badge,
   Button,
@@ -302,7 +303,7 @@ export default function InstanceDetailPage() {
         }
         description={
           <>
-            <RegionLabel region={instance.region} /> · {instance.region} · {instance.accountName}
+            <RegionTag region={instance.region} /> · {instance.accountName}
           </>
         }
       >
@@ -438,11 +439,14 @@ export default function InstanceDetailPage() {
                   </dd>
                   <dt>区域 / 可用域</dt>
                   <dd>
-                    {instance.region} / {instance.availabilityDomain.split(":").at(-1)}
+                    <CodeTag>{instance.region}</CodeTag>
+                    <CodeTag title={instance.availabilityDomain}>
+                      {instance.availabilityDomain.split(":").at(-1) || instance.availabilityDomain}
+                    </CodeTag>
                   </dd>
                   <dt>规格</dt>
                   <dd>
-                    {instance.shape}
+                    <CodeTag>{instance.shape}</CodeTag>
                     <span className="muted small">
                       {number(instance.ocpus, 1)} OCPU / {number(instance.memoryGb, 1)} GB
                     </span>
@@ -451,16 +455,14 @@ export default function InstanceDetailPage() {
                   <dd>{instance.os || "未提供"}</dd>
                   <dt>实例 OCID</dt>
                   <dd>
-                    <span className="mono" title={instance.id}>
-                      {shortId(instance.id)}
-                    </span>
+                    <CodeTag title={instance.id}>{shortId(instance.id)}</CodeTag>
                     <CopyButton value={instance.id} />
                   </dd>
                   <dt>区间</dt>
                   <dd>
-                    <span className="mono" title={instance.compartmentId}>
+                    <CodeTag title={instance.compartmentId}>
                       {shortId(instance.compartmentId)}
-                    </span>
+                    </CodeTag>
                     <CopyButton value={instance.compartmentId} />
                   </dd>
                   <dt>标签</dt>

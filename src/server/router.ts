@@ -48,6 +48,7 @@ import { ociAdapter } from "./oci/adapter";
 import { analyticsService } from "./analytics/service";
 import { cpuService } from "./analytics/cpu";
 import { instanceMetricsService } from "./instance-metrics";
+import { accountDetailsService } from "./account-details";
 import { assertInitialAdminSetupAvailable } from "./initial-admin";
 
 export async function handleApi(request: Request, segments: string[]): Promise<Response> {
@@ -154,6 +155,8 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
     }
     if (segments[0] === "accounts" && segments[1]) {
       const id = segments[1];
+      if (segments.length === 3 && method === "GET" && segments[2] === "details")
+        return json(await accountDetailsService.query(id, request.signal));
       if (segments.length === 2 && method === "PATCH") {
         return json(
           updateAccountConnection(

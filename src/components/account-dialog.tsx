@@ -6,7 +6,8 @@ import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { parseOciConfig } from "@/lib/oci-config";
 import { send, useAction } from "./api";
 import { useApp } from "./app-provider";
-import { regionName, taskHref } from "./format";
+import { taskHref } from "./format";
+import { RegionTag } from "./region-label";
 import { Button, ErrorState, Field, Modal } from "./ui";
 
 function suggestedName(file: File | null): string {
@@ -199,9 +200,14 @@ export function AccountDialog({
               label="OCI 配置文本"
               required
               hint={
-                parsedConfig
-                  ? `已识别区域：${regionName(parsedConfig.homeRegion)}（${parsedConfig.homeRegion}）`
-                  : "直接粘贴 OCI 控制台生成的配置内容。"
+                parsedConfig ? (
+                  <>
+                    已识别区域：
+                    <RegionTag region={parsedConfig.homeRegion} />
+                  </>
+                ) : (
+                  "直接粘贴 OCI 控制台生成的配置内容。"
+                )
               }
             >
               <textarea

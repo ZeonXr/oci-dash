@@ -5,6 +5,7 @@
 ## 功能
 
 - 导入 OCI API 配置，查看多区域实例、网卡、IP、IPv6、启动卷和原生指标。
+- 查看账号详情中的租户、API 用户、已订阅区域和已同步资源概况，复制完整 OCID 与区域标识。
 - 创建实例，以及启动、停止、重启、重命名和终止；管理公网 IP、启动卷 VPU、安全规则和 IPv6。
 - 用持久任务执行云操作，支持进度、取消、有限重试和检查点恢复。
 - 查看流量、按币种区分的费用、CPU 热力图和用量总览。缺失数据保留为空，不当作零。
@@ -15,12 +16,12 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.3.1 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.3.1/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.3.1`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v031-发布验收)。
+只需 Docker Engine、Docker Compose 和一份 [v0.4.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.4.0`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v040-发布验收)。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.3.1/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，在同一目录准备可由容器用户读写的数据目录：
@@ -55,6 +56,8 @@ docker compose up -d --wait
 需要至少 2048 位、未加密 PEM 格式的 RSA API 私钥；这不是实例的 SSH 私钥。配置中的 `key_file` 路径不会被读取，应用使用你选择的文件。同一租户保存一份账号配置，多个区域在该配置内管理。
 
 资源刷新按账号逐步显示结果，慢账号不会阻塞其他账号。详情读取失败时保留旧值，并标记“部分未更新”。云操作由后台任务执行，离开页面不会取消已提交的任务。
+
+账号卡片的“详情”按需读取 OCI 租户、身份用户和区域订阅信息，可单独刷新。配置中的主区域与 OCI 租户实际主区域分别展示；资源概况只汇总当前配置区域内已同步的实例，不代表全租户资源配额。缺失指标显示为未知，某项信息无权读取时保留其他可用内容。区域代码、规格和 OCID 使用统一的文本标签，长标识可查看及复制完整值。
 
 ## 数据与安全
 

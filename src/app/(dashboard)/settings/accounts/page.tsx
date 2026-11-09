@@ -5,6 +5,8 @@ import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { isJobPending as pendingSync } from "@/lib/job-state";
 import { api, send, useAction, useResource } from "@/components/api";
 import { AccountDialog } from "@/components/account-dialog";
+import { AccountDetailsDialog } from "@/components/account-details-dialog";
+import { CodeTag } from "@/components/code-tag";
 import { useApp } from "@/components/app-provider";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import {
@@ -22,7 +24,7 @@ import {
   Status,
 } from "@/components/ui";
 import { shortId, taskHref } from "@/components/format";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 
 function connectionLabel(account: AccountSummary, job: JobSummary): string {
@@ -60,6 +62,7 @@ export default function AccountsPage() {
   }, [resource.data?.syncJobs]);
   const action = useAction();
   const [editing, setEditing] = useState<AccountSummary | null | undefined>(undefined);
+  const [viewing, setViewing] = useState<AccountSummary | null>(null);
   const [removing, setRemoving] = useState<AccountSummary | null>(null);
   const [removeName, setRemoveName] = useState("");
   const [busyKey, setBusyKey] = useState("");
@@ -135,7 +138,7 @@ export default function AccountsPage() {
                     <div className="grow">
                       <h2>{account.name}</h2>
                       <p className="muted small">
-                        <RegionLabel region={account.homeRegion} /> · 主区域
+                        <RegionTag region={account.homeRegion} showName={false} /> · 配置主区域
                       </p>
                     </div>
                     {syncing && job ? (
@@ -147,16 +150,12 @@ export default function AccountsPage() {
                   <div className="account-meta">
                     <div className="row">
                       <span>租户</span>
-                      <span className="mono" title={account.tenancyId}>
-                        {shortId(account.tenancyId)}
-                      </span>
+                      <CodeTag title={account.tenancyId}>{shortId(account.tenancyId)}</CodeTag>
                       <CopyButton value={account.tenancyId} />
                     </div>
                     <div className="region-chips">
                       {account.regions.map((region) => (
-                        <Badge key={region}>
-                          <RegionLabel region={region} />
-                        </Badge>
+                        <RegionTag key={region} region={region} showName={false} />
                       ))}
                     </div>
                     <UpdatedAt
@@ -166,6 +165,14 @@ export default function AccountsPage() {
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
                   <div className="account-actions">
+                    <Button
+                      className="button-sm"
+                      variant="ghost"
+                      aria-label={`查看 ${account.name} 详情`}
+                      onClick={() => setViewing(account)}
+                    >
+                      详情
+                    </Button>
                     <RefreshButton
                       className="button-sm"
                       disabled={action.pending || syncing}
@@ -214,6 +221,12 @@ export default function AccountsPage() {
           </Card>
         )}
       </div>
+      {viewing && (
+        <AccountDetailsDialog
+          account={resource.data?.accounts.find((account) => account.id === viewing.id) ?? viewing}
+          onClose={() => setViewing(null)}
+        />
+      )}
       {editing !== undefined && (
         <AccountDialog
           account={editing || undefined}

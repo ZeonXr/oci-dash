@@ -26,6 +26,7 @@ import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { RegionLabel } from "@/components/region-label";
+import { CodeTag } from "@/components/code-tag";
 import { UpdatedAt } from "@/components/updated-at";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
 import { publicIpRotation, rotationNeedsRefresh } from "@/components/public-ip-rotation";
@@ -369,7 +370,7 @@ function InstancesContent() {
                     </div>
                   </td>
                   <td>
-                    {i.shape.replace("VM.Standard.", "")}
+                    <CodeTag title={i.shape}>{i.shape.replace("VM.Standard.", "")}</CodeTag>
                     <span className="cell-secondary">
                       {number(i.ocpus, 1)} OCPU / {number(i.memoryGb, 1)} GB
                     </span>
