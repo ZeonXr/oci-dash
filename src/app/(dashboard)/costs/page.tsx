@@ -35,7 +35,7 @@ import {
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
 import { instanceHref, shortId } from "@/components/format";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 
 const missing = "__unknown__";
 const matches = (selected: string, value: string | null) =>
@@ -431,7 +431,7 @@ function CostsContent() {
                       <td>
                         {row.accountName}
                         <span className="cell-secondary">
-                          {row.region ? <RegionLabel region={row.region} /> : "未提供区域"}
+                          {row.region ? <RegionTag region={row.region} /> : "未提供区域"}
                         </span>
                       </td>
                       <td>{row.service || "未提供服务"}</td>

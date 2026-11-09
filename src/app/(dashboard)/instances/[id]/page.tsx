@@ -455,7 +455,7 @@ export default function InstanceDetailPage() {
                   </dd>
                   <dt>区域 / 可用域</dt>
                   <dd>
-                    <CodeTag>{instance.region}</CodeTag>
+                    <RegionTag region={instance.region} />
                     <CodeTag title={instance.availabilityDomain}>
                       {instance.availabilityDomain.split(":").at(-1) || instance.availabilityDomain}
                     </CodeTag>

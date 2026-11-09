@@ -14,3 +14,20 @@
   vertical-align: middle;
   overflow-wrap: anywhere;
 }
+
+.tag.region {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.region code {
+  min-width: 0;
+  font: inherit;
+}
+.region img {
+  width: 18px;
+  height: 12px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 2px;
+}

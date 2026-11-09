@@ -1399,34 +1399,6 @@ pre {
   border-top: 0;
   padding-inline: 0;
 }
-.region-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  vertical-align: middle;
-  max-width: 100%;
-}
-.region-label img,
-.region-tag > img {
-  display: inline-block;
-  width: 18px;
-  height: 12px;
-  flex: 0 0 auto;
-  object-fit: contain;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 7%);
-}
-
-.region-tag {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-width: 100%;
-  min-width: 0;
-  vertical-align: middle;
-}
-
 .name-link {
   color: var(--ink);
   font-weight: 550;

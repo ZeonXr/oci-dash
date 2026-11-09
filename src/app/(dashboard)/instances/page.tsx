@@ -25,7 +25,7 @@ import { formatDate, instanceHref, number } from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
 import { InventoryFreshness } from "@/components/inventory-freshness";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 import { CodeTag } from "@/components/code-tag";
 import { UpdatedAt } from "@/components/updated-at";
 import { IpDetailsDialog } from "@/components/ip-details-dialog";
@@ -336,7 +336,7 @@ function InstancesContent() {
                     <td>
                       {i.accountName}
                       <span className="cell-secondary">
-                        <RegionLabel region={i.region} />
+                        <RegionTag region={i.region} />
                       </span>
                     </td>
                     <td>

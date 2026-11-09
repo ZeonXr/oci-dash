@@ -29,7 +29,7 @@ import {
   Status,
 } from "@/components/ui";
 import { formatDate, instanceHref, operationLabels, shortId, taskHref } from "@/components/format";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 export default function TaskDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -82,7 +82,7 @@ export default function TaskDetailPage() {
         }
         description={
           <>
-            {job.accountName} · <RegionLabel region={job.region} /> ·{" "}
+            {job.accountName} · <RegionTag region={job.region} /> ·{" "}
             {formatDate(job.createdAt, true)}
           </>
         }

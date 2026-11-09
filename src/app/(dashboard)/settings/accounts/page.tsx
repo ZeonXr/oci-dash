@@ -22,7 +22,7 @@ import {
   Status,
 } from "@/components/ui";
 import { taskHref } from "@/components/format";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 import { UpdatedAt } from "@/components/updated-at";
 
 function connectionLabel(account: AccountSummary, job: JobSummary): string {
@@ -156,7 +156,7 @@ export default function AccountsPage() {
                     <div className="account-regions">
                       <span>同步区域</span>
                       {account.regions.slice(0, 3).map((region) => (
-                        <RegionLabel key={region} region={region} />
+                        <RegionTag key={region} region={region} />
                       ))}
                       {account.regions.length > 3 && (
                         <span>另 {account.regions.length - 3} 个区域</span>

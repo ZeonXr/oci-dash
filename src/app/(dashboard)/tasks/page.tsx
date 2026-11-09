@@ -19,7 +19,7 @@ import {
   Status,
 } from "@/components/ui";
 import { formatDate, operationLabels, shortId, taskHref } from "@/components/format";
-import { RegionLabel } from "@/components/region-label";
+import { RegionTag } from "@/components/region-label";
 export default function TasksPage() {
   return (
     <Suspense fallback={<LoadingState />}>
@@ -190,7 +190,7 @@ function TasksContent() {
                 <td>
                   {job.accountName}
                   <span className="cell-secondary">
-                    <RegionLabel region={job.region} />
+                    <RegionTag region={job.region} />
                   </span>
                 </td>
                 <td>

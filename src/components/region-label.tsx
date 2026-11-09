@@ -1,5 +1,5 @@
 import { regionCountryCode } from "@/lib/region-countries";
-import { CodeTag } from "./code-tag";
+import styles from "./code-tag.module.css";
 
 function RegionFlag({ region }: { region: string }) {
   const country = regionCountryCode(region);
@@ -15,20 +15,11 @@ function RegionFlag({ region }: { region: string }) {
   ) : null;
 }
 
-export function RegionLabel({ region }: { region: string }) {
-  return (
-    <span className="region-label">
-      <RegionFlag region={region} />
-      <span>{region}</span>
-    </span>
-  );
-}
-
 export function RegionTag({ region }: { region: string }) {
   return (
-    <span className="region-tag">
+    <span className={`${styles.tag} ${styles.region}`} title={region}>
       <RegionFlag region={region} />
-      <CodeTag>{region}</CodeTag>
+      <code>{region}</code>
     </span>
   );
 }
