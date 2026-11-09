@@ -1020,10 +1020,10 @@ test("账号逐个完成后仅慢账号保留转圈，失败账号及时显示�
   await page.goto("/settings/accounts");
   const fastCard = page
     .locator(".account-card")
-    .filter({ has: page.getByRole("heading", { name: account.name, exact: true }) });
+    .filter({ has: page.getByRole("button", { name: `查看 ${account.name} 详情`, exact: true }) });
   const slowCard = page
     .locator(".account-card")
-    .filter({ has: page.getByRole("heading", { name: slow.name, exact: true }) });
+    .filter({ has: page.getByRole("button", { name: `查看 ${slow.name} 详情`, exact: true }) });
   await expect(fastCard.locator(".spin")).toHaveCount(1);
   await expect(slowCard.locator(".spin")).toHaveCount(1);
   refreshApi.finish("failed");
