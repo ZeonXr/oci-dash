@@ -54,6 +54,12 @@ const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("h
 /** Resume only artifacts with the exact content already validated by this run. */
 export async function publishRelease(port: ReleasePort, input: ReleaseInput, notes: string) {
   validate(input);
+  // The repository follows latest; each immutable release asset pins its own version.
+  const compose = Buffer.from(
+    Buffer.from(input.compose)
+      .toString("utf8")
+      .replaceAll(`image: ${input.image}:latest`, `image: ${input.image}:${input.tag}`),
+  );
   await port.verifySourceTag(input.tag, input.revision);
   const destination = `${input.image}:${input.tag}`;
   const existing = await port.imageDigest(destination);
@@ -78,12 +84,12 @@ export async function publishRelease(port: ReleasePort, input: ReleaseInput, not
     assert.equal(asset.state, "uploaded", "Compose upload is incomplete");
     assert.equal(
       hash(await port.assetBytes(input.tag, asset.name)),
-      hash(input.compose),
+      hash(compose),
       "Published Compose differs; refusing replacement",
     );
     return { reusedVersion: existing !== undefined, reusedAsset: true };
   }
-  await port.uploadAsset(release.id, "compose.yaml", input.compose);
+  await port.uploadAsset(release.id, "compose.yaml", compose);
   return { reusedVersion: existing !== undefined, reusedAsset: false };
 }
 

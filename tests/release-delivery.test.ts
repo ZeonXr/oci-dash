@@ -78,6 +78,22 @@ describe("immutable release publication", () => {
     expect(port.uploadAsset).toHaveBeenCalledTimes(1);
   });
 
+  it("pins a latest template in the release asset and reuses that pinned asset on retry", async () => {
+    const { state, port } = fixture();
+    const source = `services:\n  app:\n    image: ${input.image}:latest\n    volumes: ["./data:/data"]\n`;
+    const publication = { ...input, compose: Buffer.from(source) };
+    await publishRelease(port, publication, "notes");
+    expect(Buffer.from(state.bytes!).toString("utf8")).toBe(
+      `services:\n  app:\n    image: ${input.image}:${input.tag}\n    volumes: ["./data:/data"]\n`,
+    );
+    expect(publication.compose.toString("utf8")).toBe(source);
+    await expect(publishRelease(port, publication, "notes")).resolves.toEqual({
+      reusedVersion: true,
+      reusedAsset: true,
+    });
+    expect(port.uploadAsset).toHaveBeenCalledTimes(1);
+  });
+
   it("resumes after an upload committed but its response was lost", async () => {
     const { port } = fixture();
     const upload = port.uploadAsset.getMockImplementation()!;

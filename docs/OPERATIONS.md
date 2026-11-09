@@ -1,15 +1,15 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.8`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，仓库默认镜像为 `ghcr.io/zeonxr/oci-dash:latest`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.5.8 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和仓库的 [compose.yaml](https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用 `latest` 镜像，不包含 `build` 或 `extends`；需要固定版本时，可改用对应 GitHub Release 的 Compose 附件。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml -o compose.yaml
+curl -fL https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml -o compose.yaml
 ```
 
 在该目录直接启动，Docker 会创建缺失的 `data` 目录：
@@ -239,7 +239,7 @@ docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
 
 升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。
 
-从目标版本的 GitHub Release 下载新的 `compose.yaml`。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、端口映射和必要的高级覆盖配置；旧 `.env` 的 `PORT` 和 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。
+使用仓库默认 Compose 时，执行下面的 `pull` 和 `up` 命令更新 `latest`；运行中的容器不会自动升级。需要固定版本时，从目标版本的 GitHub Release 下载对应 `compose.yaml`。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、端口映射和必要的高级覆盖配置；旧 `.env` 的 `PORT` 和 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。
 
 从 v0.5.7 及更早的普通用户镜像升级时，采用配套的新版 Compose，一并移除旧的固定 `user`、`cap_drop: [ALL]` 和默认 `security_opt` 配置；只修改镜像版本会留下旧限制。现有 `1000:1000` 数据目录可直接继续使用，无需转换属主或重建数据库。完成适用检查后，在数据迁移已核对的部署目录执行：
 

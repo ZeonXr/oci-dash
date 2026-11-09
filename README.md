@@ -13,21 +13,28 @@
 
 ## Docker 部署
 
-需要 Docker Engine 和 Docker Compose。下载 [v0.5.8 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml)，在独立部署目录执行：
+需要 Docker Engine 和 Docker Compose。下载仓库的 [compose.yaml](https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml)，在独立部署目录执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml -o compose.yaml
+curl -fL https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml -o compose.yaml
 
 docker compose up -d --wait
 ```
 
-发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.8`，支持 Linux `amd64` 和 `arm64`。无需克隆源码、安装 Node.js、创建 `.env`，也无需预先设置数据目录的 UID/GID 或执行 `chown`。容器默认以 root 运行，由 Docker 创建缺失的 `data` 目录；Docker Desktop 需允许 Docker 访问部署目录。
+默认镜像为 `ghcr.io/zeonxr/oci-dash:latest`，跟随最新通过发布验证的版本，支持 Linux `amd64` 和 `arm64`。无需克隆源码、安装 Node.js、创建 `.env`，也无需预先设置数据目录的 UID/GID 或执行 `chown`。容器默认以 root 运行，由 Docker 创建缺失的 `data` 目录；Docker Desktop 需允许 Docker 访问部署目录。
 
 打开 **[http://localhost:6240](http://localhost:6240)**，创建管理员账号。页面可生成并复制 32 位随机密码，创建成功后自动登录；重启不会重置管理员。
 
 默认端口仅绑定 `127.0.0.1`。远程部署时，先通过 SSH 隧道完成管理员初始化，再配置 HTTPS 反向代理，见[访问说明](docs/OPERATIONS.md#https-与访问)。
 
 数据库和自动生成的 `.master-key` 保存在 Compose 同目录的 `./data`，完整备份时应包含整个目录。备份、恢复和升级步骤见[运维说明](docs/OPERATIONS.md)。
+
+更新镜像需执行以下命令，正在运行的容器不会自动升级：
+
+```sh
+docker compose pull
+docker compose up -d --wait
+```
 
 ## 接入 OCI 账号
 

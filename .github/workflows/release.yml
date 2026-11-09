@@ -53,7 +53,7 @@ jobs:
           delete env.COMPOSE_FILE;
           const config = JSON.parse(execFileSync('docker', ['compose', '--env-file', '/dev/null', '--file', 'compose.yaml', 'config', '--format', 'json'], { encoding: 'utf8', env }));
           assert.deepEqual(Object.keys(config.services), ['app']);
-          assert.equal(config.services.app.image, `${process.env.IMAGE}:${tag}`, 'Compose must pin this release image');
+          assert.equal(config.services.app.image, `${process.env.IMAGE}:latest`, 'Repository Compose must follow latest');
           assert.equal(config.services.app.build, undefined);
           assert.equal(config.services.app.ports.length, 1);
           assert.equal(config.services.app.ports[0].host_ip, '127.0.0.1');

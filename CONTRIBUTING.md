@@ -36,7 +36,7 @@ npm run worker
 
 普通 Next.js 开发服务器不包含完整 VNC 网关。需要检查容器入口、WebSocket 或 OpenSSH 流程时，使用隔离 Docker 测试。
 
-发布用 `compose.yaml` 只拉取固定版本镜像，不包含构建配置。确需从源码启动开发容器时，在独立开发检出目录使用专用覆盖文件：
+仓库的 `compose.yaml` 默认拉取 `latest` 镜像，不包含构建配置。确需从源码启动开发容器时，在独立开发检出目录使用专用覆盖文件：
 
 ```sh
 docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
@@ -108,6 +108,8 @@ npm run test:backup
 完整 CI 先执行类型检查和单元测试，再通过 Docker 构建一次生产应用，随后检查容器生命周期、备份恢复和隔离浏览器流程。`Dockerfile` 负责构建，不再重复运行完整单测和独立工具脚本的类型检查；直接构建镜像不能替代源码检查。`node scripts/check-docs.ts` 只检查仓库内文件和 Markdown 标题链接，不联网检查历史版本或其他远程地址。
 
 发布以源码 tag 对应固定版本镜像和同版本的独立 `compose.yaml` 资产。先验证版本与源码标签，分别构建并运行 Linux `amd64`、`arm64`，再组合已验证的镜像摘要。固定版本镜像和 Compose 附件发布成功后进行匿名部署验收，验收通过才推广 Docker 与 GitHub 的 `latest`；版本比较同时防止两个渠道回退。
+
+仓库 Compose 默认跟随 `latest`；发布时只将附件中的镜像引用替换为当前固定版本，保持其余配置不变。因此固定版本附件可独立部署与回退，仓库默认文件无需随版本号修改。
 
 发布前新增 `docs/releases/vMAJOR.MINOR.PATCH.md`，说明该版本的实际变化和升级注意事项。工作流直接使用对应版本文件作为 GitHub Release 正文；文件缺失时拒绝发布。避免重复完整安装指南，部署和恢复细节链接到项目文档。
 
