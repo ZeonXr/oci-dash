@@ -75,6 +75,17 @@ npm run test:e2e:isolated -- --no-build
 
 区域统一使用 OCI 原始区域代码（例如 `ap-singapore-1`），保留已有国旗。账号、实例、任务、统计与详情页不再显示中文区域译名，筛选器、图表提示和操作确认也使用相同标识；移除中文映射和重复名称选项。账号卡片继续使用不带标签背景的区域摘要。
 
+**2026-11-09**，源码 [`c371bd1`](https://github.com/ZeonXr/oci-dash/commit/c371bd1ee4b19e79cab59d45cb626625c9cc1e8d) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/42614243454) 通过格式、类型、文档链接、725 项 Linux 单元测试、115 项 Chrome 浏览器检查、5 项运行检查及 4 项备份恢复检查。本机另完成 28 项专项浏览器检查，覆盖账号卡片、详情、区域选项、旗帜、未知区域及刷新交互。
+
+[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42614250133) 的 AMD64、ARM64 原生构建与各 5 项运行检查、公开部署验收全部通过，推广日志确认 `promoted: true`。[独立 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.3/compose.yaml) 为 312 字节，按 LF 换行与源码比较一致。
+
+- 多架构索引：`sha256:e80b2d2b3431f2d4a03633dbaaef5f1a64c677ec7209a932884ed1d2573428ff`
+- `linux/amd64`：`sha256:f3f69ef3891977c6ad2b32164320339fe669dd4b1804c19d413a492f60b76bec`
+- `linux/arm64`：`sha256:2bb632c30b1ae4ad8c0b8754b4225e0143edf984394196719a4ec14c9139ae3d`
+- Compose：`sha256:c0f2b8daf7a39340687884ec14ae1f6bc3d6c94a89497c70a5462e40a27a8cda`
+
+Windows Docker Desktop 在完整备份后更新至正式 v0.5.3 镜像并达到健康状态；管理员密码与 MFA、加密 OCI 凭据、主密钥和资源归属的升级前后合并哈希一致。测试容器、网络、临时数据、报告、下载附件及候选镜像已清理，升级备份保留。交互回归使用合成数据及 API 拦截。
+
 ### v0.5.2 发布验收
 
 本版本精简设置内的账号卡片：仅展示账号名称、连接状态、同步区域摘要和更新时间。同步区域改用国旗与名称，最多展示三个，其他区域以数量汇总；配置主区域、完整 OCID 与区域代码继续在详情弹窗查看。点击账号名称打开详情，卡片底部保留刷新和编辑，将移除操作独立放在右侧。
