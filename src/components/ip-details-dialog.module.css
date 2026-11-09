@@ -1,0 +1,89 @@
+.addressButton {
+  display: inline;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--primary);
+  font-size: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  overflow-wrap: anywhere;
+}
+
+.addressButton:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.summary > div {
+  align-items: center;
+}
+
+.summary > div > span {
+  flex-shrink: 0;
+}
+
+.value {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  text-align: right;
+}
+
+.identifier {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.identifier > :first-child {
+  min-width: 0;
+}
+
+.identifier > :last-child {
+  flex-shrink: 0;
+}
+
+.identifiers {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.identifiers > summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.identifiers dl {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.identifiers dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.identifiers dd {
+  margin: 0 0 6px;
+  min-width: 0;
+}
+
+@media (max-width: 420px) {
+  .summary > div {
+    align-items: flex-start;
+  }
+
+  .value {
+    max-width: 72%;
+  }
+}

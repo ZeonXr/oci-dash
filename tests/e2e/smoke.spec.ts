@@ -510,18 +510,28 @@ test("离开实例监控时取消无人使用的查询", async ({ page }) => {
 });
 
 test("公网地址保护", async ({ page }, testInfo) => {
-  await instancePage(page);
+  const selected = await instancePage(page);
   await test.step("网络详情展示完整绑定与保护标记", async () => {
     await page.getByRole("tab", { name: "网络", exact: true }).click();
     await expect(page.getByText("保留公网 IP", { exact: true })).toBeVisible();
     await expect(page.getByText("受保护", { exact: true })).toBeVisible();
-    const rotations = page.getByRole("button", {
-      name: "更换 IP",
-      exact: true,
-    });
-    await expect(rotations).toHaveCount(2);
-    await expect(rotations.nth(0)).toBeEnabled();
-    await expect(rotations.nth(1)).toBeDisabled();
+    await expect(page.getByRole("button", { name: "更换 IP", exact: true })).toHaveCount(0);
+    const addresses = selected.vnics
+      .flatMap((vnic) => vnic.privateIps)
+      .filter((binding) => binding.publicIp);
+    expect(addresses).toHaveLength(2);
+    for (const binding of addresses) {
+      await page
+        .getByRole("button", { name: `查看 IP ${binding.publicIp} 详情`, exact: true })
+        .click();
+      const details = page.getByRole("dialog", { name: "IP 详情", exact: true });
+      const replace = details.getByRole("button", { name: "更换公网 IP", exact: true });
+      if (binding.lifetime === "EPHEMERAL" && !binding.protected)
+        await expect(replace).toBeEnabled();
+      else await expect(replace).toBeDisabled();
+      await details.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(details).toHaveCount(0);
+    }
     await expect(page.getByRole("button", { name: "分配 IPv6", exact: true })).toBeEnabled();
   });
   await capture(page, testInfo, "instance-network");

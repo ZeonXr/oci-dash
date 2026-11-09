@@ -21,15 +21,16 @@ import {
   Select,
   Status,
 } from "@/components/ui";
-import { formatDate, instanceHref, number, primaryAddress, regionName } from "@/components/format";
+import { formatDate, instanceHref, number, regionName } from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { RegionLabel } from "@/components/region-label";
 import { CodeTag } from "@/components/code-tag";
 import { UpdatedAt } from "@/components/updated-at";
-import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
-import { publicIpRotation, rotationNeedsRefresh } from "@/components/public-ip-rotation";
+import { IpDetailsDialog } from "@/components/ip-details-dialog";
+import { IpAddressButton, primaryIpTarget, type IpDetailsTarget } from "@/components/ip-address";
+import { ipRotationContext } from "@/components/public-ip-rotation";
 import { useInstanceJobs } from "@/components/use-instance-jobs";
 
 type InstanceView = "table" | "cards";
@@ -48,7 +49,9 @@ function InstancesContent() {
   const [sort, setSort] = useState<"ascending" | "descending">("ascending");
   const [view, setView] = useState<InstanceView>("cards");
   const [creating, setCreating] = useState(false);
-  const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
+  const [address, setAddress] = useState<{ instanceId: string; target: IpDetailsTarget } | null>(
+    null,
+  );
   const instanceJobs = useInstanceJobs(resource.reload);
   useEffect(() => {
     try {
@@ -78,6 +81,7 @@ function InstancesContent() {
     setRegion(requestedRegion);
   }, [requestedQuery, requestedRegion]);
   const instances = resource.data?.instances || [];
+  const selectedInstance = instances.find((instance) => instance.id === address?.instanceId);
   const filtered = useMemo(
     () =>
       instances
@@ -272,45 +276,15 @@ function InstancesContent() {
             <>
               <div className="instance-cards">
                 {visible.map((instance) => {
-                  const rotation = instanceJobs.jobs.find(
-                    (job) =>
-                      job.kind === "public-ip-rotate" &&
-                      job.accountId === instance.accountId &&
-                      job.resourceId === instance.id,
-                  );
-                  const synchronization = rotation?.result?.synchronization as
-                    { status?: string; jobId?: string } | undefined;
-                  const syncJob =
-                    rotation?.state === "succeeded" && synchronization?.status === "queued"
-                      ? instanceJobs.jobs.find((job) => job.id === synchronization.jobId)
-                      : undefined;
-                  const needsRefresh = rotationNeedsRefresh(instance, rotation, syncJob);
+                  const context = ipRotationContext(instance, instanceJobs, resource.error);
                   return (
                     <InstanceCard
                       key={instance.id}
                       instance={instance}
-                      rotationDisabled={
-                        instanceJobs.loading ||
-                        Boolean(resource.error) ||
-                        needsRefresh ||
-                        Boolean(instanceJobs.error) ||
-                        instanceJobs.busyInstanceIds.has(instance.id)
-                      }
-                      rotationJob={syncJob || rotation}
-                      rotationWarning={needsRefresh}
-                      onRotate={(vnic, binding) => {
-                        if (
-                          resource.error ||
-                          needsRefresh ||
-                          instanceJobs.loading ||
-                          instanceJobs.error ||
-                          instanceJobs.busyInstanceIds.has(instance.id) ||
-                          !["RUNNING", "STOPPED"].includes(instance.state)
-                        )
-                          return;
-                        const next = publicIpRotation(instance, vnic, binding);
-                        if (next) setOperation({ ...next, onSuccess: instanceJobs.track });
-                      }}
+                      rotationDisabled={Boolean(context.blockedReason)}
+                      rotationJob={context.job}
+                      rotationWarning={context.warning}
+                      onAddress={(target) => setAddress({ instanceId: instance.id, target })}
                     />
                   );
                 })}
@@ -342,63 +316,82 @@ function InstancesContent() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((i) => (
-                <tr key={i.id}>
-                  <td>
-                    <div className="table-identity">
-                      <span className="table-resource-icon">
-                        <Server size={17} />
-                      </span>
-                      <div>
-                        <Link href={instanceHref(i.id)} className="name-link">
-                          {i.displayName}
-                        </Link>
-                        <span className="cell-secondary">{formatDate(i.createdAt)} 创建</span>
+              {visible.map((i) => {
+                const target = primaryIpTarget(i);
+                return (
+                  <tr key={i.id}>
+                    <td>
+                      <div className="table-identity">
+                        <span className="table-resource-icon">
+                          <Server size={17} />
+                        </span>
+                        <div>
+                          <Link href={instanceHref(i.id)} className="name-link">
+                            {i.displayName}
+                          </Link>
+                          <span className="cell-secondary">{formatDate(i.createdAt)} 创建</span>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>
-                    {i.accountName}
-                    <span className="cell-secondary">
-                      <RegionLabel region={i.region} />
-                    </span>
-                  </td>
-                  <td>
-                    <div className="row row-wrap">
-                      <Status value={i.state} />
-                      <InventoryFreshness instance={i} />
-                    </div>
-                  </td>
-                  <td>
-                    <CodeTag title={i.shape}>{i.shape.replace("VM.Standard.", "")}</CodeTag>
-                    <span className="cell-secondary">
-                      {number(i.ocpus, 1)} OCPU / {number(i.memoryGb, 1)} GB
-                    </span>
-                  </td>
-                  <td>
-                    <div className="table-address mono">
-                      {primaryAddress(i)}
-                      {primaryAddress(i) !== "—" && (
-                        <CopyButton
-                          value={primaryAddress(i)}
-                          label={`复制 ${i.displayName} 地址`}
-                        />
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <Link href={instanceHref(i.id)} className="text-link">
-                      查看详情
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td>
+                      {i.accountName}
+                      <span className="cell-secondary">
+                        <RegionLabel region={i.region} />
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row row-wrap">
+                        <Status value={i.state} />
+                        <InventoryFreshness instance={i} />
+                      </div>
+                    </td>
+                    <td>
+                      <CodeTag title={i.shape}>{i.shape.replace("VM.Standard.", "")}</CodeTag>
+                      <span className="cell-secondary">
+                        {number(i.ocpus, 1)} OCPU / {number(i.memoryGb, 1)} GB
+                      </span>
+                    </td>
+                    <td>
+                      <div className="table-address mono">
+                        {target ? (
+                          <IpAddressButton
+                            target={target}
+                            onClick={(target) => setAddress({ instanceId: i.id, target })}
+                          />
+                        ) : (
+                          "—"
+                        )}
+                        {target && (
+                          <CopyButton value={target.address} label={`复制 ${i.displayName} 地址`} />
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <Link href={instanceHref(i.id)} className="text-link">
+                        查看详情
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </TablePanel>
       )}
       {creating && <CreateInstanceDialog onClose={() => setCreating(false)} />}
-      {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
+      {address && (
+        <IpDetailsDialog
+          instance={selectedInstance}
+          target={address.target}
+          blockedReason={
+            selectedInstance
+              ? ipRotationContext(selectedInstance, instanceJobs, resource.error).blockedReason
+              : undefined
+          }
+          onSuccess={instanceJobs.track}
+          onClose={() => setAddress(null)}
+        />
+      )}
     </>
   );
 }

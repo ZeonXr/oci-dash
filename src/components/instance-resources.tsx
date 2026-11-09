@@ -1,6 +1,6 @@
 "use client";
 import { useState, type SubmitEvent } from "react";
-import { HardDrive, Lock, Network, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { HardDrive, Lock, Network, Plus, ShieldCheck } from "lucide-react";
 import type {
   BootVolumeSummary,
   InstanceSummary,
@@ -28,9 +28,15 @@ import {
 } from "./ui";
 import { OperationDialog, type OperationDialogProps } from "./operation-dialog";
 import { TablePanel } from "./table";
-import { canRotatePublicIp, publicIpRotation } from "./public-ip-rotation";
+import { IpAddressButton, targetForBinding, type IpDetailsTarget } from "./ip-address";
 
-export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
+export function NetworkPanel({
+  instance,
+  onAddress,
+}: {
+  instance: InstanceSummary;
+  onAddress: (target: IpDetailsTarget) => void;
+}) {
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   return (
     <div className="stack">
@@ -71,21 +77,30 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                     <th scope="col">公网 IPv4</th>
                     <th scope="col">分配方式</th>
                     <th scope="col">保护状态</th>
-                    <th scope="col">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {vnic.privateIps.map((binding) => (
                     <tr key={binding.privateIpId}>
                       <td>
-                        <span className="mono">{binding.privateIp}</span>
+                        <IpAddressButton
+                          target={targetForBinding(vnic, binding, "private")}
+                          onClick={onAddress}
+                        />
                         <span className="cell-secondary">
                           {binding.isPrimary ? "主要私网地址" : "次要私网地址"}
                         </span>
                       </td>
                       <td>
                         <span className="table-address mono">
-                          {binding.publicIp || "未绑定"}
+                          {binding.publicIp ? (
+                            <IpAddressButton
+                              target={targetForBinding(vnic, binding)}
+                              onClick={onAddress}
+                            />
+                          ) : (
+                            "未绑定"
+                          )}
                           {binding.publicIp && <CopyButton value={binding.publicIp} />}
                         </span>
                       </td>
@@ -103,24 +118,8 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                             受保护
                           </Badge>
                         ) : (
-                          <span className="muted">可轮换</span>
+                          <span className="muted">{binding.publicIp ? "未保护" : "—"}</span>
                         )}
-                      </td>
-                      <td>
-                        <Button
-                          variant="ghost"
-                          className="button-sm"
-                          disabled={!canRotatePublicIp(binding)}
-                          title={
-                            binding.protected || binding.lifetime === "RESERVED"
-                              ? "保留或受保护地址不可轮换"
-                              : undefined
-                          }
-                          onClick={() => setOperation(publicIpRotation(instance, vnic, binding))}
-                        >
-                          <RefreshCw size={13} />
-                          更换 IP
-                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -133,7 +132,10 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                 {vnic.ipv6.length ? (
                   vnic.ipv6.map((ip) => (
                     <div key={ip} className="row mono break-all">
-                      {ip}
+                      <IpAddressButton
+                        target={{ kind: "ipv6", address: ip, vnicId: vnic.id }}
+                        onClick={onAddress}
+                      />
                       <CopyButton value={ip} />
                     </div>
                   ))
@@ -149,7 +151,7 @@ export function NetworkPanel({ instance }: { instance: InstanceSummary }) {
                     description: "为此网卡申请 IPv6 地址。所属子网需要已启用 IPv6。",
                     summary: [
                       ["实例", instance.displayName],
-                      ["网卡", vnic.name],
+                      ["网卡名称", vnic.name],
                     ],
                     operation: {
                       kind: "ipv6-assign",

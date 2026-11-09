@@ -16,12 +16,12 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.4.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.4.0`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v040-发布验收)。
+只需 Docker Engine、Docker Compose 和一份 [v0.5.0 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.0/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.0`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v050-发布验收)。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.0/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，在同一目录准备可由容器用户读写的数据目录：
@@ -58,6 +58,8 @@ docker compose up -d --wait
 资源刷新按账号逐步显示结果，慢账号不会阻塞其他账号。详情读取失败时保留旧值，并标记“部分未更新”。云操作由后台任务执行，离开页面不会取消已提交的任务。
 
 账号卡片的“详情”按需读取 OCI 租户、身份用户和区域订阅信息，可单独刷新。配置中的主区域与 OCI 租户实际主区域分别展示；资源概况只汇总当前配置区域内已同步的实例，不代表全租户资源配额。缺失指标显示为未知，某项信息无权读取时保留其他可用内容。区域代码、规格和 OCID 使用统一的文本标签，长标识可查看及复制完整值。
+
+实例卡片、表格和网络页中的 IP 可点击打开统一详情，查看地址类型、所属网卡、主要或次要私网地址及完整资源标识。更换临时公网 IP 的操作集中在弹窗内；固定、受保护、私网、IPv6 或信息未确认的地址仍可查看，操作按钮会禁用并显示原因。提交前会核对选中的地址绑定，变化后需要重新打开详情。
 
 ## 数据与安全
 

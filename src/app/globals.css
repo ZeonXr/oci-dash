@@ -1375,11 +1375,6 @@ pre {
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.instance-ip-actions .button-sm {
-  padding-inline: 6px;
-  min-height: 28px;
-  color: var(--primary);
-}
 .instance-ip-task {
   justify-self: end;
   font-size: 11px;

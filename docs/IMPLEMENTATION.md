@@ -27,7 +27,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.4.0`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.5.0`，没有构建或文件继承依赖。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；仅保留可选的宿主端口 `PORT`，不读取旧 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
 
 镜像以 UID/GID `1000:1000` 的 `node` 用户运行，Tini 作为 PID 1；Compose 保留 35 秒停止期限、容器级 `no-new-privileges:true`、`cap_drop: ALL` 和 `local` 日志驱动。Linux 数据目录由部署者预先创建并赋权，Windows Docker Desktop 使用宿主 ACL；入口不以 root 运行或自动更改所有者。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
@@ -66,6 +66,8 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 错误重试预算与 OCI 等待完成分开计数。重启后依据租约、完成期限和检查点恢复；取消不回滚已受理的云操作，手动重试也不是创建无关联的新操作。公共 pending 状态判定包含仍可自动恢复的 `interrupted`。
 
 任务列表在服务端筛选、排序和分页，返回完整筛选结果的总数。实例操作锁使用独立的活动任务查询，包含仍在执行或等待后续同步的任务，不受历史页大小限制。按任务 ID 读取仍可查看全部历史记录。
+
+IP 展示复用 `IpAddressButton` 和 `IpDetailsDialog`，列表与实例详情共用已有任务观察机制。打开详情只查看当前库存；只有明确点击弹窗内的更换操作才提交任务。选中时保存地址、网卡、私网 IP 和公网 IP 标识，重新读取后若绑定变化则禁用操作。服务端继续执行原有归属、保护状态和预期公网绑定校验。
 
 ## HTTP API
 

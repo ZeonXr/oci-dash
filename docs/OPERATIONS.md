@@ -1,15 +1,15 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.4.0`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.0`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.4.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.5.0 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.0/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.4.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.0/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，先在同一目录创建可由容器用户读写的空数据目录：
@@ -25,7 +25,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v040-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v050-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
 
 打开 `http://localhost:3000`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
 
@@ -172,6 +172,8 @@ docker compose up -d app
 请求错误默认最多尝试 4 次。OCI 已受理但尚未完成时，核对结果不消耗错误重试次数；每轮执行有自首次领取起的 30 分钟完成期限，重启不会延长期限。手动重试保留任务编号和检查点，增加预算并开启新的完成期限。
 
 同一 Worker 最多同时同步两个账号并执行一个写任务。SQLite 约束写任务全局串行，以及同账号同步与写入互斥。写操作成功但随后库存刷新失败时会另排同步任务，不应为刷新页面而重复执行写操作。
+
+在实例卡片、表格或网络页点击 IP，可打开统一地址详情。固定或受保护地址、私网 IPv4、IPv6、信息不完整、实例状态不支持或任务未结束时，更换按钮保持禁用，弹窗说明原因。可更换的临时公网 IPv4 在同一弹窗内确认提交，旧地址释放后无法保证找回。弹窗打开后绑定发生变化时，应关闭并重新打开当前地址；查看详情和复制不会提交更换任务。
 
 ## VNC 控制台
 

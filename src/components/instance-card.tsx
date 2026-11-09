@@ -3,30 +3,35 @@
 import { useId } from "react";
 import Link from "next/link";
 import { Lock, Server } from "lucide-react";
-import type { InstanceSummary, JobSummary, PublicIpBinding, VnicSummary } from "@/lib/contracts";
+import type { InstanceSummary, JobSummary } from "@/lib/contracts";
 import { isJobPending } from "@/lib/job-state";
-import { Button, CopyButton, Status } from "./ui";
-import { formatDate, instanceHref, number, primaryAddress, taskHref } from "./format";
+import { CopyButton, Status } from "./ui";
+import { formatDate, instanceHref, number, taskHref } from "./format";
 import { RegionTag } from "./region-label";
 import { CodeTag } from "./code-tag";
 import { InventoryFreshness } from "./inventory-freshness";
-import { canRotatePublicIp } from "./public-ip-rotation";
+import {
+  IpAddressButton,
+  primaryIpTarget,
+  targetForBinding,
+  type IpDetailsTarget,
+} from "./ip-address";
 
 export function InstanceCard({
   instance,
-  onRotate,
+  onAddress,
   rotationDisabled,
   rotationJob,
   rotationWarning = false,
 }: {
   instance: InstanceSummary;
-  onRotate: (vnic: VnicSummary, binding: PublicIpBinding) => void;
+  onAddress: (target: IpDetailsTarget) => void;
   rotationDisabled: boolean;
   rotationJob?: JobSummary;
   rotationWarning?: boolean;
 }) {
   const titleId = useId();
-  const address = primaryAddress(instance);
+  const fallback = primaryIpTarget(instance);
   const addresses = instance.vnics.flatMap((vnic) =>
     vnic.privateIps
       .filter((binding) => Boolean(binding.publicIp))
@@ -36,13 +41,6 @@ export function InstanceCard({
   const failed =
     rotationJob && ["failed", "cancelled", "interrupted"].includes(rotationJob.state) && !pending;
   const syncing = rotationJob?.kind === "sync-account";
-  const disabledReason = rotationWarning
-    ? "地址同步不完整，请先刷新资源"
-    : rotationDisabled
-      ? "正在读取或处理此实例的任务"
-      : !["RUNNING", "STOPPED"].includes(instance.state)
-        ? "当前实例状态不可更换 IP"
-        : undefined;
   return (
     <article className="card instance-card" aria-labelledby={titleId}>
       <div className="instance-card-heading">
@@ -89,32 +87,26 @@ export function InstanceCard({
                   {fixed ? "固定 IP" : binding.lifetime === "EPHEMERAL" ? "临时 IP" : "公网 IP"}
                 </span>
                 <div className="instance-ip-actions">
-                  <span className="mono">{binding.publicIp}</span>
+                  <IpAddressButton target={targetForBinding(vnic, binding)} onClick={onAddress} />
                   <CopyButton value={binding.publicIp!} label={`复制 ${binding.publicIp}`} />
-                  {canRotatePublicIp(binding) &&
-                    ["RUNNING", "STOPPED"].includes(instance.state) && (
-                      <Button
-                        variant="ghost"
-                        className="button-sm"
-                        aria-label={`更换 IP ${binding.publicIp}`}
-                        disabled={Boolean(disabledReason)}
-                        title={disabledReason || "更换此临时公网 IP"}
-                        onClick={() => onRotate(vnic, binding)}
-                      >
-                        更换
-                      </Button>
-                    )}
                 </div>
               </div>
             );
           })
         ) : (
           <div className="instance-ip-row">
-            <span className="muted small">私网 IP</span>
+            <span className="muted small">{fallback?.kind === "ipv6" ? "IPv6" : "私网 IP"}</span>
             <div className="table-address mono">
-              <span>{address}</span>
-              {address !== "—" && (
-                <CopyButton value={address} label={`复制 ${instance.displayName} 地址`} />
+              {fallback ? (
+                <>
+                  <IpAddressButton target={fallback} onClick={onAddress} />
+                  <CopyButton
+                    value={fallback.address}
+                    label={`复制 ${instance.displayName} 地址`}
+                  />
+                </>
+              ) : (
+                "—"
               )}
             </div>
           </div>

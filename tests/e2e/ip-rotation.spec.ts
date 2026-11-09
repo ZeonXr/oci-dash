@@ -1,5 +1,5 @@
 import { expect, test as base, type Locator, type Page } from "@playwright/test";
-import { jobContextFixture } from "../fixtures/job-page";
+import { jobContextFixture, jobPageFixture } from "../fixtures/job-page";
 import type {
   AccountSummary,
   InstanceSummary,
@@ -44,6 +44,7 @@ const addresses = {
   stopped: "198.51.100.30",
   starting: "198.51.100.40",
   replacement: "198.51.100.120",
+  ipv6: "2001:db8::20",
 };
 function binding(
   vnicId: string,
@@ -100,7 +101,7 @@ function instance(
   };
 }
 function fixtureInstances(): InstanceSummary[] {
-  return [
+  const instances = [
     instance(ids.main, "Rotation primary", "RUNNING", [
       vnic(
         ids.primaryVnic,
@@ -156,6 +157,8 @@ function fixtureInstances(): InstanceSummary[] {
       ),
     ]),
   ];
+  instances[0].vnics[1].ipv6 = [addresses.ipv6];
+  return instances;
 }
 type Submission = OperationRequest & { idempotencyKey: string };
 interface RotationFixture {
@@ -270,7 +273,8 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
           method === "GET" &&
           (path.startsWith("/_next/") ||
             /^\/flags\/[a-z]{2}\.svg$/.test(path) ||
-            ["/instances", "/favicon.ico", "/icon.svg"].includes(path))
+            ["/instances", "/favicon.ico", "/icon.svg"].includes(path) ||
+            /^\/instances\/[^/]+$/.test(path))
         )
           return route.continue();
         fixture.unexpected.push(method + " " + path);
@@ -288,7 +292,20 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
         if (fixture.instancesGate) await fixture.instancesGate;
         return json({ instances: fixture.instances });
       }
+      const instanceMatch = /^\/api\/instances\/([^/]+)(?:\/(metrics|security))?$/.exec(path);
+      if (method === "GET" && instanceMatch) {
+        const found = fixture.instances.find(
+          (item) => item.id === decodeURIComponent(instanceMatch[1]),
+        );
+        if (!found) return json({ error: "Unknown fixture instance" }, 404);
+        if (instanceMatch[2] === "metrics")
+          return json({ points: [], available: false, intervalSeconds: 60, source: "oci" });
+        if (instanceMatch[2] === "security") return json({ groups: [] });
+        return json({ instance: found });
+      }
       if (method === "GET" && path === "/api/jobs") {
+        if (url.searchParams.get("active") !== "true")
+          return json(jobPageFixture(fixture.jobs, url.searchParams));
         const syncIds = new Set(
           fixture.jobs.flatMap((job) => {
             const sync = job.result?.synchronization as { jobId?: string } | undefined;
@@ -382,11 +399,34 @@ const card = (page: Page, name = "Rotation primary") =>
   page.locator("article.instance-card").filter({
     has: page.getByRole("link", { name, exact: true }),
   });
-const change = (container: Locator, address: string) =>
-  container.getByRole("button", { name: "更换 IP " + address, exact: true });
-const dialog = (page: Page) => page.getByRole("dialog", { name: "更换公网 IP", exact: true });
+const addressButton = (container: Locator | Page, address: string) =>
+  container.getByRole("button", { name: `查看 IP ${address} 详情`, exact: true });
+const dialog = (page: Page) => page.getByRole("dialog", { name: "IP 详情", exact: true });
 const confirm = (page: Page) =>
-  dialog(page).getByRole("button", { name: "确认更换公网 IP", exact: true });
+  dialog(page).getByRole("button", { name: "更换公网 IP", exact: true });
+const closeDetails = async (page: Page) => {
+  await dialog(page).getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
+};
+async function expectReplacement(
+  page: Page,
+  container: Locator | Page,
+  address: string,
+  enabled: boolean,
+) {
+  const entry = addressButton(container, address);
+  await expect(entry).toBeEnabled();
+  await entry.click();
+  await expect(dialog(page)).toBeVisible();
+  if (enabled) await expect(confirm(page)).toBeEnabled();
+  else {
+    await expect(confirm(page)).toBeDisabled();
+    await expect(dialog(page).getByRole("status")).toContainText(
+      /不支持|不能|未确认|不完整|不可|读取|处理|变化/,
+    );
+  }
+  await closeDetails(page);
+}
 async function openCards(page: Page, hasRotationAction = true) {
   await page.goto("/instances");
   await expect(page.getByRole("button", { name: "卡片视图", exact: true })).toHaveAttribute(
@@ -394,7 +434,7 @@ async function openCards(page: Page, hasRotationAction = true) {
     "true",
   );
   await expect(page.locator("article.instance-card")).toHaveCount(3);
-  if (hasRotationAction) await expect(change(card(page), addresses.target)).toBeVisible();
+  if (hasRotationAction) await expect(addressButton(card(page), addresses.target)).toBeVisible();
 }
 async function advanceJobPoll(page: Page, fixture: RotationFixture) {
   fixture.now += 5001;
@@ -449,11 +489,11 @@ test("重载后从最近历史恢复失败轮换提示，不把完成任务混�
   const failure = () =>
     card(page).getByRole("link", { name: "更换未完成 · 查看任务", exact: true });
   await expect(failure()).toBeVisible();
-  await expect(change(card(page), addresses.target)).toBeEnabled();
+  await expectReplacement(page, card(page), addresses.target, true);
   await page.reload();
   await expect(failure()).toBeVisible();
   await expect(failure()).toHaveAttribute("href", "/tasks/" + history.id);
-  await expect(change(card(page), addresses.target)).toBeEnabled();
+  await expectReplacement(page, card(page), addresses.target, true);
   expect(rotationApi.contextResponses.at(-1)).toEqual({ jobs: [], recentJobs: [history.id] });
   expect(rotationApi.submissions).toEqual([]);
 });
@@ -492,12 +532,12 @@ for (const synchronization of ["completed-with-warnings", "failed-child"] as con
     const warning = () =>
       card(page).getByRole("link", { name: "地址同步不完整 · 查看任务", exact: true });
     await expect(warning()).toBeVisible();
-    await expect(change(card(page), addresses.target)).toBeDisabled();
+    await expectReplacement(page, card(page), addresses.target, false);
     await page.reload();
     await expect(warning()).toBeVisible();
-    await expect(change(card(page), addresses.first)).toBeDisabled();
-    await expect(change(card(page), addresses.target)).toBeDisabled();
-    await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+    await expectReplacement(page, card(page), addresses.first, false);
+    await expectReplacement(page, card(page), addresses.target, false);
+    await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
     expect(rotationApi.contextResponses.at(-1)).toEqual({ jobs: [], recentJobs: [history.id] });
     if (synchronization === "failed-child")
       expect(rotationApi.count("/api/jobs/" + syncId)).toBeGreaterThan(0);
@@ -505,7 +545,10 @@ for (const synchronization of ["completed-with-warnings", "failed-child"] as con
   });
 }
 
-test("卡片仅为完整且未保护的临时公网绑定提供更换入口", async ({ page, rotationApi }) => {
+test("卡片所有公网地址共用详情，只有完整且未保护的临时绑定可以更换", async ({
+  page,
+  rotationApi,
+}) => {
   await openCards(page);
   const primary = card(page);
   await expect(primary.getByText("固定 IP", { exact: true })).toHaveCount(2);
@@ -515,32 +558,116 @@ test("卡片仅为完整且未保护的临时公网绑定提供更换入口", as
     addresses.incomplete,
     addresses.unknownLifetime,
   ])
-    await expect(change(primary, address)).toHaveCount(0);
-  await expect(primary.getByRole("button", { name: /^更换 IP / })).toHaveCount(2);
-  await expect(change(primary, addresses.first)).toHaveText("更换");
-  await expect(change(primary, addresses.first)).toBeEnabled();
-  await expect(change(primary, addresses.target)).toBeEnabled();
-  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
-  await expect(change(card(page, "Rotation starting"), addresses.starting)).toHaveCount(0);
+    await expectReplacement(page, primary, address, false);
+  await expect(primary.getByRole("button", { name: /^更换/ })).toHaveCount(0);
+  await expect(primary.getByRole("button", { name: /^查看 IP .* 详情$/ })).toHaveCount(6);
+  await expect(addressButton(primary, addresses.first)).toHaveText(addresses.first);
+  await expectReplacement(page, primary, addresses.first, true);
+  await expectReplacement(page, primary, addresses.target, true);
+  await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
+  await expectReplacement(page, card(page, "Rotation starting"), addresses.starting, false);
   expect(rotationApi.submissions).toEqual([]);
 });
 
 test("选择第二张网卡时预览精确绑定，取消不提交任何更换操作", async ({ page, rotationApi }) => {
   await openCards(page);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await expect(dialog(page)).toBeVisible();
   const summary = dialog(page).locator(".confirm-summary");
   await expect(summary).toContainText("Rotation primary");
   await expect(summary).toContainText("Secondary egress");
+  await expect(summary).toContainText("网卡名称");
+  await expect(summary).toContainText("附加网卡");
   await expect(summary).toContainText("10.1.0.20");
   await expect(summary).toContainText(addresses.target);
   await expect(summary).not.toContainText(addresses.first);
   await expect(summary).not.toContainText(addresses.fixed);
-  await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "关闭", exact: true }).click();
   await expect(dialog(page)).not.toBeVisible();
-  await expect(change(card(page), addresses.target)).toBeEnabled();
+  await expectReplacement(page, card(page), addresses.target, true);
   expect(rotationApi.submissions).toEqual([]);
   expect(rotationApi.count("/api/operations", "POST")).toBe(0);
+});
+
+test("详情打开后绑定变化会禁用更换，重新选择当前地址才恢复", async ({ page, rotationApi }) => {
+  await page.clock.install({ time: new Date(rotationApi.now) });
+  await openCards(page);
+  await addressButton(card(page), addresses.target).click();
+  await expect(confirm(page)).toBeEnabled();
+  const reads = rotationApi.count("/api/instances");
+  const target = rotationApi.instances[0].vnics[1].privateIps[0];
+  target.publicIp = addresses.replacement;
+  target.publicIpId = "rotation-public-replacement";
+  await page.clock.fastForward(30001);
+  await expect.poll(() => rotationApi.count("/api/instances")).toBeGreaterThan(reads);
+  await expect(confirm(page)).toBeDisabled();
+  await expect(
+    dialog(page).getByText("地址绑定已变化，请关闭详情并重新打开当前地址。", { exact: true }),
+  ).toBeVisible();
+  await expect(dialog(page).locator(".confirm-summary")).toContainText(addresses.target);
+  await expect(dialog(page).locator(".confirm-summary")).toContainText(addresses.replacement);
+  await closeDetails(page);
+  await expect(addressButton(card(page), addresses.target)).toHaveCount(0);
+  await expectReplacement(page, card(page), addresses.replacement, true);
+  expect(rotationApi.submissions).toEqual([]);
+});
+
+test("表格与网络详情共用 IP 弹窗，固定、私网和 IPv6 均可查看但不能更换", async ({
+  page,
+  rotationApi,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as unknown as { copied: string }).copied = value;
+        },
+      },
+    });
+  });
+  await openCards(page);
+  await page.getByRole("button", { name: "表格视图", exact: true }).click();
+  await expectReplacement(page, page.locator(".resource-table"), addresses.fixed, false);
+  await page.goto(`/instances/${ids.main}`);
+  await page.getByRole("tab", { name: "网络", exact: true }).click();
+  await expectReplacement(page, page, addresses.fixed, false);
+  await expectReplacement(page, page, "10.1.0.20", false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await addressButton(page, addresses.ipv6).click();
+  await expect(dialog(page)).toContainText("IPv6");
+  await expect(dialog(page)).toContainText("Secondary egress");
+  await expect(confirm(page)).toBeDisabled();
+  await dialog(page).getByText("资源标识", { exact: true }).click();
+  await dialog(page).getByRole("button", { name: "复制网卡 OCID", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { copied: string }).copied))
+    .toBe(ids.secondaryVnic);
+  const dimensions = await dialog(page).evaluate((element) => ({
+    width: element.clientWidth,
+    scroll: element.scrollWidth,
+    viewport: innerWidth,
+    bounds: element.getBoundingClientRect().width,
+  }));
+  expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.width + 1);
+  expect(dimensions.bounds).toBeLessThanOrEqual(dimensions.viewport);
+  await closeDetails(page);
+  expect(rotationApi.submissions).toEqual([]);
+});
+
+test("没有公网 IPv4 时卡片仍可查看私网及 IPv6 地址详情", async ({ page, rotationApi }) => {
+  const selected = rotationApi.instances[0];
+  for (const item of selected.vnics)
+    for (const entry of item.privateIps) {
+      entry.publicIp = undefined;
+      entry.publicIpId = undefined;
+    }
+  await openCards(page, false);
+  await expectReplacement(page, card(page), "10.0.0.2", false);
+  for (const item of selected.vnics) item.privateIps = [];
+  await page.reload();
+  await expectReplacement(page, card(page), addresses.ipv6, false);
+  expect(rotationApi.submissions).toEqual([]);
 });
 
 test("提交精确绑定且防重复点击，等待期间锁定本实例，完成后刷新出口并保留固定 IP", async ({
@@ -554,30 +681,30 @@ test("提交精确绑定且防重复点击，等待期间锁定本实例，完�
     release = resolve;
   });
   try {
-    await change(card(page), addresses.target).click();
+    await addressButton(card(page), addresses.target).click();
     await confirm(page).dblclick();
     await expect.poll(() => rotationApi.submissions.length).toBe(1);
     expectTarget(rotationApi.submissions[0]);
     await expect(confirm(page)).toBeDisabled();
-    await expect(dialog(page).getByRole("button", { name: "取消", exact: true })).toBeDisabled();
+    await expect(dialog(page).getByRole("button", { name: "关闭", exact: true })).toBeDisabled();
     release();
     rotationApi.submitGate = undefined;
     await expect(dialog(page)).not.toBeVisible();
-    await expect(change(card(page), addresses.first)).toBeDisabled();
-    await expect(change(card(page), addresses.target)).toBeDisabled();
-    await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+    await expectReplacement(page, card(page), addresses.first, false);
+    await expectReplacement(page, card(page), addresses.target, false);
+    await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
     const job = rotationApi.jobs[0];
     await expect(card(page).locator('a[href="/tasks/' + job.id + '"]')).toBeVisible();
     const reads = rotationApi.count("/api/instances");
     const polls = rotationApi.count("/api/jobs");
     rotationApi.finish(job.id, "succeeded", addresses.replacement);
     await advanceJobPoll(page, rotationApi);
-    await expect(change(card(page), addresses.replacement)).toBeEnabled();
-    await expect(change(card(page), addresses.target)).toHaveCount(0);
-    await expect(change(card(page), addresses.first)).toBeEnabled();
+    await expectReplacement(page, card(page), addresses.replacement, true);
+    await expect(addressButton(card(page), addresses.target)).toHaveCount(0);
+    await expectReplacement(page, card(page), addresses.first, true);
     await expect(card(page).getByText(addresses.fixed, { exact: true })).toBeVisible();
     await expect(card(page).getByText(addresses.protected, { exact: true })).toBeVisible();
-    await expect(change(card(page), addresses.fixed)).toHaveCount(0);
+    await expectReplacement(page, card(page), addresses.fixed, false);
     await expect(card(page).getByText("固定 IP", { exact: true })).toHaveCount(2);
     expect(rotationApi.count("/api/jobs")).toBeGreaterThan(polls);
     expect(rotationApi.count("/api/instances")).toBeGreaterThan(reads);
@@ -591,7 +718,7 @@ test("提交精确绑定且防重复点击，等待期间锁定本实例，完�
 test("提交失败保留确认弹窗和原 IP，再试使用同一个幂等键", async ({ page, rotationApi }) => {
   rotationApi.submitFailures = 1;
   await openCards(page);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await confirm(page).click();
   await expect(dialog(page).getByText("模拟提交失败，请重试", { exact: true })).toBeVisible();
   await expect(confirm(page)).toBeEnabled();
@@ -614,21 +741,21 @@ test("后台任务失败显示错误入口并刷新卡片，重新发起操作�
 }) => {
   await page.clock.install({ time: new Date(rotationApi.now) });
   await openCards(page);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await confirm(page).click();
   await expect(dialog(page)).not.toBeVisible();
   const first = rotationApi.submissions[0];
   const job = rotationApi.jobs[0];
-  await expect(change(card(page), addresses.target)).toBeDisabled();
+  await expectReplacement(page, card(page), addresses.target, false);
   const reads = rotationApi.count("/api/instances");
   rotationApi.finish(job.id, "failed");
   await advanceJobPoll(page, rotationApi);
   await expect(card(page)).toContainText(/失败|未完成/);
   await expect(card(page).locator('a[href="/tasks/' + job.id + '"]')).toBeVisible();
-  await expect(change(card(page), addresses.target)).toBeEnabled();
+  await expectReplacement(page, card(page), addresses.target, true);
   await expect(card(page).getByText(addresses.fixed, { exact: true })).toBeVisible();
   expect(rotationApi.count("/api/instances")).toBeGreaterThan(reads);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await confirm(page).click();
   await expect(dialog(page)).not.toBeVisible();
   expect(rotationApi.submissions).toHaveLength(2);
@@ -637,10 +764,7 @@ test("后台任务失败显示错误入口并刷新卡片，重新发起操作�
   expect(rotationApi.jobs).toHaveLength(2);
 });
 
-test("已终止和正在终止的实例保留地址信息，但不提供公网 IP 更换入口", async ({
-  page,
-  rotationApi,
-}) => {
+test("已终止和正在终止的实例仍可查看地址详情，但不能更换公网 IP", async ({ page, rotationApi }) => {
   rotationApi.instances.find((item) => item.id === ids.main)!.state = "TERMINATED";
   rotationApi.instances.find((item) => item.id === ids.stopped)!.state = "TERMINATING";
   await openCards(page, false);
@@ -648,10 +772,10 @@ test("已终止和正在终止的实例保留地址信息，但不提供公网 I
   await expect(
     card(page, "Rotation stopped").getByText(addresses.stopped, { exact: true }),
   ).toBeVisible();
-  await expect(change(card(page), addresses.first)).toHaveCount(0);
-  await expect(change(card(page), addresses.target)).toHaveCount(0);
-  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toHaveCount(0);
-  await expect(change(card(page), addresses.fixed)).toHaveCount(0);
+  await expectReplacement(page, card(page), addresses.first, false);
+  await expectReplacement(page, card(page), addresses.target, false);
+  await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, false);
+  await expectReplacement(page, card(page), addresses.fixed, false);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(rotationApi.submissions).toEqual([]);
   expect(rotationApi.count("/api/operations", "POST")).toBe(0);
@@ -668,13 +792,13 @@ test("待执行轮换掉出列表仍按任务详情保持锁定，详情终态�
     releaseInitial = resolve;
   });
   try {
-    await change(card(page), addresses.target).click();
+    await addressButton(card(page), addresses.target).click();
     await confirm(page).click();
     await expect(dialog(page)).not.toBeVisible();
     const job = rotationApi.jobs[0];
     const detailPath = "/api/jobs/" + job.id;
     const taskLink = card(page).locator('a[href="/tasks/' + job.id + '"]');
-    await expect(change(card(page), addresses.target)).toBeDisabled();
+    await expectReplacement(page, card(page), addresses.target, false);
 
     // Wait for track()'s immediate list/detail cycle to consume a distinct detail
     // snapshot. A request counter alone cannot tell whether that cycle has ended.
@@ -698,17 +822,17 @@ test("待执行轮换掉出列表仍按任务详情保持锁定，详情终态�
     expect(rotationApi.count("/api/jobs")).toBeGreaterThan(listReads);
     // Only the new detail response can clear this marker: the new list is empty.
     await expect(taskLink).not.toHaveAttribute("title", initialMarker);
-    await expect(change(card(page), addresses.first)).toBeDisabled();
-    await expect(change(card(page), addresses.target)).toBeDisabled();
+    await expectReplacement(page, card(page), addresses.first, false);
+    await expectReplacement(page, card(page), addresses.target, false);
     await expect(taskLink).toBeVisible();
-    await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+    await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
 
     const snapshotReads = rotationApi.count("/api/instances");
     const terminalReads = rotationApi.count(detailPath);
     rotationApi.finish(job.id, "succeeded", addresses.replacement);
     await advanceJobPoll(page, rotationApi);
-    await expect(change(card(page), addresses.replacement)).toBeEnabled();
-    await expect(change(card(page), addresses.target)).toHaveCount(0);
+    await expectReplacement(page, card(page), addresses.replacement, true);
+    await expect(addressButton(card(page), addresses.target)).toHaveCount(0);
     await expect(card(page).getByText(addresses.fixed, { exact: true })).toBeVisible();
     expect(rotationApi.count(detailPath)).toBeGreaterThan(terminalReads);
     expect(rotationApi.count("/api/instances")).toBeGreaterThan(snapshotReads);
@@ -723,20 +847,20 @@ test("待执行轮换掉出列表仍按任务详情保持锁定，详情终态�
 test("轮换成功后继续等待隐藏的库存同步，取得新快照后才解除锁定", async ({ page, rotationApi }) => {
   await page.clock.install({ time: new Date(rotationApi.now) });
   await openCards(page);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await confirm(page).click();
   await expect(dialog(page)).not.toBeVisible();
   const parent = rotationApi.jobs[0];
-  await expect(change(card(page), addresses.target)).toBeDisabled();
+  await expectReplacement(page, card(page), addresses.target, false);
   const sync = rotationApi.queueSync(parent.id, "inventory-followup-fixture-1");
   rotationApi.omittedFromList.add(sync.id);
   rotationApi.finish(parent.id, "succeeded");
   await advanceJobPoll(page, rotationApi);
   await expect.poll(() => rotationApi.count("/api/jobs/" + sync.id)).toBeGreaterThan(0);
-  await expect(change(card(page), addresses.first)).toBeDisabled();
-  await expect(change(card(page), addresses.target)).toBeDisabled();
+  await expectReplacement(page, card(page), addresses.first, false);
+  await expectReplacement(page, card(page), addresses.target, false);
   await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
-  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+  await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
   await expect(
     page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true }),
   ).toBeEnabled();
@@ -750,15 +874,15 @@ test("轮换成功后继续等待隐藏的库存同步，取得新快照后才�
     rotationApi.finish(sync.id, "succeeded", addresses.replacement);
     await advanceJobPoll(page, rotationApi);
     await expect.poll(() => rotationApi.count("/api/instances")).toBeGreaterThan(snapshotReads);
-    await expect(change(card(page), addresses.first)).toBeDisabled();
-    await expect(change(card(page), addresses.target)).toBeDisabled();
-    await expect(change(card(page), addresses.replacement)).toHaveCount(0);
+    await expectReplacement(page, card(page), addresses.first, false);
+    await expectReplacement(page, card(page), addresses.target, false);
+    await expect(addressButton(card(page), addresses.replacement)).toHaveCount(0);
     release();
     rotationApi.instancesGate = undefined;
-    await expect(change(card(page), addresses.replacement)).toBeEnabled();
-    await expect(change(card(page), addresses.first)).toBeEnabled();
+    await expectReplacement(page, card(page), addresses.replacement, true);
+    await expectReplacement(page, card(page), addresses.first, true);
     await expect(card(page).getByText(addresses.fixed, { exact: true })).toBeVisible();
-    await expect(change(card(page), addresses.fixed)).toHaveCount(0);
+    await expectReplacement(page, card(page), addresses.fixed, false);
     expect(rotationApi.count("/api/jobs/" + sync.id)).toBeGreaterThanOrEqual(2);
     expect(rotationApi.omittedFromList.has(sync.id)).toBe(true);
     expect(rotationApi.submissions).toHaveLength(1);
@@ -774,11 +898,11 @@ test("轮换完成但地址同步不完整时保持保护，手动刷新确认�
 }) => {
   await page.clock.install({ time: new Date(rotationApi.now) });
   await openCards(page);
-  await change(card(page), addresses.target).click();
+  await addressButton(card(page), addresses.target).click();
   await confirm(page).click();
   await expect(dialog(page)).not.toBeVisible();
   const job = rotationApi.jobs[0];
-  await expect(change(card(page), addresses.target)).toBeDisabled();
+  await expectReplacement(page, card(page), addresses.target, false);
   rotationApi.finish(job.id, "succeeded");
   rotationApi.jobDetails.get(job.id)!.result = {
     details: {
@@ -798,10 +922,10 @@ test("轮换完成但地址同步不完整时保持保护，手动刷新确认�
   });
   await expect(warning).toBeVisible();
   await expect(warning).toHaveAttribute("href", "/tasks/" + job.id);
-  await expect(change(card(page), addresses.first)).toBeDisabled();
-  await expect(change(card(page), addresses.target)).toBeDisabled();
+  await expectReplacement(page, card(page), addresses.first, false);
+  await expectReplacement(page, card(page), addresses.target, false);
   await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
-  await expect(change(card(page, "Rotation stopped"), addresses.stopped)).toBeEnabled();
+  await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
   const refresh = page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true });
   await expect(refresh).toBeEnabled();
   const reads = rotationApi.count("/api/instances");
@@ -814,11 +938,11 @@ test("轮换完成但地址同步不完整时保持保护，手动刷新确认�
   target.publicIp = addresses.replacement;
   target.publicIpId = "rotation-public-replacement";
   await refresh.click();
-  await expect(change(card(page), addresses.replacement)).toBeEnabled();
-  await expect(change(card(page), addresses.first)).toBeEnabled();
+  await expectReplacement(page, card(page), addresses.replacement, true);
+  await expectReplacement(page, card(page), addresses.first, true);
   await expect(warning).toHaveCount(0);
   await expect(card(page).getByText(addresses.fixed, { exact: true })).toBeVisible();
-  await expect(change(card(page), addresses.fixed)).toHaveCount(0);
+  await expectReplacement(page, card(page), addresses.fixed, false);
   expect(rotationApi.count("/api/instances")).toBeGreaterThan(reads);
   expect(rotationApi.count("/api/inventory/refresh", "POST")).toBeGreaterThan(refreshes);
   expect(rotationApi.submissions).toHaveLength(1);

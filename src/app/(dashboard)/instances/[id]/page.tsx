@@ -41,7 +41,6 @@ import {
   number,
   operationLabels,
   percent,
-  primaryAddress,
   publicBindings,
   regionName,
   shortId,
@@ -53,6 +52,15 @@ import { UpdatedAt } from "@/components/updated-at";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
+import { IpDetailsDialog } from "@/components/ip-details-dialog";
+import {
+  IpAddressButton,
+  primaryIpTarget,
+  targetForBinding,
+  type IpDetailsTarget,
+} from "@/components/ip-address";
+import { ipRotationContext } from "@/components/public-ip-rotation";
+import { useInstanceJobs } from "@/components/use-instance-jobs";
 
 function RenameDialog({ instance, onClose }: { instance: InstanceSummary; onClose: () => void }) {
   const { notify } = useApp();
@@ -133,6 +141,10 @@ export default function InstanceDetailPage() {
     30000,
   );
   const instance = resource.data?.instance;
+  const pendingJobs = useInstanceJobs(resource.reload);
+  const [address, setAddress] = useState<{ instanceId: string; target: IpDetailsTarget } | null>(
+    null,
+  );
   const sync = useInventoryRefresh({
     accountIds: instance ? [instance.accountId] : [],
     enabled: Boolean(instance),
@@ -169,6 +181,11 @@ export default function InstanceDetailPage() {
   if (!instance)
     return <ErrorState message={resource.error || "未找到此实例。"} retry={resource.reload} />;
   const instanceJobs = jobs.data?.jobs || [];
+  const primaryIp = primaryIpTarget(instance);
+  const privateVnic = instance.vnics.find((vnic) => vnic.privateIps.length);
+  const privateIp = privateVnic?.privateIps[0];
+  const ipContext = ipRotationContext(instance, pendingJobs, resource.error);
+  const openIp = (target: IpDetailsTarget) => setAddress({ instanceId: instance.id, target });
   const safeActivityPage = jobs.data?.page ?? activityPage;
   const lifecycle = (
     kind: "instance-start" | "instance-stop" | "instance-reboot" | "instance-terminate",
@@ -510,12 +527,21 @@ export default function InstanceDetailPage() {
                   </span>
                   <div className="resource-label">
                     <strong>{instance.vnics.length} 个虚拟网卡</strong>
-                    <span>{instance.vnics[0]?.privateIps[0]?.privateIp || "暂无私网地址"}</span>
+                    <span>
+                      {privateVnic && privateIp ? (
+                        <IpAddressButton
+                          target={targetForBinding(privateVnic, privateIp, "private")}
+                          onClick={openIp}
+                        />
+                      ) : (
+                        "暂无私网地址"
+                      )}
+                    </span>
                   </div>
                 </div>
                 <div className="row between" style={{ marginTop: 18 }}>
                   <span className="mono small muted">
-                    {primaryAddress(instance)}
+                    {primaryIp ? <IpAddressButton target={primaryIp} onClick={openIp} /> : "—"}
                     {publicBindings(instance).length > 1
                       ? ` +${publicBindings(instance).length - 1}`
                       : ""}
@@ -613,7 +639,7 @@ export default function InstanceDetailPage() {
             </Card>
           </>
         )}
-        {tab === "network" && <NetworkPanel instance={instance} />}{" "}
+        {tab === "network" && <NetworkPanel instance={instance} onAddress={openIp} />}{" "}
         {tab === "security" && <SecurityPanel instance={instance} />}{" "}
         {tab === "storage" && <StoragePanel instance={instance} />}{" "}
         {tab === "activity" && (
@@ -628,6 +654,15 @@ export default function InstanceDetailPage() {
       </div>
       {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
       {renaming && <RenameDialog instance={instance} onClose={() => setRenaming(false)} />}
+      {address?.instanceId === instance.id && (
+        <IpDetailsDialog
+          instance={instance}
+          target={address.target}
+          blockedReason={ipContext.blockedReason}
+          onSuccess={pendingJobs.track}
+          onClose={() => setAddress(null)}
+        />
+      )}
     </>
   );
 }
