@@ -253,7 +253,7 @@ function costs(query: URLSearchParams, mode: CostMode): CostReport {
 
 const test = base.extend<{ analyticsApi: AnalyticsFixture }>({
   analyticsApi: async ({ context, baseURL }, use) => {
-    const origin = new URL(baseURL || "http://localhost:3000").origin;
+    const origin = new URL(baseURL || "http://localhost:6240").origin;
     if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname))
       throw new Error("Analytics UI tests require an isolated local server.");
     const errors: string[] = [];

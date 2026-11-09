@@ -16,12 +16,12 @@
 
 ## 快速部署
 
-只需 Docker Engine、Docker Compose 和一份 [v0.5.5 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.5/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.5`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v055-发布验收)。
+只需 Docker Engine、Docker Compose 和一份 [v0.5.6 的 compose.yaml](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.6/compose.yaml)，无需克隆源码、安装 Node.js 或创建 `.env`。发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.6`，目标平台为 Linux `amd64` 和 `arm64`；发布验收状态见[验证指南](docs/VERIFICATION.md#v056-发布验收)。
 
 在准备好的部署目录中，用浏览器下载上述文件并命名为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.5/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.6/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，在同一目录准备可由容器用户读写的数据目录：
@@ -37,13 +37,15 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-打开 `http://localhost:3000`，在首次初始化页面填写管理员用户名、密码和确认密码，也可点击按钮生成并复制 32 位随机密码。创建成功后自动登录，初始化入口随即关闭；重启和升级不会重置已有管理员。
+打开 `http://localhost:6240`，在首次初始化页面填写管理员用户名、密码和确认密码，也可点击按钮生成并复制 32 位随机密码。创建成功后自动登录，初始化入口随即关闭；重启和升级不会重置已有管理员。
 
 **首次能访问初始化页面的人可以创建管理员。** 默认端口只绑定 `127.0.0.1`；远程服务器应先通过 SSH 隧道完成初始化，再开放公共 HTTPS 反向代理，见[访问说明](docs/OPERATIONS.md#https-与访问)。不需要额外的初始化令牌或必填环境变量。
 
 这份 Compose 不依赖其他仓库文件。镜像自带非 root 用户 `1000:1000`、Tini 和应用默认值；Compose 保留重启、35 秒停止期限、权限限制及 `local` 日志驱动。新面板没有示例资源，添加账号后才会同步云资源。
 
-数据固定挂载为 `./data:/data`：宿主机的 `data` 位于 `compose.yaml` 所在目录，保存数据库和自动生成的 `.master-key`。移动 Compose 文件时必须一起迁移数据，不能把空目录当作原部署。日常只需按需在可选的 `.env` 中设置 `PORT=3001` 等宿主机端口；默认是 `3000`，容器内仍为 `3000`。
+数据固定挂载为 `./data:/data`：宿主机的 `data` 位于 `compose.yaml` 所在目录，保存数据库和自动生成的 `.master-key`。移动 Compose 文件时必须一起迁移数据，不能把空目录当作原部署。默认端口映射为 `127.0.0.1:6240:3000`；自定义端口直接修改中间的 `6240`，不再使用 `.env` 或 `${PORT}`。容器内仍监听 `3000`。
+
+从默认端口为 `3000` 的旧版升级时，若需要继续使用原访问地址，将映射改为 `127.0.0.1:3000:3000`；采用新默认端口时，相应调整反向代理上游与 SSH 隧道。
 
 **从旧命名卷部署升级**：先在旧配置下停机并完整备份原 `/data`，恢复到新的空 `./data`，核对权限后再切换挂载。直接替换 Compose 并挂载空目录会显示首次初始化页面，不会自动搬迁旧账号。步骤见[数据迁移](docs/OPERATIONS.md#从旧命名卷迁移到-data)。
 

@@ -188,20 +188,19 @@ async function verifyAnonymousRegistry(
 // This accepts the project's small release format, not arbitrary Compose syntax.
 // Reject external references before `compose config` can read any referenced file.
 function verifyComposeSource(source: string): void {
-  const substitutions = source.match(/\$\{[^}]*\}/g) ?? [];
+  check(!source.includes("${"), "Release Compose must not require environment interpolation.");
   check(
-    substitutions.every((value) => value === "${PORT:-3000}"),
-    "Release Compose contains unsupported or required environment inputs.",
+    (source.match(/127\.0\.0\.1:6240:3000/g) ?? []).length === 1,
+    "Release Compose must use the literal default port mapping.",
   );
   check(
     (source.match(/^\s*-\s*(?:"\.\/data:\/data"|'\.\/data:\/data'|\.\/data:\/data)\s*$/gm) ?? [])
       .length === 1,
     "Release Compose must use the literal ./data:/data mount.",
   );
-  const plain = source.replace(/\$\{[^}]*\}/g, "placeholder");
   check(
     !/[${}&*!|>\t]/.test(
-      plain
+      source
         .split("\n")
         .filter((line) => !line.trim().startsWith("#"))
         .join("\n"),
@@ -222,7 +221,7 @@ function verifyComposeSource(source: string): void {
     "logging",
     "driver",
   ]);
-  for (const line of plain.split(/\r?\n/)) {
+  for (const line of source.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     if (trimmed.startsWith("- ")) {
@@ -478,11 +477,13 @@ async function main(): Promise<void> {
       JSON.stringify({ auths: { "ghcr.io": {} } }),
       { mode: 0o600 },
     );
-    const envFile = join(directory, "empty.env"),
-      composeFile = join(directory, "compose.yaml");
-    writeFileSync(envFile, "", { mode: 0o600 });
-    writeFileSync(composeFile, source, { mode: 0o600 });
+    const composeFile = join(directory, "compose.yaml");
     const port = await unusedPort();
+    // Keep the downloaded asset intact in memory; randomize only the host port
+    // in this test-owned copy, without an env file or a second Compose file.
+    writeFileSync(composeFile, source.replace("127.0.0.1:6240:3000", `127.0.0.1:${port}:3000`), {
+      mode: 0o600,
+    });
     const env: NodeJS.ProcessEnv = {};
     for (const name of [
       "PATH",
@@ -505,7 +506,6 @@ async function main(): Promise<void> {
     }
     Object.assign(env, {
       DOCKER_CONFIG: configDirectory,
-      PORT: String(port),
       COMPOSE_PROJECT_NAME: project,
       COMPOSE_DISABLE_ENV_FILE: "1",
     });
@@ -541,7 +541,7 @@ async function main(): Promise<void> {
       "--project-directory",
       directory,
       "--env-file",
-      envFile,
+      process.platform === "win32" ? "NUL" : "/dev/null",
       "--project-name",
       project,
       "--file",

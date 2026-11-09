@@ -17,7 +17,7 @@ const user = { id: "setup-fixture-user", username: "fixture-admin", mfaEnabled: 
 const test = base.extend<{ auth: AuthFixture }>({
   auth: [
     async ({ context, baseURL }, use) => {
-      const origin = new URL(baseURL || "http://localhost:3000").origin;
+      const origin = new URL(baseURL || "http://localhost:6240").origin;
       if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname))
         throw new Error("Setup UI tests require an isolated localhost server.");
       const auth: AuthFixture = {

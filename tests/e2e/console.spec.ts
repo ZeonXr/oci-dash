@@ -91,7 +91,7 @@ async function setup(
     holdCreate?: Promise<void>;
   } = {},
 ) {
-  const origin = new URL(test.info().project.use.baseURL || "http://localhost:3000").origin;
+  const origin = new URL(test.info().project.use.baseURL || "http://localhost:6240").origin;
   const fixture = {
     session: options.existing || (null as ConsoleSessionSummary | null),
     writes: [] as string[],

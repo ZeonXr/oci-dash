@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import { join } from "node:path";
 
-const requestedBaseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
+const requestedBaseURL = process.env.E2E_BASE_URL || "http://localhost:6240";
 const parsed = new URL(requestedBaseURL);
 if (
   !["http:", "https:"].includes(parsed.protocol) ||

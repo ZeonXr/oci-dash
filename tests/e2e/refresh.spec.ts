@@ -98,7 +98,7 @@ interface RefreshFixture {
 }
 const test = base.extend<{ refreshApi: RefreshFixture }>({
   refreshApi: async ({ context, baseURL }, use) => {
-    const origin = new URL(baseURL || "http://localhost:3000").origin;
+    const origin = new URL(baseURL || "http://localhost:6240").origin;
     if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname))
       throw new Error("Refresh UI tests require an isolated localhost server.");
     const errors: string[] = [];

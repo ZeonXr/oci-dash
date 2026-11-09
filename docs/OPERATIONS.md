@@ -1,15 +1,15 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.5`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.6`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.5.5 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.5/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.5.6 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.6/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.5/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.6/compose.yaml -o compose.yaml
 ```
 
 Linux 首次部署时，先在同一目录创建可由容器用户读写的空数据目录：
@@ -25,9 +25,9 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v055-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v056-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
 
-打开 `http://localhost:3000`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
+打开 `http://localhost:6240`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
 
 首次启动自动生成加密密钥，后续启动复用已保存的数据：
 
@@ -40,7 +40,9 @@ docker compose up -d --wait
 
 ## 可选配置
 
-可选 `.env` 只有一个日常设置：`PORT=3001` 等宿主机端口，默认 `3000`，仍只绑定 `127.0.0.1`。它供 Compose 解析端口映射，不注入容器；应用内仍监听 3000，并使用 `/data`。
+项目不再提供 `.env.example`，部署配置直接写在 Compose 中。默认端口映射为 `127.0.0.1:6240:3000`，只绑定 loopback；自定义宿主端口时修改中间的 `6240`，容器内保留 `3000`，然后执行 `docker compose up -d --wait app`。
+
+从旧版升级时，原 `.env` 中的 `PORT` 不再影响映射。若要保留旧地址，直接写为 `127.0.0.1:3000:3000` 或原先使用的端口；采用新默认值时，将反向代理上游和 SSH 隧道改到 `6240`。原 `.env` 若保存旧 `MASTER_KEY`，先完成下方的密钥迁移再归档，不能直接删除。
 
 默认数据挂载直接写为 `./data:/data`，不再读取旧 `DATA_PATH`。相对路径依据 `compose.yaml` 所在目录解析，不是临时执行命令的目录；移动部署目录必须同时迁移数据。生产部署目录应与源码和构建目录分开。确需其他位置时，先完成下面的迁移，再显式修改 Compose 的挂载来源；使用绝对路径更容易核对。
 
@@ -78,7 +80,7 @@ docker compose up -d --wait
 | `ADMIN_PASSWORD`          | 可选兼容入口：显式指定 12–256 字符密码时初始化空数据库并跳过网页设置；默认留空，已有管理员不覆盖。 |
 | `MASTER_KEY`              | 可选的 Base64 编码 32 字节密钥；验证成功后也持久化到 `.master-key`，必须与已有数据匹配。           |
 | `APP_ORIGIN`              | 可选固定访问源，如 `https://oci.example.com`；默认按请求的 Host 和 Origin 校验。                   |
-| `PORT`                    | 应用监听端口；镜像固定默认值 3000。Compose 的 `${PORT}` 仅控制宿主机映射。                         |
+| `PORT`                    | 容器应用监听端口，默认 3000；默认 Compose 不注入该变量。日常只修改宿主端口映射。                   |
 | `DATABASE_PATH`           | 本地默认 `data/oci-dash.db`；Compose 固定为 `/data/oci-dash.db`。                                  |
 | `NEXT_TELEMETRY_DISABLED` | 镜像已设置为 `1`，关闭 Next.js 遥测。                                                              |
 
@@ -103,15 +105,15 @@ Web、网关和 Worker 使用同一数据库和密钥文件。本地运行默认
 
 ## HTTPS 与访问
 
-Compose 仅发布 `127.0.0.1:${PORT}`。反向代理应将 HTTPS 域名转发到该地址；代理若在另一个容器中，不能把自己的 `127.0.0.1` 当成宿主机。
+Compose 默认仅发布 `127.0.0.1:6240`。反向代理应将 HTTPS 域名转发到该地址；修改了宿主端口映射时使用对应端口。代理若在另一个容器中，不能把自己的 `127.0.0.1` 当成宿主机。
 
 新部署先完成管理员初始化，再开放公共反向代理。远程服务器可从自己的电脑建立 SSH 隧道，将下列 SSH 目标替换为实际用户名和主机：
 
 ```sh
-ssh -N -L 3000:127.0.0.1:3000 user@server
+ssh -N -L 6240:127.0.0.1:6240 user@server
 ```
 
-保持隧道连接，在本机打开 `http://localhost:3000` 创建管理员；如宿主机设置了其他 `PORT`，相应调整隧道的远端端口。初始化成功、确认能登录后关闭隧道，再配置公开 HTTPS。首次初始化没有额外令牌，能够访问该页面的人就有机会创建管理员；Origin 校验不能代替这一访问范围限制。
+保持隧道连接，在本机打开 `http://localhost:6240` 创建管理员；如已修改宿主端口映射，相应调整隧道的远端端口。初始化成功、确认能登录后关闭隧道，再配置公开 HTTPS。首次初始化没有额外令牌，能够访问该页面的人就有机会创建管理员；Origin 校验不能代替这一访问范围限制。
 
 默认根据浏览器 Origin 与请求 Host 校验来源，HTTPS 来源使用 `Secure` 会话 Cookie。反向代理必须保留公开域名和端口；应用不使用 `X-Forwarded-Host` 替代 Host。可选的 `APP_ORIGIN` 会进一步锁定完整访问源，配置后必须与实际访问地址一致。
 
@@ -242,7 +244,7 @@ docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
 
 升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。
 
-从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、`PORT` 和必要的高级覆盖配置；旧 `.env` 的 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。完成适用检查后，在数据迁移已核对的部署目录执行：
+从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、端口映射和必要的高级覆盖配置；旧 `.env` 的 `PORT` 和 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。完成适用检查后，在数据迁移已核对的部署目录执行：
 
 ```sh
 docker compose pull app

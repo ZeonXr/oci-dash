@@ -46,7 +46,7 @@ const samples: DashboardData = {
 };
 
 function localOrigin(value: string | undefined) {
-  const url = new URL(value || "http://localhost:3000");
+  const url = new URL(value || "http://localhost:6240");
   if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
     throw new Error("Smoke tests only support a localhost OCI Dash server.");
   }

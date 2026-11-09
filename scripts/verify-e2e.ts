@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,6 @@ interface VerificationEnvironment {
   MASTER_KEY: string;
   APP_ORIGIN: string;
   DATABASE_PATH: string;
-  PORT: string;
   NEXT_TELEMETRY_DISABLED: string;
 }
 
@@ -66,7 +65,6 @@ const image = noBuild ? process.env.OCI_DASH_TEST_IMAGE || "oci-dash:local" : `$
 mkdirSync(base, { recursive: true });
 const directory = mkdtempSync(join(base, "e2e-"));
 const dataDirectory = join(directory, "data");
-const envFile = join(directory, "test.env");
 const composeFile = join(directory, "compose.yaml");
 const override = join(directory, "compose.json");
 
@@ -93,13 +91,17 @@ let compose: ComposeCommand | undefined;
 let started = false;
 let failure: unknown;
 try {
-  // A copied deployment file must work without adjacent source or inherited files.
-  copyFileSync(join(repository, "compose.yaml"), composeFile);
+  // The standalone deployment needs no adjacent configuration. Only its host
+  // port is replaced in the test-owned copy to avoid the real deployment.
+  const source = readFileSync(join(repository, "compose.yaml"), "utf8");
+  if ((source.match(/127\.0\.0\.1:6240:3000/g) ?? []).length !== 1 || source.includes("${"))
+    throw new Error("Expected a literal default port without environment interpolation.");
   // Only this test-owned leaf is writable by the non-root container. Its parent
   // remains private, and cleanup removes the entire unique temporary directory.
   mkdirSync(dataDirectory, { mode: 0o777 });
   if (process.platform !== "win32") chmodSync(dataDirectory, 0o777);
   const port = await unusedPort();
+  writeFileSync(composeFile, source.replace("127.0.0.1:6240:3000", `127.0.0.1:${port}:3000`));
   const administrator = {
     ADMIN_USERNAME: project.slice("oci-dash-".length),
     ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
@@ -108,16 +110,8 @@ try {
     MASTER_KEY: randomBytes(32).toString("base64"),
     APP_ORIGIN: `http://127.0.0.1:${port}`,
     DATABASE_PATH: "/data/oci-dash.db",
-    PORT: String(port),
     NEXT_TELEMETRY_DISABLED: "1",
   };
-  writeFileSync(
-    envFile,
-    Object.entries(values)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n") + "\n",
-    { mode: 0o600 },
-  );
   writeFileSync(
     override,
     JSON.stringify({
@@ -142,7 +136,8 @@ try {
     ADMIN_USERNAME: undefined,
     ADMIN_PASSWORD: undefined,
     COMPOSE_PROJECT_NAME: project,
-    COMPOSE_ENV_FILES: envFile,
+    COMPOSE_ENV_FILES: undefined,
+    COMPOSE_DISABLE_ENV_FILE: "1",
     E2E_BASE_URL: values.APP_ORIGIN,
     E2E_ISOLATED_RUN: project,
     E2E_OUTPUT_DIR: join(directory, "results"),
@@ -154,7 +149,7 @@ try {
     "--project-directory",
     directory,
     "--env-file",
-    envFile,
+    process.platform === "win32" ? "NUL" : "/dev/null",
     "--project-name",
     project,
     "--file",

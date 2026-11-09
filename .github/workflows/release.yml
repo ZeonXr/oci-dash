@@ -46,13 +46,18 @@ jobs:
           assert.equal(lock.packages[''].version, pkg.version, 'Lockfile root version must match');
           const source = readFileSync('compose.yaml', 'utf8');
           assert.doesNotMatch(source, /^\s*(?:build|extends|include|env_file)\s*:/m, 'Published Compose must work as a single downloaded file');
-          const env = { ...process.env, PORT: '3000', COMPOSE_PROJECT_NAME: 'oci-dash-release-check' };
+          assert.doesNotMatch(source, /\$\{/, 'Compose must not require environment interpolation');
+          const env = { ...process.env, COMPOSE_PROJECT_NAME: 'oci-dash-release-check' };
           delete env.COMPOSE_ENV_FILES;
           delete env.COMPOSE_FILE;
           const config = JSON.parse(execFileSync('docker', ['compose', '--env-file', '/dev/null', '--file', 'compose.yaml', 'config', '--format', 'json'], { encoding: 'utf8', env }));
           assert.deepEqual(Object.keys(config.services), ['app']);
           assert.equal(config.services.app.image, `${process.env.IMAGE}:${tag}`, 'Compose must pin this release image');
           assert.equal(config.services.app.build, undefined);
+          assert.equal(config.services.app.ports.length, 1);
+          assert.equal(config.services.app.ports[0].host_ip, '127.0.0.1');
+          assert.equal(config.services.app.ports[0].published, '6240');
+          assert.equal(config.services.app.ports[0].target, 3000);
           assert.equal(config.services.app.environment?.PORT, undefined, 'Host port must not change the container listener');
           appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
           NODE
@@ -212,7 +217,9 @@ jobs:
 
           下载附件 compose.yaml，放入独立部署目录。数据默认保存在同目录的 ./data 中；Linux 首次部署先执行 `sudo install -d -o 1000 -g 1000 -m 0700 ./data`，Windows Docker Desktop 用户创建 data 文件夹并允许 Docker 读写，然后运行 `docker compose up -d --wait`。
 
-          首次通过 localhost:3000 或 SSH 隧道打开页面，创建管理员账号；支持生成并复制 32 位随机密码。完成初始化后再开放公共反向代理。
+          首次通过 localhost:6240 或 SSH 隧道打开页面，创建管理员账号；支持生成并复制 32 位随机密码。完成初始化后再开放公共反向代理。自定义端口直接修改 Compose 的端口映射，不使用 .env。
+
+          从旧默认端口 3000 升级时，若要保留原地址，将端口映射改为 `127.0.0.1:3000:3000`；采用 6240 时同步调整反向代理上游与 SSH 隧道。
 
           从旧版命名卷升级的部署，必须先停机备份并将完整数据恢复到 ./data，再切换挂载。迁移步骤见仓库 docs/OPERATIONS.md。
           NOTES

@@ -38,7 +38,7 @@ const queuedSync: JobSummary = {
 };
 const test = base.extend<{ mockApi: MockApi }>({
   mockApi: async ({ context, baseURL }, use) => {
-    const origin = new URL(baseURL || "http://localhost:3000").origin;
+    const origin = new URL(baseURL || "http://localhost:6240").origin;
     if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname)) {
       throw new Error("Account UI tests require a local isolated server.");
     }
