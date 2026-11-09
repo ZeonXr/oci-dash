@@ -42,7 +42,6 @@ import {
   operationLabels,
   percent,
   publicBindings,
-  regionName,
   shortId,
   taskHref,
 } from "@/components/format";
@@ -203,7 +202,7 @@ export default function InstanceDetailPage() {
       summary: [
         ["实例", instance.displayName],
         ["账号", instance.accountName],
-        ["区域", regionName(instance.region)],
+        ["区域", instance.region],
       ],
       danger: kind === "instance-terminate",
       requireName: kind === "instance-terminate" ? instance.displayName : undefined,

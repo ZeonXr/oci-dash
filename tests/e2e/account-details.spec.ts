@@ -152,8 +152,8 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
   await expect(trigger).toHaveText(account.name);
   const card = page.locator(".account-card");
   await expect(card.getByRole("button", { name: "详情", exact: true })).toHaveCount(0);
-  await expect(card.getByText("凤凰城", { exact: true })).toHaveCount(1);
-  await expect(card.getByText("东京", { exact: true })).toHaveCount(1);
+  await expect(card.getByText("us-phoenix-1", { exact: true })).toHaveCount(1);
+  await expect(card.getByText("ap-tokyo-1", { exact: true })).toHaveCount(1);
   await expect(card.getByText("配置主区域", { exact: true })).toHaveCount(0);
   await expect(card.getByText("租户", { exact: true })).toHaveCount(0);
   expect(detailsApi.reads).toBe(0);

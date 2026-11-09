@@ -4,7 +4,7 @@ import { Upload } from "lucide-react";
 import type { CreateOptions, CreateOptionsSelection, JobSummary } from "@/lib/contracts";
 import { useApp } from "./app-provider";
 import { send, useAction, useResource } from "./api";
-import { regionName, taskHref } from "./format";
+import { taskHref } from "./format";
 import { Alert, Button, ErrorState, Field, LoadingState, Modal, Select } from "./ui";
 export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
   const { accounts, notify } = useApp();
@@ -160,7 +160,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 .filter(Boolean)
                 .map((r) => (
                   <option key={r} value={r}>
-                    {regionName(r!)} · {r}
+                    {r}
                   </option>
                 ))}
             </Select>

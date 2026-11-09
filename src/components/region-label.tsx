@@ -1,5 +1,4 @@
 import { regionCountryCode } from "@/lib/region-countries";
-import { regionName } from "./format";
 import { CodeTag } from "./code-tag";
 
 function RegionFlag({ region }: { region: string }) {
@@ -17,24 +16,18 @@ function RegionFlag({ region }: { region: string }) {
 }
 
 export function RegionLabel({ region }: { region: string }) {
-  const label = regionName(region);
   return (
     <span className="region-label">
       <RegionFlag region={region} />
-      <span>{typeof label === "string" ? label : region}</span>
+      <span>{region}</span>
     </span>
   );
 }
 
-export function RegionTag({ region, showName = true }: { region: string; showName?: boolean }) {
-  const label = regionName(region);
+export function RegionTag({ region }: { region: string }) {
   return (
-    <span className="region-tag" title={showName ? undefined : label}>
-      {showName && label !== region ? (
-        <RegionLabel region={region} />
-      ) : (
-        <RegionFlag region={region} />
-      )}
+    <span className="region-tag">
+      <RegionFlag region={region} />
       <CodeTag>{region}</CodeTag>
     </span>
   );

@@ -1,23 +1,5 @@
 import type { InstanceSummary } from "@/lib/contracts";
 export { operationLabels } from "@/lib/operation-labels";
-const regions: Record<string, string> = {
-  "ap-singapore-1": "新加坡",
-  "ap-singapore-2": "新加坡 2",
-  "ap-tokyo-1": "东京",
-  "ap-osaka-1": "大阪",
-  "ap-seoul-1": "首尔",
-  "ap-chuncheon-1": "春川",
-  "us-phoenix-1": "凤凰城",
-  "us-ashburn-1": "阿什本",
-  "us-sanjose-1": "圣何塞",
-  "uk-london-1": "伦敦",
-  "uk-cardiff-1": "卡迪夫",
-  "eu-frankfurt-1": "法兰克福",
-  "eu-amsterdam-1": "阿姆斯特丹",
-  "ca-toronto-1": "多伦多",
-  "ap-sydney-1": "悉尼",
-};
-export const regionName = (value: string) => regions[value] || value;
 export const formatDate = (value?: string | null, full = false) =>
   value && !Number.isNaN(Date.parse(value))
     ? new Intl.DateTimeFormat("zh-CN", {

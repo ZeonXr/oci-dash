@@ -61,7 +61,7 @@ export function InstanceCard({
         {instance.accountName}
       </p>
       <div className="instance-card-meta">
-        <RegionTag region={instance.region} showName={false} />
+        <RegionTag region={instance.region} />
         <CodeTag title={instance.shape}>{instance.shape.replace("VM.Standard.", "")}</CodeTag>
       </div>
       <dl className="instance-card-specs">

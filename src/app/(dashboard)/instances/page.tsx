@@ -21,7 +21,7 @@ import {
   Select,
   Status,
 } from "@/components/ui";
-import { formatDate, instanceHref, number, regionName } from "@/components/format";
+import { formatDate, instanceHref, number } from "@/components/format";
 import { CreateInstanceDialog } from "@/components/create-instance-dialog";
 import { InstanceCard } from "@/components/instance-card";
 import { InventoryFreshness } from "@/components/inventory-freshness";
@@ -212,7 +212,7 @@ function InstancesContent() {
             .sort()
             .map((r) => (
               <option key={r} value={r}>
-                {regionName(r)}
+                {r}
               </option>
             ))}
         </Select>

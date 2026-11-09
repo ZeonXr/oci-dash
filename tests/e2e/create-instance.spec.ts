@@ -110,6 +110,7 @@ test("创建实例联动规格、兼容镜像及可用域子网", async ({ page,
   await page.goto("/instances");
   await page.getByRole("button", { name: "创建实例", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel(/^区域/).locator("option")).toHaveText(account.regions);
   await expect(dialog.getByLabel(/^实例规格/)).toHaveValue(MICRO);
   await dialog.getByLabel(/^实例规格/).selectOption(ARM);
   await expect(dialog.getByLabel(/^系统镜像/).locator("option")).toHaveText(["Ubuntu ARM"]);

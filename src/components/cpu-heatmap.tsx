@@ -4,7 +4,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import type { CpuHour, CpuReport } from "../lib/cpu-contracts";
-import { instanceHref, number, regionName } from "./format";
+import { instanceHref, number } from "./format";
 import { Button, EmptyState } from "./ui";
 import styles from "./cpu-heatmap.module.css";
 
@@ -283,7 +283,7 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
               <div role="rowheader" aria-colindex={1} className={styles.instance}>
                 <Link
                   href={instanceHref(row.instanceId)}
-                  title={`${row.instanceName} · ${row.accountName} · ${regionName(row.region)}`}
+                  title={`${row.instanceName} · ${row.accountName} · ${row.region}`}
                 >
                   {row.instanceName}
                 </Link>
@@ -397,7 +397,7 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
           >
             <strong className={styles.tooltipName}>{selectedRow.instanceName}</strong>
             <span className={styles.tooltipContext}>
-              {selectedRow.accountName} · {regionName(selectedRow.region)}
+              {selectedRow.accountName} · {selectedRow.region}
             </span>
             <span className={styles.tooltipTime}>
               {utcTime(selected.timestamp)} –<br />

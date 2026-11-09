@@ -34,7 +34,7 @@ import {
   Select,
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
-import { instanceHref, regionName, shortId } from "@/components/format";
+import { instanceHref, shortId } from "@/components/format";
 import { RegionLabel } from "@/components/region-label";
 
 const missing = "__unknown__";
@@ -189,7 +189,7 @@ function CostsContent() {
             <option value="">全部区域</option>
             {regions.map((item) => (
               <option key={item} value={item}>
-                {item === missing ? "未提供区域" : regionName(item)}
+                {item === missing ? "未提供区域" : item}
               </option>
             ))}
           </Select>

@@ -26,7 +26,7 @@ import {
   Select,
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
-import { instanceHref, regionName, shortId } from "@/components/format";
+import { instanceHref, shortId } from "@/components/format";
 import { RegionLabel } from "@/components/region-label";
 
 const gib = (value: number | null | undefined) => (value == null ? null : value / 1024 ** 3);
@@ -148,7 +148,7 @@ function TrafficContent() {
             <option value="">全部区域</option>
             {regions.map((item) => (
               <option key={item} value={item}>
-                {regionName(item)}
+                {item}
               </option>
             ))}
           </Select>

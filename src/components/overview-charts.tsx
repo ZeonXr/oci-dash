@@ -17,7 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { regionCountryCode } from "@/lib/region-countries";
-import { instanceHref, regionName } from "./format";
+import { instanceHref } from "./format";
 import { analyticsNumber, utcTimestamp } from "./analytics-chart";
 import { displayCost } from "./analytics-cost-data";
 import { Card, EmptyState } from "./ui";
@@ -250,7 +250,7 @@ export function TrafficRanking({ data }: { data: TrafficOverviewData }) {
               <div className="overview-ranking-label">
                 <Link
                   href={instanceHref(row.instanceId)}
-                  title={`${row.instanceName} · ${row.accountName} · ${regionName(row.region)}`}
+                  title={`${row.instanceName} · ${row.accountName} · ${row.region}`}
                 >
                   {flag && (
                     <img

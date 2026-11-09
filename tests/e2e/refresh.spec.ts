@@ -843,7 +843,7 @@ test("视图偏好存储不可用时默认卡片，本次访问仍可切换", as
   expect(refreshApi.manualRequests()).toEqual([]);
 });
 
-test("已知区域使用本地旗帜，未知区域在表格和卡片中保留名称而不虚构旗帜", async ({
+test("表格和卡片统一显示区域代码，已知区域使用本地旗帜而未知区域不虚构旗帜", async ({
   page,
   refreshApi,
 }) => {
@@ -856,6 +856,7 @@ test("已知区域使用本地旗帜，未知区域在表格和卡片中保留�
     has: page.getByRole("link", { name: "Fixture-02", exact: true }),
   });
   await expect(unknownRow).toContainText("unknown-test-1");
+  await expect(knownRow.getByText(account.homeRegion, { exact: true })).toHaveCount(1);
   await expect(unknownRow.locator('img[src^="/flags/"]')).toHaveCount(0);
   const tableFlag = knownRow.locator('img[src^="/flags/"]');
   await expect(tableFlag).toHaveCount(1);
@@ -879,6 +880,7 @@ test("已知区域使用本地旗帜，未知区域在表格和卡片中保留�
     has: page.getByRole("link", { name: "Fixture-02", exact: true }),
   });
   await expect(unknownCard).toContainText("unknown-test-1");
+  await expect(knownCard.getByText(account.homeRegion, { exact: true })).toHaveCount(1);
   await expect(unknownCard.locator('img[src^="/flags/"]')).toHaveCount(0);
   const cardFlag = knownCard.locator('img[src^="/flags/"]');
   await expect(cardFlag).toHaveCount(1);
