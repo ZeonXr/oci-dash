@@ -116,9 +116,11 @@ function mergeDetails(
   next.staleFields = stale.size ? [...stale] : undefined;
   return next;
 }
+/** Persist the snapshot and publish missing-coverage warnings after the transaction succeeds. */
 export function saveInventory(accountId: string, result: InventoryResult): void {
   const db = getDatabase(),
     now = new Date().toISOString();
+  const coverageWarnings: string[] = [];
   db.transaction(() => {
     const account = db.prepare("SELECT name FROM accounts WHERE id=?").get(accountId) as
       { name: string } | undefined;
@@ -152,13 +154,25 @@ export function saveInventory(accountId: string, result: InventoryResult): void 
       result.completedScopes?.map((scope) => JSON.stringify([scope.region, scope.compartmentId])),
     );
     const remove = db.prepare("DELETE FROM resources WHERE id=? AND account_id=?");
-    for (const old of previous.values())
+    const retain = db.prepare("UPDATE resources SET data=? WHERE id=? AND account_id=?");
+    let uncovered = 0;
+    for (const old of previous.values()) {
+      if (ids.has(old.id)) continue;
       if (
-        !ids.has(old.id) &&
-        (completedRegions.has(old.region) ||
-          completedScopes.has(JSON.stringify([old.region, old.compartmentId])))
-      )
+        completedRegions.has(old.region) ||
+        completedScopes.has(JSON.stringify([old.region, old.compartmentId]))
+      ) {
         remove.run(old.id, accountId);
+        continue;
+      }
+      // Missing coverage cannot prove deletion. Keep the last snapshot and its
+      // timestamp, but mark the whole instance (including its addresses) stale.
+      const staleFields = [
+        ...new Set(["实例状态", ...(old.staleFields ?? []), "网卡", "启动卷", "系统镜像"]),
+      ];
+      retain.run(JSON.stringify({ ...old, staleFields }), old.id, accountId);
+      uncovered++;
+    }
     const upsert = db.prepare(
       "INSERT INTO resources(id,account_id,region,data,synced_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,synced_at=excluded.synced_at,region=excluded.region WHERE resources.account_id=excluded.account_id",
     );
@@ -187,13 +201,22 @@ export function saveInventory(accountId: string, result: InventoryResult): void 
         now,
       );
     }
+    if (uncovered)
+      coverageWarnings.push(
+        `本轮未覆盖 ${uncovered} 个已有实例所在的区间或区域；已保留旧值并标记未更新。`,
+      );
+    const warnings = [...result.warnings, ...coverageWarnings];
     db.prepare("UPDATE accounts SET last_sync_at=?,status=?,last_error=? WHERE id=?").run(
       now,
-      result.warnings.length ? "error" : "connected",
-      result.warnings.length ? result.warnings.join("；").slice(0, 1200) : null,
+      warnings.length ? "error" : "connected",
+      warnings.length ? warnings.join("；").slice(0, 1200) : null,
       accountId,
     );
   }).immediate();
+  // Publish coverage warnings only after commit; fresh detail merging above
+  // must continue to use the warnings from the OCI read itself.
+  for (const warning of coverageWarnings)
+    if (!result.warnings.includes(warning)) result.warnings.push(warning);
 }
 export function recentActivity(limit = 30): AuditEvent[] {
   return getDatabase()

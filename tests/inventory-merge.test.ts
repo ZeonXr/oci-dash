@@ -267,6 +267,119 @@ describe("inventory detail coverage and scoped reconciliation", () => {
     saveInventory("a", result([], { warnings: ["other compartment unread"] }));
     expect(listInstances().map((row) => row.id)).toEqual([unqueried.id]);
   });
+
+  it("marks a missing compartment's retained inventory without making fresh rows or other accounts stale", () => {
+    const root = "ocid1.tenancy.oc1..legacyduplicate";
+    const retained = instance("missing-compartment");
+    const current = instance("root-current", { compartmentId: root });
+    const other = instance("other-account", { accountId: "b", accountName: "Account b" });
+    saveInventory(
+      "a",
+      result([retained, current], {
+        completedScopes: [
+          { region, compartmentId: compartment },
+          { region, compartmentId: root },
+        ],
+      }),
+    );
+    saveInventory("b", result([other]));
+    const otherRows = getDatabase().prepare("SELECT * FROM resources WHERE account_id=?").all("b");
+    const otherAccount = getDatabase().prepare("SELECT * FROM accounts WHERE id=?").get("b");
+    const fresh = instance("root-current", {
+      compartmentId: root,
+      state: "STOPPED",
+      os: "Oracle Linux",
+      vnics: [],
+      bootVolumes: [],
+      syncedAt: "2026-11-08T12:00:00.000Z",
+    });
+    const snapshot = result([fresh], { completedScopes: [{ region, compartmentId: root }] });
+    expect(snapshot.warnings).toEqual([]);
+    saveInventory("a", snapshot);
+
+    expect(getInstance(retained.id)).toMatchObject(retained);
+    expect(getInstance(retained.id).staleFields).toEqual(
+      expect.arrayContaining(["实例状态", "网卡", "启动卷", "系统镜像"]),
+    );
+    expect(getInstance(fresh.id)).toMatchObject(fresh);
+    expect(getInstance(fresh.id).staleFields).toBeUndefined();
+    expect(snapshot.warnings).toHaveLength(1);
+    expect(snapshot.warnings[0]).toMatch(/未.*(?:覆盖|更新|读取|确认)/u);
+    expect(
+      getDatabase().prepare("SELECT status,last_error FROM accounts WHERE id=?").get("a"),
+    ).toEqual({ status: "error", last_error: expect.stringContaining(snapshot.warnings[0]) });
+    expect(getDatabase().prepare("SELECT * FROM resources WHERE account_id=?").all("b")).toEqual(
+      otherRows,
+    );
+    expect(getDatabase().prepare("SELECT * FROM accounts WHERE id=?").get("b")).toEqual(
+      otherAccount,
+    );
+  });
+
+  it("marks an unqueried region while retaining old values and existing detail warnings", () => {
+    const london = "uk-london-1";
+    const current = instance("tokyo-current");
+    const old = instance("london-retained", { region: london });
+    old.bootVolumes = old.bootVolumes.map((volume) => ({ ...volume, region: london }));
+    const coverage = complete(old);
+    coverage.vnicDetails[old.vnics[0].id].ipv6 = false;
+    saveInventory(
+      "a",
+      result([current, old], {
+        regions: [region, london],
+        completedScopes: [
+          { region, compartmentId: compartment },
+          { region: london, compartmentId: compartment },
+        ],
+        warnings: ["IPv6 read failed"],
+        details: { [current.id]: complete(current), [old.id]: coverage },
+      }),
+    );
+    expect(getInstance(old.id).staleFields).toContain("IPv6");
+    for (let sync = 0; sync < 2; sync++) {
+      const snapshot = result([current]);
+      saveInventory("a", snapshot);
+      const actual = getInstance(old.id);
+      expect(actual).toMatchObject(old);
+      expect(actual.staleFields).toEqual(expect.arrayContaining(["实例状态", "网卡", "IPv6"]));
+      expect(actual.staleFields!.length).toBe(new Set(actual.staleFields).size);
+      expect(snapshot.warnings).toHaveLength(1);
+    }
+  });
+
+  it("clears lost-scope warnings after recovery and prunes only a confirmed empty scope", () => {
+    const old = instance("recoverable");
+    const missing = () =>
+      result([], {
+        completedScopes: [{ region, compartmentId: "ocid1.tenancy.oc1..legacyduplicate" }],
+      });
+    saveInventory("a", result([old]));
+    saveInventory("a", missing());
+    expect(getInstance(old.id).staleFields).toContain("实例状态");
+
+    const fresh = instance("recoverable", {
+      state: "STOPPED",
+      syncedAt: "2026-11-08T12:00:00.000Z",
+    });
+    const recovered = result([fresh]);
+    saveInventory("a", recovered);
+    expect(getInstance(fresh.id)).toMatchObject(fresh);
+    expect(getInstance(fresh.id).staleFields).toBeUndefined();
+    expect(recovered.warnings).toEqual([]);
+    expect(
+      getDatabase().prepare("SELECT status,last_error FROM accounts WHERE id=?").get("a"),
+    ).toEqual({ status: "connected", last_error: null });
+
+    saveInventory("a", missing());
+    expect(getInstance(old.id).syncedAt).toBe(fresh.syncedAt);
+    const empty = result([]);
+    saveInventory("a", empty);
+    expect(listInstances()).toEqual([]);
+    expect(empty.warnings).toEqual([]);
+    expect(
+      getDatabase().prepare("SELECT status,last_error FROM accounts WHERE id=?").get("a"),
+    ).toEqual({ status: "connected", last_error: null });
+  });
 });
 
 describe("canonical resource ownership", () => {

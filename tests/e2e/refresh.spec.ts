@@ -473,6 +473,17 @@ async function pauseClock(page: Page, fixture: RefreshFixture) {
   await page.clock.pauseAt(new Date(fixture.now));
 }
 
+async function settleTaskPolling(page: Page) {
+  // Terminal data updates polling state in an effect, then another effect clears
+  // its interval. Let both commits pass a paint before advancing mocked time.
+  await page.clock.resume();
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 3; frame++) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  });
+}
+
 function twoAccounts(fixture: RefreshFixture) {
   const slow: AccountSummary = {
     ...account,
@@ -933,6 +944,7 @@ test("可恢复中断任务继续轮询，完成后停止且显示等待期限",
   });
   await page.clock.runFor(3100);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("已完成");
+  await settleTaskPolling(page);
   const completed = refreshApi.count(path);
   await page.clock.runFor(10000);
   expect(refreshApi.count(path)).toBe(completed);
@@ -946,6 +958,7 @@ test("不可恢复中断任务停止轮询并可直接取消，无需重试云�
   await page.goto(`/tasks/${task.id}`);
   await expect(page.locator(".task-step.current")).toHaveText("等待处理");
   await expect(page.getByText("自动恢复已停止，可重试或取消任务", { exact: true })).toBeVisible();
+  await settleTaskPolling(page);
   const before = refreshApi.count(path);
   await page.clock.runFor(10000);
   expect(refreshApi.count(path)).toBe(before);

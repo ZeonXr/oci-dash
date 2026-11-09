@@ -64,7 +64,7 @@ npm run build
 
 页面复用 `src/components/ui.tsx` 中的交互组件。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，由组件替换图标。初始加载使用 `LoadingState` 或 `Spinner`，不要在页面另写旋转动画。
 
-区域代码、规格、OCID 等标识使用 `CodeTag`；需要同时展示区域名称、国旗和代码时使用 `RegionTag`。这些标签不承担按钮行为。长标识允许换行，提供复制时始终复制完整原值；连接和任务状态继续使用 `Status` 或 `Badge`。
+区域使用 `RegionTag`，仅在同一标签内展示国旗与 OCI 区域代码；规格、OCID 等标识使用 `CodeTag`。这些标签不承担按钮行为。长标识允许换行，提供复制时始终复制完整原值；连接和任务状态继续使用 `Status` 或 `Badge`。
 
 按改动范围补充有意义的回归：
 
@@ -107,7 +107,7 @@ npm run test:backup
 
 发布以源码 tag 对应固定版本镜像和同版本的独立 `compose.yaml` 资产。先验证版本与源码标签，分别构建并运行 Linux `amd64`、`arm64`，再组合已验证的镜像摘要。固定版本镜像和 Compose 附件发布成功后进行匿名部署验收，验收通过才推广 Docker 与 GitHub 的 `latest`；版本比较同时防止两个渠道回退。
 
-发布中断后可以重跑失败任务：相同镜像摘要和相同 Compose 内容会复用，缺少的 Release 或附件会补齐；不同摘要或内容会拒绝覆盖。候选镜像可能被正式索引引用，不自动删除。实际执行结果见[发布验收](docs/VERIFICATION.md#v050-发布验收)。
+发布中断后可以重跑失败任务：相同镜像摘要和相同 Compose 内容会复用，缺少的 Release 或附件会补齐；不同摘要或内容会拒绝覆盖。候选镜像可能被正式索引引用，不自动删除。实际执行结果见[发布验收](docs/VERIFICATION.md#v055-发布验收)。
 
 ## 提交与评审
 
