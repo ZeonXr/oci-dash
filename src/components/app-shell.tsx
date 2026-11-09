@@ -131,9 +131,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         inert={isMobile && !mobileOpen}
       >
         <Link href="/overview" className="brand" onClick={() => setMobileOpen(false)}>
-          <span className="brand-symbol">
-            <Server size={20} />
-          </span>
+          <img className="brand-symbol" src="/oci-logo.png" alt="" width={32} height={32} />
           <span>OCI Dash</span>
         </Link>
         <IconButton

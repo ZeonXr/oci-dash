@@ -151,9 +151,7 @@ export default function LoginPage() {
     <main className="login-screen">
       <section className="login-aside" aria-label="OCI Dash">
         <div className="brand">
-          <span className="brand-symbol">
-            <Server size={21} />
-          </span>
+          <img className="brand-symbol" src="/oci-logo.png" alt="" width={32} height={32} />
           <span>OCI Dash</span>
         </div>
         <h1>

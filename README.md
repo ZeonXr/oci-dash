@@ -99,3 +99,5 @@ OCI API 私钥和 MFA 秘密使用 AES-256-GCM 加密，管理员密码使用 sc
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)，镜像内包含 `/app/LICENSE`。第三方依赖和素材保留各自的许可证与版权声明，包括采用 [MPL-2.0 的 noVNC](https://github.com/novnc/noVNC/blob/v1.7.0/LICENSE.txt)；其依赖源码与许可随镜像的 `node_modules/@novnc/novnc` 保留。旗帜素材的来源及许可见 [public/flags/README.md](public/flags/README.md)。
+
+界面与 favicon 使用 Oracle 椭圆环标识，来源及归属见[素材说明](public/README.md)。Oracle 名称与标识归 Oracle 所有；OCI Dash 是独立项目，与 Oracle 无隶属或背书关系。

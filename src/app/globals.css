@@ -546,14 +546,10 @@ pre {
   margin-bottom: 25px;
 }
 .brand-symbol {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: #3271d7;
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 .sidebar .brand {
   margin-bottom: 0;
@@ -2080,6 +2076,7 @@ pre {
   position: absolute;
   top: 45px;
   left: clamp(30px, 6vw, 100px);
+  color: #18253b;
 }
 .login-aside h1 {
   font-size: clamp(30px, 3vw, 44px);
