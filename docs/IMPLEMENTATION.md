@@ -27,9 +27,9 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.5.7`，没有构建或文件继承依赖，也没有环境变量插值。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；宿主端口默认映射为 `127.0.0.1:6240:3000`，自定义时直接编辑映射，不读取旧 `PORT` 或 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+发布用 `compose.yaml` 独立使用固定版本镜像 `ghcr.io/zeonxr/oci-dash:v0.5.8`，没有构建或文件继承依赖，也没有环境变量插值。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。两种方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；宿主端口默认映射为 `127.0.0.1:6240:3000`，自定义时直接编辑映射，不读取旧 `PORT` 或 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
 
-镜像以 UID/GID `1000:1000` 的 `node` 用户运行，Tini 作为 PID 1；Compose 保留 35 秒停止期限、容器级 `no-new-privileges:true`、`cap_drop: ALL` 和 `local` 日志驱动。Linux 数据目录由部署者预先创建并赋权，Windows Docker Desktop 使用宿主 ACL；入口不以 root 运行或自动更改所有者。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
+镜像使用默认 root 用户，Tini 作为 PID 1；Compose 保留 35 秒停止期限和 `local` 日志驱动，使用 Docker 默认权限配置。Docker 自动创建缺失的宿主数据目录，应用直接创建数据库及主密钥，不增加目录初始化或降权入口，也不递归修改旧数据属主。Docker Desktop 仍使用宿主 ACL 控制目录访问。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 

@@ -2,11 +2,9 @@ name: oci-dash
 
 services:
   app:
-    image: ghcr.io/zeonxr/oci-dash:v0.5.7
+    image: ghcr.io/zeonxr/oci-dash:v0.5.8
     restart: unless-stopped
     stop_grace_period: 35s
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
     ports:
       - "127.0.0.1:6240:3000"
     volumes:

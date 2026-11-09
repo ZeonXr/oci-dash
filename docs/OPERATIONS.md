@@ -1,31 +1,26 @@
 # 运维说明
 
-本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.7`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
+本指南适用于单主机 Docker Compose 部署。服务为 `app`，发布镜像为 `ghcr.io/zeonxr/oci-dash:v0.5.8`，默认挂载为 `./data:/data`；宿主数据目录位于 `compose.yaml` 旁，容器内数据库为 `/data/oci-dash.db`。源码开发和本地镜像构建见[贡献指南](../CONTRIBUTING.md)。
 
 ## 默认部署
 
-默认只需 Docker Engine、Docker Compose 和一份 [v0.5.7 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.7/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
+默认只需 Docker Engine、Docker Compose 和一份 [v0.5.8 发布 Compose](https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml)，无需源码、Node.js、`.env` 或其他仓库文件。它直接引用固定版本镜像，不包含 `build` 或 `extends`。
 
 在独立部署目录，用浏览器下载并保存为 `compose.yaml`，或执行：
 
 ```sh
-curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.7/compose.yaml -o compose.yaml
+curl -fL https://github.com/ZeonXr/oci-dash/releases/download/v0.5.8/compose.yaml -o compose.yaml
 ```
 
-Linux 首次部署时，先在同一目录创建可由容器用户读写的空数据目录：
+在该目录直接启动，Docker 会创建缺失的 `data` 目录：
 
 ```sh
-sudo install -d -o 1000 -g 1000 -m 0700 ./data
-```
-
-Windows Docker Desktop 用户创建同目录的 `data` 文件夹，用宿主机 ACL 限制其他用户访问，并允许 Docker 读写。Windows 不使用上面的 Linux 所有者命令。准备完成后启动：
-
-```sh
-docker compose pull
 docker compose up -d --wait
 ```
 
-发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v057-发布验收)。重启策略、35 秒停止期限、容器权限限制和 `local` 日志驱动直接保留在这份 Compose 中。
+容器默认以 root 运行，无需预先设置 UID/GID 或执行 `chown`。Docker Desktop 需允许 Docker 访问部署目录。
+
+发布目标平台为原生 Linux `amd64`、`arm64`，由 Docker 按主机架构选择镜像。镜像索引、匿名拉取及发布资产的验证状态见[发布验收](VERIFICATION.md#v058-发布验收)。重启策略、35 秒停止期限和 `local` 日志驱动直接保留在这份 Compose 中。
 
 打开 `http://localhost:6240`，填写管理员用户名、密码和确认密码。页面也能生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。第一次能访问该页面的人可以成为管理员，因此应先通过本机或[SSH 隧道](#https-与访问)完成，再开放公共反向代理。无须读取初始密码文件、配置额外令牌或填写环境变量。
 
@@ -36,7 +31,7 @@ docker compose up -d --wait
 - 数据库位于 `/data/oci-dash.db`；完整备份宿主 `./data` 即可包含数据库和密钥，不能遗漏隐藏文件和配套 WAL。
 - Docker 使用 `local` 日志驱动自动轮转，默认保留最多 5 个、每个 20 MB 的日志文件，并压缩已轮转的日志。
 
-主密钥文件在 Linux 上使用 `0600` 权限。应用始终以 UID/GID `1000:1000` 运行，不会在入口自动更改宿主目录所有者。不要等待 Docker 自动创建 Linux 目录后再以 root 运行应用绕过权限问题。
+主密钥及数据库文件在 Linux 上使用 `0600` 权限，新建文件通常由 root 所有；在宿主机手工管理或恢复这些文件时使用相应权限。应用不会递归修改已有数据的属主或替换主密钥。
 
 ## 可选配置
 
@@ -52,7 +47,7 @@ docker compose up -d --wait
 
 1. 在原部署目录，保存旧 Compose、项目名和可选覆盖配置，核对旧容器实际挂载的卷名。等待任务和控制台结束，在**旧配置**下执行 `docker compose stop app` 并确认停止。
 2. 按[备份流程](#备份)完整归档旧 `/data`，包括 `.master-key`、数据库、WAL/SHM 和可能仍存在的旧初始密码文件。备份目标放在部署及数据目录之外；保留旧卷。
-3. 在新 Compose 所在目录创建空 `data`。Linux 使用上面的 UID/GID `1000:1000` 与 `0700` 目录命令，将完整归档恢复进去并保留文件所有者和权限；Windows 还需核对宿主 ACL。不要只复制 `.db`，不要先启动新应用来创建新密钥或管理员。
+3. 在新 Compose 所在目录创建空 `data`，将完整归档恢复进去并保留文件所有者和权限；Windows 还需核对宿主 ACL。不要只复制 `.db`，不要先启动新应用来创建新密钥或管理员。
 4. 核对 `data` 内容与停止后的旧卷一致，且容器用户能读写，再采用 `./data:/data` 的新 Compose。保留原项目名、服务名 `app`、端口和所需高级覆盖设置。
 5. 执行 `docker compose pull app` 和 `docker compose up -d --wait app`。用原管理员登录，核对账号、资源和健康状态；若出现初始化页面或空面板，立即停止并检查挂载，不要创建替代管理员或重新导入账号。
 
@@ -65,7 +60,7 @@ docker compose up -d --wait
 1. 等待任务和控制台结束，在旧配置下执行 `docker compose stop app`，确认应用停止；记录旧挂载和项目名。
 2. 按[备份流程](#备份)保存整个旧 `/data`。备份脚本会保持原本已停止的应用为停止状态。
 3. 准备一个独立、空的新目录，将旧数据全量复制或解压进去，保留文件所有者及权限。包括隐藏的 `.master-key`、仍存在的 `.initial-admin-password`、数据库和配套 WAL/SHM 文件，不能只复制 `.db`。旧数据在命名卷时可使用完整备份归档恢复；旧数据在宿主目录时可用保留属性的复制工具，例如 Linux 的 `cp -a /旧目录/. /新目录/`。
-4. 确认新目录及内部文件可由 UID/GID `1000:1000` 读写，且内容与停止后的旧数据一致，再修改 Compose 的挂载来源。Windows 通过宿主 ACL 核对访问。保留原目录或命名卷及备份。
+4. 确认新挂载可读写，且内容与停止后的旧数据一致，再修改 Compose 的挂载来源。Windows 通过宿主 ACL 核对访问。保留原目录或命名卷及备份。
 5. 执行 `docker compose up -d --force-recreate --wait app`，确认原管理员、账号和资源均在，再恢复使用。若显示空面板，先停止应用并核对挂载，不要重新导入账号。
 
 迁移到新的命名卷时同样需要先完整恢复数据，并在 Compose 中声明该卷。更换数据位置不需要修改容器内的 `DATABASE_PATH`。
@@ -93,7 +88,7 @@ services:
       APP_ORIGIN: https://oci.example.com
 ```
 
-开发及工具脚本要求 Node.js `>=26.13 <27`，与镜像一致的版本为 `26.13.0`；仅部署容器无需安装宿主机 Node.js。首次部署见 [README](../README.md#快速部署)。修改容器配置后需要重新创建：
+开发及工具脚本要求 Node.js `>=26.13 <27`，与镜像一致的版本为 `26.13.0`；仅部署容器无需安装宿主机 Node.js。首次部署见 [README](../README.md#docker-部署)。修改容器配置后需要重新创建：
 
 ```sh
 docker compose up -d --force-recreate app
@@ -216,7 +211,7 @@ node /opt/oci-dash-source/scripts/backup.ts /opt/backups/oci-dash-data.tar.gz
 
 将示例路径和项目名替换为实际部署；已有自定义项目名必须保留，不能指向开发项目。工具不需要重新构建或启动新镜像，也可在源码目录通过 `npm run backup -- <输出路径>` 调用，但仍须正确选择部署的 `COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`。它读取现有 `app` 容器的不可变镜像，支持 `/data` 的命名卷和宿主目录；自定义容器内数据库路径不在此工具范围内。输出必须是项目及源数据目录之外、以 `.tar.gz` 结尾的新文件，不覆盖已有归档。
 
-脚本停止应用后，以镜像内的 `node` 用户只读挂载原数据，将归档传给宿主机写入；宿主目录需要与应用运行时相同的读写权限，不通过 root 或自动修改所有者绕过权限。备份前应用正在运行才会在结束后恢复运行，原本停止的应用保持停止。
+脚本停止应用后，以 root 运行临时归档容器，只读挂载原数据，兼容旧 `1000:1000` 和新 root 所有的文件。归档通过标准输出传给宿主进程写入，数据源的属主和权限保持不变。备份前应用正在运行才会在结束后恢复运行，原本停止的应用保持停止。
 
 使用仅自己可访问的目标目录。Unix 上归档应为 `0600`；Windows 还需使用目录 ACL 限制访问。如果备份或恢复运行状态失败，应按错误信息检查容器状态，不要把失败过程当作成功备份。
 
@@ -228,7 +223,7 @@ node /opt/oci-dash-source/scripts/backup.ts /opt/backups/oci-dash-data.tar.gz
 
 1. 准备与备份匹配的镜像，以及包含原 `.master-key` 的完整归档。旧归档不含密钥时，还需按[环境密钥迁移流程](#从环境变量主密钥迁移)显式注入原 `MASTER_KEY`；仅把它写在 `.env` 中不会传入默认容器。
 2. 把 Compose 放入独立恢复目录，使用新的项目名、该目录内空的 `data` 和不同宿主机端口；如配置了 `APP_ORIGIN`，同步调整。核对解析后的挂载实际指向恢复目录；只更改项目名不会隔离宿主目录，不能沿用生产路径。
-3. 将归档完整恢复到该项目的 `/data` 挂载，保留所有者和权限，确保镜像中的 `node` 用户可读写。保留生产数据不动。
+3. 将归档完整恢复到该项目的 `/data` 挂载，保留所有者和权限，确保挂载可读写。保留生产数据不动。
 4. 在启动 Worker 前核对数据库完整性、管理员登录、账号和非终态任务。
 
 默认入口会启动 Worker，可能继续恢复的任务。只检查 Web 时，可在隔离项目中临时覆盖命令，并选择一个未使用的 loopback 端口（示例为 3001）：
@@ -244,7 +239,9 @@ docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
 
 升级前完成一致性备份并保留旧镜像。原密钥只保存在环境变量中时，先完成[密钥迁移](#从环境变量主密钥迁移)；旧部署曾设置 `DEMO_MODE=true` 时，先完成[暂停状态检查](#从旧-demo_mode-配置升级)。
 
-从目标版本的 GitHub Release 下载新的 `compose.yaml`，或将现有文件的 `image` 改为对应固定版本。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、端口映射和必要的高级覆盖配置；旧 `.env` 的 `PORT` 和 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。完成适用检查后，在数据迁移已核对的部署目录执行：
+从目标版本的 GitHub Release 下载新的 `compose.yaml`。默认数据挂载为 `./data:/data`，旧命名卷用户必须先完成[停机迁移](#从旧命名卷迁移到-data)，不能直接覆盖配置后启动。替换文件前核对并保留原项目名、服务名 `app`、实际数据目录、端口映射和必要的高级覆盖配置；旧 `.env` 的 `PORT` 和 `DATA_PATH` 不再影响默认 Compose。默认项目名仍为 `oci-dash`。
+
+从 v0.5.7 及更早的普通用户镜像升级时，采用配套的新版 Compose，一并移除旧的固定 `user`、`cap_drop: [ALL]` 和默认 `security_opt` 配置；只修改镜像版本会留下旧限制。现有 `1000:1000` 数据目录可直接继续使用，无需转换属主或重建数据库。完成适用检查后，在数据迁移已核对的部署目录执行：
 
 ```sh
 docker compose pull app
@@ -325,7 +322,7 @@ ORDER BY created_at;
 | 导入或恢复后无法解密       | 数据库与原 `.master-key` 是否配套；旧环境密钥是否按迁移流程传入。                                    |
 | 修改初始化密码后仍无法登录 | 初始化变量不会重置已有管理员；默认 Compose 不注入 `.env` 中的应用变量，正常改密在“设置 → 登录安全”。 |
 | 升级后出现初始化或空面板   | 先停止应用，核对 Compose 所在目录、实际挂载及旧数据是否完整迁移；不要新建管理员或重新导入账号。      |
-| 数据目录无法启动           | Linux 目录及文件是否允许 UID/GID `1000:1000` 读写；Windows Docker Desktop 是否允许宿主目录访问。     |
+| 数据目录无法启动           | `/data` 实际挂载是否可读写、磁盘空间和宿主文件系统限制；Docker Desktop 是否允许宿主目录访问。        |
 | 部分库存未更新             | 同步 warnings、OCI 权限与可见区间；旧详情会保留并标记。                                              |
 | 指标或费用缺失             | Monitoring/Usage API 权限、时间范围和采集代理；详见[统计说明](ANALYTICS.md)。                        |
 | 任务结果不确定             | 先核对远端状态和检查点，再决定重试或取消。                                                           |

@@ -1,10 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runProcess } from "./lib/process.ts";
 import type { RunProcessOptions } from "./lib/process.ts";
+import { clearVerificationData } from "./lib/verification-data.ts";
 
 interface VerificationEnvironment {
   MASTER_KEY: string;
@@ -96,10 +97,7 @@ try {
   const source = readFileSync(join(repository, "compose.yaml"), "utf8");
   if ((source.match(/127\.0\.0\.1:6240:3000/g) ?? []).length !== 1 || source.includes("${"))
     throw new Error("Expected a literal default port without environment interpolation.");
-  // Only this test-owned leaf is writable by the non-root container. Its parent
-  // remains private, and cleanup removes the entire unique temporary directory.
-  mkdirSync(dataDirectory, { mode: 0o777 });
-  if (process.platform !== "win32") chmodSync(dataDirectory, 0o777);
+  // Leave ./data absent so Docker creates it just as in a fresh deployment.
   const port = await unusedPort();
   writeFileSync(composeFile, source.replace("127.0.0.1:6240:3000", `127.0.0.1:${port}:3000`));
   const administrator = {
@@ -185,8 +183,8 @@ try {
     service.init === true ||
     service.stop_grace_period !== "35s" ||
     (service.tmpfs?.length ?? 0) !== 0 ||
-    !service.security_opt?.includes("no-new-privileges:true") ||
-    !service.cap_drop?.includes("ALL") ||
+    (service.security_opt?.length ?? 0) !== 0 ||
+    (service.cap_drop?.length ?? 0) !== 0 ||
     service.logging?.driver !== "local" ||
     ports?.length !== 1 ||
     ports[0].host_ip !== "127.0.0.1" ||
@@ -207,6 +205,17 @@ try {
       "app",
     ],
     { inherit: true, timeoutMs: 12 * 60_000, signal: controller.signal },
+  );
+  await compose([
+    "exec",
+    "-T",
+    "app",
+    "node",
+    "-e",
+    `const a=require('node:assert/strict'),f=require('node:fs');a.equal(process.getuid(),0);${process.platform === "win32" ? "" : "const d=f.statSync('/data');a.equal(d.uid,0);a.equal(d.mode&0o022,0);"}`,
+  ]);
+  console.log(
+    "PASS: Docker-created data starts without directory preparation or ownership changes",
   );
   try {
     const health = await fetch(`${values.APP_ORIGIN}/api/health`, {
@@ -240,12 +249,18 @@ try {
     console.error(logs);
   }
 } finally {
+  if (!resolve(directory).startsWith(base + sep)) throw new Error("Invalid test cleanup path.");
   const cleanupErrors: unknown[] = [];
   if (started && compose) {
     try {
       await compose(["down", "--volumes", "--remove-orphans", "--timeout", "35"], {
         timeoutMs: 60_000,
       });
+      await clearVerificationData(
+        (args, options) => runProcess("docker", args, { cwd: repository, ...options }),
+        image,
+        dataDirectory,
+      );
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -261,7 +276,6 @@ try {
       }
     }
   }
-  if (!resolve(directory).startsWith(base + sep)) throw new Error("Invalid test cleanup path.");
   if (!cleanupErrors.length) rmSync(directory, { recursive: true, force: true });
   else
     console.error(

@@ -15,14 +15,13 @@ LABEL org.opencontainers.image.source="https://github.com/ZeonXr/oci-dash" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.description="Self-hosted OCI management console"
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client ca-certificates tini && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data && chown node:node /data /app
-COPY --from=build --chown=node:node /app/.next/standalone ./
-COPY --from=build --chown=node:node /app/.next/static ./.next/static
-COPY --from=build --chown=node:node /app/public ./public
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --from=build --chown=node:node /app/LICENSE ./LICENSE
-USER node
+    && mkdir -p /data
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/LICENSE ./LICENSE
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node", "dist/health.mjs"]
 ENTRYPOINT ["/usr/bin/tini", "--"]

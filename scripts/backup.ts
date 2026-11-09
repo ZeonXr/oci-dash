@@ -169,8 +169,8 @@ export async function backup({
     signal?.throwIfAborted();
     if (wasRunning) await docker(["stop", "--time", "35", id], { timeoutMs: 45_000 });
     signal?.throwIfAborted();
-    // The helper uses the same immutable image and the application's unprivileged user.
-    // Host redirection avoids root-owned files and works with cap_drop: ALL.
+    // Read legacy node-owned and new root-owned data from the read-only mount.
+    // The host process writes the archive from stdout.
     await docker(
       [
         "run",
@@ -183,9 +183,7 @@ export async function backup({
         "none",
         "--read-only",
         "--user",
-        "node",
-        "--cap-drop",
-        "ALL",
+        "0:0",
         "--security-opt",
         "no-new-privileges:true",
         "--mount",

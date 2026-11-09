@@ -140,16 +140,13 @@ try {
     "unless-stopped",
     "--stop-timeout",
     "35",
-    "--security-opt",
-    "no-new-privileges:true",
-    "--cap-drop",
-    "ALL",
     "--mount",
     `type=volume,src=${volume},dst=/data`,
     image,
   );
   containerCreated = true;
   await waitFor(healthy, "initial Web and worker health");
+  assert.equal(execute("console.log(process.getuid())"), "0", "The default container user is root");
   assert.equal(
     execute("console.log(require('node:fs').readFileSync('/proc/1/comm','utf8').trim())"),
     "tini",
@@ -179,6 +176,10 @@ try {
     "PASS: empty container accepts first administrator setup and login without environment configuration",
   );
 
+  // Model a previous non-root deployment before the existing restart checks.
+  execute(
+    "const f=require('node:fs'),p=require('node:path');for(const name of f.readdirSync('/data'))f.chownSync(p.join('/data',name),1000,1000);f.chmodSync('/data',0o700);f.chownSync('/data',1000,1000);",
+  );
   for (const role of ["worker", "web"] as const) {
     const before = runtime();
     const previousRestarts = restarts();
@@ -197,9 +198,14 @@ try {
       initialization,
       "Generated secrets must survive restarts",
     );
+    assert.equal(
+      execute("console.log(require('node:fs').statSync('/data/.master-key').uid)"),
+      "1000",
+      "Existing data must work without rewriting its owner",
+    );
     authenticate("login");
     console.log(
-      `PASS: ${role} failure restarts the complete application and preserves its database`,
+      `PASS: ${role} failure restarts the application and preserves legacy node-owned data`,
     );
   }
 
@@ -231,7 +237,7 @@ try {
     "--mount",
     `type=volume,src=${volume},dst=/source,readonly`,
     "--tmpfs",
-    "/data:rw,uid=1000,gid=1000,mode=0700",
+    "/data:rw,mode=0700",
     "--entrypoint",
     "node",
     image,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -33,8 +34,6 @@ interface BackupFixtureCompose {
       user: string;
       command: string[];
       network_mode: "none";
-      cap_drop: string[];
-      security_opt: string[];
       restart: "no";
       volumes: (
         | string
@@ -78,7 +77,11 @@ db.prepare('INSERT INTO proof VALUES (?)').run('backup-fixture');
 fs.chmodSync('/data/backup-fixture.db', 0o600);
 fs.writeFileSync('/data/.master-key', Buffer.alloc(32, 0x5a), {mode: 0o600});
 fs.chmodSync('/data/.master-key', 0o600);
+fs.chownSync('/data/.master-key', 1000, 1000);
 fs.writeFileSync('/data/ready', 'ready', {mode: 0o600});
+fs.writeFileSync('/data/legacy-owned', 'legacy-node-data', {mode: 0o600});
+fs.chownSync('/data/legacy-owned', 1000, 1000);
+fs.writeFileSync('/data/root-owned', 'root-data', {mode: 0o600});
 setInterval(() => {}, 1000);
 `;
 const composeConfiguration: BackupFixtureCompose = {
@@ -86,11 +89,9 @@ const composeConfiguration: BackupFixtureCompose = {
   services: {
     app: {
       image,
-      user: "node",
+      user: "0:0",
       command: ["node", "-e", fixture],
       network_mode: "none",
-      cap_drop: ["ALL"],
-      security_opt: ["no-new-privileges:true"],
       restart: "no",
       volumes: ["app-data:/data"],
       healthcheck: {
@@ -118,8 +119,13 @@ const bindCompose = (...args: string[]): Promise<string> =>
     env: bindEnv,
   });
 
-async function verifyRestored(destination: string, expectedKeyMode = 0o600): Promise<void> {
+async function verifyRestored(
+  destination: string,
+  expectedKeyMode = 0o600,
+  expectedLegacyUid = 1000,
+): Promise<void> {
   assert.ok(Number.isInteger(expectedKeyMode) && expectedKeyMode >= 0 && expectedKeyMode <= 0o777);
+  assert.ok(Number.isSafeInteger(expectedLegacyUid) && expectedLegacyUid >= 0);
   const fd = openSync(destination, "r");
   try {
     const restored = await docker(
@@ -131,11 +137,9 @@ async function verifyRestored(destination: string, expectedKeyMode = 0o600): Pro
         "none",
         "--read-only",
         "--user",
-        "node",
-        "--cap-drop",
-        "ALL",
+        "0:0",
         "--tmpfs",
-        "/restore:rw,uid=1000,gid=1000,mode=0700",
+        "/restore:rw,mode=0700",
         "--entrypoint",
         "node",
         image,
@@ -146,6 +150,12 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 assert.ok(fs.readFileSync('/restore/.master-key').equals(Buffer.alloc(32, 0x5a)), 'The archive must preserve the hidden master key.');
 assert.equal(fs.statSync('/restore/.master-key').mode & 0o777, ${expectedKeyMode}, 'The restored master key must retain its source permissions.');
+assert.equal(fs.statSync('/restore/.master-key').uid, ${expectedLegacyUid}, 'The legacy master key owner must survive the archive.');
+assert.equal(fs.readFileSync('/restore/legacy-owned', 'utf8'), 'legacy-node-data');
+assert.equal(fs.statSync('/restore/legacy-owned').uid, ${expectedLegacyUid}, 'Legacy ownership must survive the archive.');
+assert.equal(fs.readFileSync('/restore/root-owned', 'utf8'), 'root-data');
+assert.equal(fs.statSync('/restore/root-owned').uid, 0, 'Root ownership must survive the archive.');
+for (const proof of ['legacy-owned', 'root-owned']) assert.equal(fs.statSync('/restore/' + proof).mode & 0o777, ${expectedKeyMode});
 const D = require('better-sqlite3');
 const d = new D('/restore/backup-fixture.db', {readonly:true});
 console.log(d.prepare('SELECT value FROM proof').pluck().get());
@@ -231,7 +241,7 @@ try {
   await verifyRestored(destination);
   await assert.rejects(backup({ destination, cwd: directory, env }), /already exists/);
   console.log(
-    "PASS: an unprivileged backup restores the database and hidden master key, preserves 0600 permissions and restarts only the original app",
+    "PASS: backup restores mixed root/node-owned data, the database and hidden master key with source permissions and restarts only the original app",
   );
 
   await compose("stop", "app");
@@ -245,20 +255,25 @@ try {
   console.log("PASS: backup preserves a stopped app and refuses to overwrite existing archives");
 
   await compose("start", "app");
-  await docker(["exec", id, "node", "-e", "require('node:fs').chmodSync('/data',0o777)"]);
-  await docker([
-    "exec",
-    "--user",
-    "0:0",
-    id,
-    "node",
-    "-e",
-    "require('node:fs').writeFileSync('/data/unreadable','synthetic',{mode:0o600})",
-  ]);
+  const cancelled = new AbortController();
+  const throwIfAborted = cancelled.signal.throwIfAborted.bind(cancelled.signal);
+  // Cancel at the archive boundary only after the real container has stopped.
+  // No production hook or timing-dependent race is needed for failure cleanup.
+  Object.defineProperty(cancelled.signal, "throwIfAborted", {
+    value: () => {
+      const running = execFileSync("docker", ["inspect", "--format", "{{.State.Running}}", id], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 10_000,
+      }).trim();
+      if (running === "false") cancelled.abort(new Error("Synthetic archive cancellation"));
+      throwIfAborted();
+    },
+  });
   const failed = join(archives, "failure.tar.gz");
   await assert.rejects(
-    backup({ destination: failed, cwd: directory, env, signal: controller.signal }),
-    /Permission denied/,
+    backup({ destination: failed, cwd: directory, env, signal: cancelled.signal }),
+    /Synthetic archive cancellation/,
   );
   assert.equal(
     await state(),
@@ -270,7 +285,9 @@ try {
     readdirSync(archives).filter((name) => name.includes("partial")),
     [],
   );
-  console.log("PASS: archive failure restarts the app and removes the incomplete file");
+  console.log(
+    "PASS: cancellation after stopping the app restarts it and removes the incomplete file",
+  );
 
   // Compose long syntax preserves a native Windows drive path and directories
   // containing spaces or commas. All writable data belongs to this test run.
@@ -309,6 +326,15 @@ try {
       "console.log(require('node:fs').statSync('/data/.master-key').mode & 0o777)",
     ]),
   );
+  const legacyUid = Number(
+    await docker([
+      "exec",
+      bindId,
+      "node",
+      "-e",
+      "console.log(require('node:fs').statSync('/data/legacy-owned').uid)",
+    ]),
+  );
   const bindState = () => docker(["inspect", "--format", "{{.State.Running}}", bindId]);
   const bindDestination = join(archives, "bind-running.tar.gz");
   await backup({
@@ -320,7 +346,7 @@ try {
   assert.equal(await bindState(), "true", "A running bind-mounted app must restart after backup.");
   // Windows-backed directories may report 0777 even after chmod. Preserve the
   // actual source mode; do not change archive semantics just for a test.
-  await verifyRestored(bindDestination, mode);
+  await verifyRestored(bindDestination, mode, legacyUid);
   await bindCompose("stop", "app");
   const bindStopped = join(archives, "bind-stopped.tar.gz");
   await backup({
@@ -330,7 +356,7 @@ try {
     signal: controller.signal,
   });
   assert.equal(await bindState(), "false", "A stopped bind-mounted app must remain stopped.");
-  await verifyRestored(bindStopped, mode);
+  await verifyRestored(bindStopped, mode, legacyUid);
   console.log(
     "PASS: bind-directory backups restore the database and hidden key with source permissions, preserving running and stopped states",
   );

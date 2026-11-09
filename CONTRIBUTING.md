@@ -42,7 +42,7 @@ npm run worker
 docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
 ```
 
-该命令构建 `oci-dash:local`，数据挂载为 Compose 所在目录的 `./data:/data`。Linux 首次运行前，用 `sudo install -d -o 1000 -g 1000 -m 0700 ./data` 创建空目录；Windows Docker Desktop 通过宿主 ACL 允许 Docker 访问。不要在生产部署目录运行它，也不要把开发数据目录混用为生产数据；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
+该命令构建 `oci-dash:local`，数据挂载为 Compose 所在目录的 `./data:/data`。容器默认以 root 运行，Docker 自动创建缺失的数据目录，无需预先设置 UID/GID 或执行 `chown`；Docker Desktop 需允许 Docker 访问检出目录。不要在生产部署目录运行它，也不要把开发数据目录混用为生产数据；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
 
 `scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
 
@@ -111,7 +111,7 @@ npm run test:backup
 
 发布前新增 `docs/releases/vMAJOR.MINOR.PATCH.md`，说明该版本的实际变化和升级注意事项。工作流直接使用对应版本文件作为 GitHub Release 正文；文件缺失时拒绝发布。避免重复完整安装指南，部署和恢复细节链接到项目文档。
 
-发布中断后可以重跑失败任务：相同镜像摘要和相同 Compose 内容会复用，缺少的 Release 或附件会补齐；不同摘要或内容会拒绝覆盖。候选镜像可能被正式索引引用，不自动删除。实际执行结果见[发布验收](docs/VERIFICATION.md#v057-发布验收)。
+发布中断后可以重跑失败任务：相同镜像摘要和相同 Compose 内容会复用，缺少的 Release 或附件会补齐；不同摘要或内容会拒绝覆盖。候选镜像可能被正式索引引用，不自动删除。实际执行结果见[发布验收](docs/VERIFICATION.md#v058-发布验收)。
 
 ## 提交与评审
 

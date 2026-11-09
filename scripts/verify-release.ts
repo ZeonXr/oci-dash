@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   accessSync,
-  chmodSync,
   constants,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +15,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { runProcess, type RunProcessOptions } from "./lib/process.ts";
+import { clearVerificationData } from "./lib/verification-data.ts";
 
 const repository = fileURLToPath(new URL("..", import.meta.url));
 const registryRepository = "zeonxr/oci-dash";
@@ -214,8 +214,6 @@ function verifyComposeSource(source: string): void {
     "image",
     "restart",
     "stop_grace_period",
-    "security_opt",
-    "cap_drop",
     "ports",
     "volumes",
     "logging",
@@ -262,8 +260,6 @@ function verifyResolved(
       "image",
       "restart",
       "stop_grace_period",
-      "security_opt",
-      "cap_drop",
       "ports",
       "volumes",
       "logging",
@@ -280,11 +276,6 @@ function verifyResolved(
   check(
     app.image === image && app.restart === "unless-stopped" && app.stop_grace_period === "35s",
     "Release image or lifecycle defaults do not match.",
-  );
-  check(
-    JSON.stringify(app.security_opt) === JSON.stringify(["no-new-privileges:true"]) &&
-      JSON.stringify(app.cap_drop) === JSON.stringify(["ALL"]),
-    "Release container security defaults are missing.",
   );
   check(
     object(app.logging) &&
@@ -416,10 +407,13 @@ const containerProbe = String.raw`
 (async () => {
   const f = require('node:fs'), c = require('node:crypto'), o = require('node:os');
   const ensure = condition => { if (!condition) throw new Error('probe failed'); };
-  ensure(typeof process.getuid === 'function' && process.getuid() === 1000);
+  ensure(typeof process.getuid === 'function' && process.getuid() === 0);
   ensure(f.readFileSync('/proc/1/comm','utf8').trim() === 'tini');
   ensure(o.tmpdir() === '/dev/shm' && Number(f.statfsSync(o.tmpdir()).type) === 0x01021994);
-  if (process.argv[2] === 'check-posix-mode') ensure((f.statSync('/data/.master-key').mode & 0o777) === 0o600);
+  if (process.argv[2] === 'check-posix-mode') {
+    ensure((f.statSync('/data/.master-key').mode & 0o777) === 0o600);
+    const directory=f.statSync('/data'); ensure(directory.uid === 0 && (directory.mode & 0o022) === 0);
+  }
   ensure(!f.existsSync('/data/.initial-admin-password'));
   const key = f.readFileSync('/data/.master-key'); ensure(key.length === 32);
   const D = require('better-sqlite3'), db = new D('/data/oci-dash.db',{readonly:true});
@@ -466,9 +460,7 @@ async function main(): Promise<void> {
     const endpoint = await localDockerEndpoint();
     directory = mkdtempSync(join(tmpdir(), "oci-dash-release-"));
     const dataDirectory = join(directory, "data");
-    // Only this freshly created leaf is writable by the container. Its parent remains private.
-    mkdirSync(dataDirectory, { mode: 0o777 });
-    if (process.platform !== "win32") chmodSync(dataDirectory, 0o777);
+    // Docker must create ./data without a preparatory mkdir, chmod, or chown.
     const configDirectory = join(directory, "docker");
     mkdirSync(configDirectory, { mode: 0o700 });
     // An explicit empty GHCR entry disables Docker's automatic system credential-helper discovery.
@@ -702,7 +694,7 @@ async function main(): Promise<void> {
       "Created administrator could not log in again.",
     );
     console.log(
-      "PASS: anonymous pull starts a healthy non-root application with Tini, tmpfs and browser administrator setup",
+      "PASS: anonymous pull starts a healthy application with default root, Tini, tmpfs and browser administrator setup",
     );
     await compose(["restart", "--timeout", "35", "app"], { timeoutMs: 60_000 });
     let restarted: string | undefined;
@@ -843,6 +835,13 @@ async function main(): Promise<void> {
             "Verification left Docker resources behind.",
           );
         }
+        check(directory, "Verification directory is missing during cleanup.");
+        check(
+          dirname(resolve(directory)) === resolve(tmpdir()) &&
+            basename(directory).startsWith("oci-dash-release-"),
+          "Invalid verification cleanup path.",
+        );
+        await clearVerificationData(docker, image, join(directory, "data"));
       } catch {
         cleanupErrors.push(
           `Cleanup requires attention for project ${project}; configuration retained at ${directory}.`,
