@@ -382,6 +382,28 @@ describe("inventory detail coverage and scoped reconciliation", () => {
   });
 });
 
+describe("inventory transaction boundaries", () => {
+  it("rolls ORM inventory writes and coverage warnings back when the account update fails", () => {
+    const current = instance("current");
+    const unqueried = instance("unqueried", { compartmentId: "other-compartment" });
+    saveInventory("a", result([current, unqueried]));
+    const db = getDatabase();
+    const beforeResources = db.prepare("SELECT * FROM resources ORDER BY id").all();
+    const beforeAccount = db.prepare("SELECT * FROM accounts WHERE id='a'").get();
+    db.exec(`CREATE TRIGGER reject_inventory_update BEFORE UPDATE OF last_sync_at ON accounts
+      WHEN NEW.id='a' BEGIN SELECT RAISE(ABORT, 'Synthetic inventory failure'); END`);
+    const snapshot = result([instance("replacement")]);
+    expect(() => saveInventory("a", snapshot)).toThrow();
+    expect(db.prepare("SELECT * FROM resources ORDER BY id").all()).toEqual(beforeResources);
+    expect(db.prepare("SELECT * FROM accounts WHERE id='a'").get()).toEqual(beforeAccount);
+    expect(snapshot.warnings).toEqual([]);
+    db.exec("DROP TRIGGER reject_inventory_update");
+    saveInventory("a", snapshot);
+    expect(getInstance("ocid1.instance.oc1..replacement").displayName).toBe("replacement");
+    expect(snapshot.warnings).toHaveLength(1);
+  });
+});
+
 describe("canonical resource ownership", () => {
   it("returns SQL identity and account ownership even when legacy JSON points elsewhere", () => {
     const row = instance();

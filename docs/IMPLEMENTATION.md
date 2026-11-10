@@ -1,6 +1,6 @@
 # 架构与 API
 
-OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
+OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-sqlite3）和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
 
 ## 模块
 
@@ -9,8 +9,9 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 | `src/app/`、`src/components/`                  | 页面、交互、筛选、渐进刷新和确认界面。             |
 | `src/server/router.ts`、`auth.ts`、`http.ts`   | 业务 API、会话、MFA、同源检查和请求边界。          |
 | `src/server/accounts.ts`、`inventory.ts`       | 加密凭据、账号版本、库存合并和资源归属。           |
+| `src/server/database/`、`drizzle/`             | TypeScript 表结构、共享 ORM 连接与生成的迁移。     |
 | `src/server/account-details.ts`                | 按需读取账号云身份与区域订阅，汇总当前范围的库存。 |
-| `src/server/master-key.ts`、`initial-admin.ts` | 原子持久化主密钥、旧密钥验证及首次管理员初始化。   |
+| `src/server/master-key.ts`、`initial-admin.ts` | 原子持久化主密钥、密钥配对及首次管理员初始化。     |
 | `src/server/oci/`                              | SDK 客户端、范围校验、库存读取和资源操作。         |
 | `src/server/jobs/`                             | 持久队列、租约、资源锁、检查点和 Worker。          |
 | `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。              |
@@ -27,19 +28,21 @@ OCI Dash 采用 Next.js App Router、TypeScript、SQLite（better-sqlite3） 和
 
 默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
 
-仓库的 `compose.yaml` 默认使用 `ghcr.io/zeonxr/oci-dash:latest`，没有构建或文件继承依赖，也没有环境变量插值。发布工具生成附件时，将该引用替换为当前固定版本，保持附件可独立部署与回退。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。各方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；宿主端口默认映射为 `127.0.0.1:6240:3000`，自定义时直接编辑映射，不读取旧 `PORT` 或 `DATA_PATH`。旧命名卷需要停机完整迁移后才能切换默认挂载。
+仓库的 `compose.yaml` 默认使用 `ghcr.io/zeonxr/oci-dash:latest`，没有构建或文件继承依赖，也没有环境变量插值。发布工具生成附件时，将该引用替换为当前固定版本，保持附件可独立部署与回退。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。各方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；宿主端口默认映射为 `127.0.0.1:6240:3000`，自定义时直接编辑映射。
 
 镜像使用默认 root 用户，Tini 作为 PID 1；Compose 保留 35 秒停止期限和 `local` 日志驱动，使用 Docker 默认权限配置。Docker 自动创建缺失的宿主数据目录，应用直接创建数据库及主密钥，不增加目录初始化或降权入口，也不递归修改旧数据属主。Docker Desktop 仍使用宿主 ACL 控制目录访问。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
-数据库访问统一使用 `better-sqlite3` 和参数化 SQL。`schema_migrations` 记录一次性升级；任务资源锁的历史回填在版本 3 的迁移事务中完成，后续启动不再遍历全部历史任务。新任务仍在创建事务内写入资源锁。
+表结构集中在 `src/server/database/schema.ts`。常规查询使用 Drizzle ORM，`getOrm()` 与 `getDatabase()` 共用同一个 `better-sqlite3` 连接，ORM 查询参与原生连接上的同步事务。任务领取、租约和启动时的密钥、管理员初始化保留必要的参数化 SQL；控制台占用保留原有条件写入及事务边界。任务资源锁在创建任务的同一事务内写入。
 
-空数据库默认没有管理员，等待浏览器首次初始化，不生成账号、实例或指标样例。运行代码不读取旧 `DEMO_MODE`，不存在演示开关或假数据分支；测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
+`drizzle-kit` 根据 TypeScript schema 生成 `drizzle/` 内的 SQL 和元数据。应用启动通过 Drizzle 官方 migrator 初始化空数据库，并根据 `__drizzle_migrations` 跳过已经应用的迁移；镜像包含迁移文件，部署不需要额外命令或服务。当前基线不包含接入 Drizzle 之前的数据库转换、分散的字段补丁或历史资源锁回填。使用独立空数据目录部署，已有旧数据库另行保留。开发命令与审核要求见[数据库开发](../CONTRIBUTING.md#数据库开发)。
 
-默认启动无需 `.env`。主密钥自动生成并保存为数据库目录中的 `.master-key`；完整目录备份同时包含数据库与解密材料。主密钥初始化先原子发布文件，再提交对应绑定；旧环境密钥只有通过全部已有凭据及 MFA 的解密验证后才持久化，有加密数据或指纹绑定却缺少原密钥时拒绝生成替代密钥。
+空数据库默认没有管理员，等待浏览器首次初始化，不生成账号、实例或指标样例。测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
 
-网页初始化接受管理员用户名、密码和确认密码，支持生成并复制 32 位随机密码。服务端用 SQLite 写事务串行化首次账号创建，将管理员、初始化完成标记和登录会话一起提交，成功后自动登录并关闭初始化入口；已有用户会阻止重新初始化，不重置旧密码。高级兼容入口 `ADMIN_PASSWORD` 仅在未初始化的空数据库中生效，用户名由 `ADMIN_USERNAME` 指定、默认 `admin`。新部署不生成 `.initial-admin-password`，旧文件仅保留兼容，成功改密时清理。
+默认启动无需 `.env`。主密钥自动生成并保存为数据库目录中的 `.master-key`；完整目录备份同时包含数据库与解密材料。主密钥初始化先原子发布文件，再提交对应绑定；显式配置的环境密钥通过配对与解密验证后才持久化，有加密数据或指纹绑定却缺少原密钥时拒绝生成替代密钥。
+
+网页初始化接受管理员用户名、密码和确认密码，支持生成并复制 32 位随机密码。服务端用 SQLite 写事务串行化首次账号创建，将管理员、初始化完成标记和登录会话一起提交，成功后自动登录并关闭初始化入口；已有用户会阻止重新初始化，不重置密码。可选的 `ADMIN_PASSWORD` 仅在未初始化的空数据库中生效，用户名由 `ADMIN_USERNAME` 指定、默认 `admin`。默认不生成初始密码文件。
 
 初始化没有额外令牌；默认仅发布 loopback，部署者先通过本机或 SSH 隧道完成设置，再开放公共反向代理。初始化请求与其他写请求一样校验 Origin，但来源校验不能阻止直接可访问页面的人抢先创建管理员。
 
@@ -47,9 +50,9 @@ SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及
 
 ## 账号与库存流程
 
-保存账号和排入连接任务在同一事务内完成。新账号或租户变更会检查重复租户；旧重复配置保留供显式处理。凭据和区域变化会排队同步，填写自定义名称不会触发云请求。
+保存账号和排入连接任务在同一事务内完成。新账号或租户变更会检查重复租户。凭据和区域变化会排队同步，填写自定义名称不会触发云请求。
 
-新账号未填写名称时，暂用短租户标识，首次连接验证后使用 OCI 租户名称，不读取私钥文件名。`nameSource` 区分 `custom`、`pending` 和 `tenancy`；已有名称保持为 `custom`，编辑时清空名称可转为 `pending` 并排队重新识别，读取成功前保留原显示名。重置自动名称需等待账号活动任务结束；名称未修改时应省略 PATCH 的 `name` 字段。自动名称提交同时检查凭据版本与名称来源，防止覆盖后续自定义名称。
+新账号未填写名称时，暂用短租户标识，首次连接验证后使用 OCI 租户名称，不读取私钥文件名。`nameSource` 区分 `custom`、`pending` 和 `tenancy`；自定义名称使用 `custom`，编辑时清空名称可转为 `pending` 并排队重新识别，读取成功前保留原显示名。重置自动名称需等待账号活动任务结束；名称未修改时应省略 PATCH 的 `name` 字段。自动名称提交同时检查凭据版本与名称来源，防止覆盖后续自定义名称。
 
 账号未连接、没有同步记录或名称待识别时，Worker 先验证身份和区域订阅，复用响应中的租户名称；正常已连接账号直接读取库存。同步只发布仍持有有效租约的结果。
 

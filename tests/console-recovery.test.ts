@@ -7,6 +7,7 @@ import { createConsoleTransport } from "@/server/console/transport";
 import { consoleTags } from "@/server/console/oci";
 import type { ConsoleActor, ConsoleTarget } from "@/server/console/types";
 import type { CloudDocument, OciClients } from "@/server/oci/sdk";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const actor: ConsoleActor = {
   userId: "test-user",
@@ -71,6 +72,7 @@ function persisted(id = "11111111-1111-4111-8111-111111111111"): ConsoleSessionR
 function fixture() {
   const db = new Database(":memory:");
   handles.push(db);
+  initializeTestDatabase(db);
   const store = createConsoleStore(db);
   const records = new Map<string, CloudDocument>();
   const state = {
@@ -214,14 +216,11 @@ describe("durable recovery of ambiguous OCI console creates", () => {
     );
   });
 
-  it("recovers a legacy row only after complete ANY-compartment scans when the parent is absent", async () => {
+  it("recovers a row without a saved scope only after complete ANY-compartment scans when the parent is absent", async () => {
     const f = fixture(),
       row = { ...persisted(), connectionId, creationState: "created" as const };
-    const child = "ocid1.compartment.oc1..legacychild";
+    const child = "ocid1.compartment.oc1..recoverychild";
     f.store.reserve(row);
-    // Simulate an old schema and exercise the real migration, not only null data.
-    f.db.exec("ALTER TABLE console_sessions DROP COLUMN compartment_id");
-    f.db.exec("ALTER TABLE console_sessions DROP COLUMN credential_recovery_ready");
     f.state.parentMissing = true;
     f.state.compartments = [{ id: child, lifecycleState: "ACTIVE" }];
     await f.makeManager().initialize();
@@ -237,7 +236,7 @@ describe("durable recovery of ambiguous OCI console creates", () => {
   });
 
   it.each(["enumeration", "next-page", "child-list"])(
-    "retains a legacy cleanup lock when %s is unauthorized",
+    "retains a cleanup lock without a saved scope when %s is unauthorized",
     async (denial) => {
       const f = fixture(),
         row = { ...persisted(), connectionId, creationState: "created" as const };
@@ -260,7 +259,7 @@ describe("durable recovery of ambiguous OCI console creates", () => {
     },
   );
 
-  it("persists the recovered scope before deleting a legacy owned connection", async () => {
+  it("persists the recovered scope before deleting an owned connection", async () => {
     const f = fixture(),
       row = { ...persisted(), connectionId, creationState: "created" as const };
     f.store.reserve(row);
@@ -459,24 +458,6 @@ describe("durable recovery of ambiguous OCI console creates", () => {
     expect(
       f.history.filter((call) => call.operation === "deleteInstanceConsoleConnection"),
     ).toHaveLength(1);
-  });
-
-  it("migrates an old active record without an ID conservatively without losing its owner metadata", () => {
-    const f = fixture(),
-      row = persisted();
-    f.store.reserve(row);
-    f.db.exec("ALTER TABLE console_sessions DROP COLUMN creation_state");
-    const migrated = createConsoleStore(f.db);
-    expect(migrated.active()).toEqual(row);
-    expect(createConsoleStore(f.db).active()).toEqual(row);
-  });
-
-  it("migrates a known OCI connection as created", () => {
-    const f = fixture(),
-      row = { ...persisted(), connectionId, creationState: "created" as const };
-    f.store.reserve(row);
-    f.db.exec("ALTER TABLE console_sessions DROP COLUMN creation_state");
-    expect(createConsoleStore(f.db).active()).toEqual(row);
   });
 
   it("keeps the manager slot if a transport incorrectly reports success without resolving uncertainty", async () => {

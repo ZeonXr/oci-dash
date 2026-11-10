@@ -70,10 +70,8 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-it("protects an account used by a console even when no job queue table exists", () => {
-  expect(
-    getDatabase().prepare("SELECT name FROM sqlite_master WHERE name='jobs'").get(),
-  ).toBeUndefined();
+it("protects an account used by a console while the job queue is empty", () => {
+  expect(getDatabase().prepare("SELECT count(*) FROM jobs").pluck().get()).toBe(0);
   expect(() => deleteAccount("test-account", "tester")).toThrow(/控制台会话/);
   expect(() =>
     updateAccount("test-account", { regions: ["ap-tokyo-1", "ap-singapore-1"] }, "tester"),

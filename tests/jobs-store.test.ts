@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { AccountSummary, OperationRequest } from "@/lib/contracts";
 import { createJobStore, JobError, LeaseLostError } from "@/server/jobs/store";
 import { parseJobQuery } from "@/server/jobs/query";
-import { spawn } from "node:child_process";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const handles: Database.Database[] = [];
 const directories: { directory: string; base: string }[] = [];
@@ -35,6 +35,7 @@ function fixture(extraAccounts: AccountSummary[] = []) {
     db.pragma("journal_mode=WAL");
     db.pragma("busy_timeout=5000");
     handles.push(db);
+    initializeTestDatabase(db);
     return {
       db,
       store: createJobStore({
@@ -156,37 +157,6 @@ describe("durable job store", () => {
     expect(f.store.listJobs()).toHaveLength(0);
     expect(f.db.prepare("SELECT COUNT(*) AS count FROM job_events").get()).toEqual({ count: 0 });
     expect(f.db.prepare("SELECT COUNT(*) AS count FROM job_resources").get()).toEqual({ count: 0 });
-  });
-
-  it("backfills account-wide locks onto already-running legacy regional sync jobs", () => {
-    const regionalAccount = { ...account, id: "legacy-account", regions: ["region-a", "region-b"] };
-    const f = fixture([regionalAccount]);
-    const older = f.store.enqueueOperation(
-      { kind: "sync-account", accountId: regionalAccount.id, region: "region-b", payload: {} },
-      "admin",
-    );
-    f.store.claimNext("older-worker");
-    const legacyKey = `${regionalAccount.id}:sync-account:region-b`;
-    f.db.prepare("UPDATE jobs SET resource_lock=? WHERE id=?").run(legacyKey, older.id);
-    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(older.id);
-    f.db
-      .prepare("INSERT INTO job_resources(job_id,resource_key) VALUES(?,?)")
-      .run(older.id, legacyKey);
-    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
-    const upgraded = f.open();
-    const refresh = upgraded.store.enqueueOperation(
-      {
-        kind: "sync-account",
-        accountId: regionalAccount.id,
-        region: regionalAccount.homeRegion,
-        payload: {},
-        idempotencyKey: "post-write-refresh",
-      },
-      "admin",
-    );
-    expect(upgraded.store.claimNext("new-worker")).toBeNull();
-    f.store.finish(older.id, "older-worker", "succeeded");
-    expect(upgraded.store.claimNext("new-worker")?.summary.id).toBe(refresh.id);
   });
 
   it("deduplicates the same request across a database reopen and rejects different payloads", () => {
@@ -356,7 +326,7 @@ describe("durable job store", () => {
   });
 });
 
-describe("job history queries and migrations", () => {
+describe("job history queries", () => {
   const query = (text = "") => {
     const parsed = parseJobQuery(new URLSearchParams(text));
     if (parsed === "active") throw new Error("Expected a paginated query");
@@ -478,71 +448,6 @@ describe("job history queries and migrations", () => {
       expect.objectContaining({ code: "INVALID_JOB_QUERY" }),
     );
   });
-
-  it("backfills legacy resource locks once and records the version atomically across reopen", () => {
-    const f = fixture();
-    const job = f.store.enqueueOperation(operation(), "admin");
-    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
-    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
-    f.db.exec(
-      "CREATE TABLE backfill_attempts(n INTEGER); INSERT INTO backfill_attempts VALUES(0); CREATE TRIGGER record_backfill BEFORE INSERT ON job_resources BEGIN UPDATE backfill_attempts SET n=n+1; END;",
-    );
-    f.open();
-    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
-    f.open();
-    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
-    expect(
-      f.db.prepare("SELECT count(*) FROM schema_migrations WHERE version=3").pluck().get(),
-    ).toBe(1);
-  });
-
-  it("does not mark a failed legacy backfill complete", () => {
-    const f = fixture();
-    const job = f.store.enqueueOperation(operation(), "admin");
-    const original = f.db.prepare("SELECT operation_json FROM jobs WHERE id=?").pluck().get(job.id);
-    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
-    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
-    f.db.prepare("UPDATE jobs SET operation_json='invalid' WHERE id=?").run(job.id);
-    expect(() => f.open()).toThrow();
-    expect(f.db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()).toBeUndefined();
-    expect(f.db.prepare("SELECT 1 FROM job_resources WHERE job_id=?").get(job.id)).toBeUndefined();
-    f.db.prepare("UPDATE jobs SET operation_json=? WHERE id=?").run(original, job.id);
-    f.open();
-    expect(f.db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()).toBeTruthy();
-  });
-
-  it("serializes simultaneous process startup so the legacy lock backfill runs only once", async () => {
-    const f = fixture();
-    const job = f.store.enqueueOperation(operation(), "admin");
-    f.db.prepare("DELETE FROM job_resources WHERE job_id=?").run(job.id);
-    f.db.prepare("DELETE FROM schema_migrations WHERE version=3").run();
-    f.db.exec(
-      "CREATE TABLE backfill_attempts(n INTEGER); INSERT INTO backfill_attempts VALUES(0); CREATE TRIGGER record_backfill BEFORE INSERT ON job_resources BEGIN UPDATE backfill_attempts SET n=n+1; END;",
-    );
-    const code =
-      "import Database from 'better-sqlite3';import {ensureJobSchema} from './src/server/jobs/store.ts';const d=new Database(process.argv[1]);d.pragma('busy_timeout=10000');ensureJobSchema(d);d.close();";
-    const run = () =>
-      new Promise<void>((resolve, reject) => {
-        const child = spawn(
-          process.execPath,
-          ["--import", "tsx", "--input-type=module", "-e", code, f.path],
-          { cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
-        );
-        let error = "";
-        child.stderr.on("data", (value) => (error += String(value)));
-        child.once("error", reject);
-        child.once("close", (status) =>
-          status === 0
-            ? resolve()
-            : reject(new Error(error || `Migration process exited ${status}`)),
-        );
-      });
-    await Promise.all([run(), run()]);
-    expect(f.db.prepare("SELECT n FROM backfill_attempts").pluck().get()).toBe(1);
-    expect(
-      f.db.prepare("SELECT count(*) FROM schema_migrations WHERE version=3").pluck().get(),
-    ).toBe(1);
-  });
 });
 
 describe("pending completion recovery", () => {
@@ -582,28 +487,6 @@ describe("pending completion recovery", () => {
     expect(f.store.getJob(job.id)).toMatchObject({ state: "interrupted", nextRunAt: null });
     expect(f.store.cancelJob(job.id).state).toBe("cancelled");
     expect(f.store.claimNext("replacement")).toBeNull();
-  });
-
-  it("adds completion fields to an existing queue without dropping history or checkpoints", () => {
-    const f = fixture();
-    const job = f.store.enqueueOperation(operation(), "admin");
-    f.store.claimNext("old-worker");
-    f.store.checkpoint(job.id, "old-worker", "accepted", { id: "cloud-resource" });
-    f.store.interrupt(job.id, "old-worker", "Upgrade");
-    f.db.exec(
-      "ALTER TABLE jobs DROP COLUMN waiting_for_completion; ALTER TABLE jobs DROP COLUMN completion_deadline_at",
-    );
-    f.db.close();
-    const migrated = f.open().store;
-    expect(migrated.getJob(job.id)).toMatchObject({
-      state: "interrupted",
-      waitingForCompletion: false,
-      completionDeadlineAt: null,
-    });
-    expect(migrated.claimNext("new-worker")?.checkpoints.accepted).toEqual({
-      id: "cloud-resource",
-    });
-    expect(migrated.getJobEvents(job.id).length).toBeGreaterThan(2);
   });
 });
 

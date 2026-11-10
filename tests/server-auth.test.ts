@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import * as OTPAuth from "otpauth";
+import { DrizzleQueryError } from "drizzle-orm";
 import type { InstanceSummary } from "@/lib/contracts";
 import { closeDatabase, getDatabase } from "@/server/db";
 import {
@@ -33,6 +34,8 @@ import {
 import { readJson } from "@/server/http";
 import { accountPatchSchema, validateOperation } from "@/server/validation";
 import { getJobStore } from "@/server/jobs";
+import { safeErrorMessage } from "@/server/jobs/store";
+import { safeMessage } from "@/server/errors";
 import { getInstance, listInstances, saveInventory } from "@/server/inventory";
 import { handleApi } from "@/server/router";
 
@@ -498,6 +501,41 @@ describe("MFA activation, replay and recovery", () => {
 });
 
 describe("credential storage, account revisions and jobs", () => {
+  it("keeps failed ORM query parameters out of HTTP errors, logs and task messages", async () => {
+    const { token } = loggedIn();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const input = accountInput({ name: "sensitive-account-label" });
+    getDatabase().exec(`CREATE TRIGGER reject_orm_insert BEFORE INSERT ON accounts
+      BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END`);
+    try {
+      const response = await handleApi(
+        request("accounts", { method: "POST", token, body: input }),
+        ["accounts"],
+      );
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        error: "服务暂时不可用，请查看运行日志后重试",
+        code: "INTERNAL_ERROR",
+      });
+      expect(log).toHaveBeenCalledWith("request failed:", "synthetic storage failure");
+      let failed = false;
+      try {
+        createAccount(input, USERNAME);
+      } catch (error) {
+        failed = true;
+        expect(safeErrorMessage(error)).toBe("synthetic storage failure");
+      }
+      expect(failed).toBe(true);
+      expect(listAccounts()).toEqual([]);
+      const wrapped = new DrizzleQueryError("INSERT INTO accounts VALUES (?)", [input.name]);
+      expect(wrapped.message).toContain(input.name);
+      expect(safeMessage(wrapped)).toBe("数据库操作失败，请稍后重试");
+      expect(safeErrorMessage(wrapped)).toBe("数据库操作失败，请稍后重试");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("encrypts with fresh nonces and rejects tampered ciphertext or a wrong master key", () => {
     const secret = "unit-test-sensitive-data",
       encrypted = encryptSecret(secret),

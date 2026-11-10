@@ -9,9 +9,7 @@ export function getJobStore(): JobStore {
   let store = stores.get(database);
   if (!store) {
     store = createJobStore({ db: database, getAccount });
-    // Schema initialization can be part of a caller's transaction. Do not cache
-    // that store before commit: a rollback may also remove its newly created tables.
-    if (!database.inTransaction) stores.set(database, store);
+    stores.set(database, store);
   }
   return store;
 }
@@ -36,7 +34,7 @@ export const getJobEvents = (id: string) => getJobStore().getJobEvents(id);
 export const cancelJob = (id: string) => getJobStore().cancelJob(id);
 export const retryJob = (id: string) => getJobStore().retryJob(id);
 export const getWorkerStatus = () => getJobStore().getWorkerStatus();
-export { JobError, createJobStore, ensureJobSchema } from "./store";
+export { JobError, createJobStore } from "./store";
 export type { WorkerStatus, JobStore } from "./store";
 export { runWorker } from "./worker";
 export type { WorkerDependencies, RunWorkerOptions } from "./worker";

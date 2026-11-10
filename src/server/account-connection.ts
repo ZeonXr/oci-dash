@@ -23,7 +23,6 @@ export function createAccountConnection(
   input: AccountInput,
   actor: string,
 ): AccountConnectionResult {
-  // Initialize the queue schema before starting a transaction that could roll back.
   const store = getJobStore();
   return getDatabase()
     .transaction(() => {

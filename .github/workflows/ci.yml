@@ -42,6 +42,8 @@ jobs:
         run: docker compose --env-file /dev/null -f compose.yaml config --quiet
       - run: npm run typecheck
         if: steps.scope.outputs.full == 'true'
+      - run: npm run db:check
+        if: steps.scope.outputs.full == 'true'
       - run: npm test
         if: steps.scope.outputs.full == 'true'
       - name: Check runner-provided Chrome

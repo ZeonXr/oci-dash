@@ -1,8 +1,10 @@
 import type { AccountSummary, InstanceSummary } from "@/lib/contracts";
+import { eq } from "drizzle-orm";
 import type { AnalyticsAccountStatus } from "@/lib/analytics-contracts";
 import type { CpuCoverage, CpuHour, CpuInstanceRow, CpuReport } from "@/lib/cpu-contracts";
 import { getCredentialSnapshot, listAccounts } from "../accounts";
-import { getDatabase } from "../db";
+import { getOrm } from "../db";
+import { accounts as accountTable } from "../database/schema";
 import { AppError } from "../errors";
 import { listInstances } from "../inventory";
 import { ocid, regionName } from "../oci/helpers";
@@ -334,8 +336,11 @@ export function createCpuService(options: CpuServiceOptions = {}) {
   const current =
     options.isCurrent ??
     ((id: string, revision: number) => {
-      const row = getDatabase().prepare("SELECT revision FROM accounts WHERE id=?").get(id) as
-        { revision: number } | undefined;
+      const row = getOrm()
+        .select({ revision: accountTable.revision })
+        .from(accountTable)
+        .where(eq(accountTable.id, id))
+        .get();
       return row?.revision === revision;
     });
   const factory = options.clientFactory ?? defaultCpuClientFactory;

@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { and, eq, gt } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { ConsoleSessionSummary, ConsoleSocketTicket } from "../../lib/console-contracts";
 import { getCredentials } from "../accounts";
-import { getDatabase } from "../db";
+import { getOrm } from "../db";
+import { sessions } from "../database/schema";
 import { AppError, safeMessage } from "../errors";
 import { getInstance } from "../inventory";
 import { CloudError } from "../oci/types";
@@ -121,9 +123,17 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
   const isActorValid =
     options.isActorValid ??
     ((actor: ConsoleActor) =>
-      !!getDatabase()
-        .prepare("SELECT 1 FROM sessions WHERE token_hash=? AND user_id=? AND expires_at>?")
-        .get(actor.sessionHash, actor.userId, new Date(clock()).toISOString()));
+      !!getOrm()
+        .select({ tokenHash: sessions.tokenHash })
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.tokenHash, actor.sessionHash),
+            eq(sessions.userId, actor.userId),
+            gt(sessions.expiresAt, new Date(clock()).toISOString()),
+          ),
+        )
+        .get());
   const runtimes = new Map<string, Runtime>();
   let initialized = false;
   let initializing: Promise<void> | undefined;

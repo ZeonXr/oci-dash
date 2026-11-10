@@ -6,6 +6,7 @@ import type { AccountSummary } from "@/lib/contracts";
 import type { CostReport } from "@/lib/analytics-contracts";
 import { createAnalyticsSnapshots } from "@/server/analytics/snapshots";
 import { createAnalyticsService } from "@/server/analytics/service";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const NOW = Date.parse("2026-11-08T00:00:00Z");
 const handles: Database.Database[] = [];
@@ -39,6 +40,7 @@ function fixture() {
   const open = () => {
     const db = new Database(path);
     handles.push(db);
+    initializeTestDatabase(db);
     return db;
   };
   return { open, db: open() };

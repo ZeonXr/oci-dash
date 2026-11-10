@@ -1,4 +1,5 @@
 import type { AccountSummary, InstanceSummary } from "@/lib/contracts";
+import { eq } from "drizzle-orm";
 import type {
   AnalyticsAccountStatus,
   AnalyticsMetadata,
@@ -10,7 +11,8 @@ import type {
   TrafficReport,
 } from "@/lib/analytics-contracts";
 import { getCredentialSnapshot, listAccounts } from "../accounts";
-import { getDatabase } from "../db";
+import { getOrm } from "../db";
+import { accounts as accountTable } from "../database/schema";
 import { AppError } from "../errors";
 import { listInstances } from "../inventory";
 import { cloudError } from "../oci/sdk";
@@ -134,8 +136,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
   const current =
     options.isCurrent ??
     ((id, revision) => {
-      const row = getDatabase().prepare("SELECT revision FROM accounts WHERE id=?").get(id) as
-        { revision: number } | undefined;
+      const row = getOrm()
+        .select({ revision: accountTable.revision })
+        .from(accountTable)
+        .where(eq(accountTable.id, id))
+        .get();
       return Boolean(row && row.revision === revision);
     });
   const cache = new Map<string, Cached>();

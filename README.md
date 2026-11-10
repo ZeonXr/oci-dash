@@ -1,6 +1,6 @@
 # OCI Dash
 
-用于管理多个 Oracle Cloud Infrastructure 账号的自托管面板，面向单管理员使用。基于 Next.js、TypeScript、官方 OCI SDK 和 SQLite，一个 Docker 容器运行 Web、后台任务和控制台网关。
+用于管理多个 Oracle Cloud Infrastructure 账号的自托管面板，面向单管理员使用。基于 Next.js、TypeScript、Drizzle ORM、SQLite 和官方 OCI SDK，一个 Docker 容器运行 Web、后台任务和控制台网关。
 
 ## 功能
 
@@ -13,7 +13,7 @@
 
 ## Docker 部署
 
-需要 Docker Engine 和 Docker Compose。下载仓库的 [compose.yaml](https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml)，在独立部署目录执行：
+需要 Docker Engine 和 Docker Compose。下载仓库的 [compose.yaml](https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml)，在独立部署目录、使用空的 `data` 目录执行：
 
 ```sh
 curl -fL https://raw.githubusercontent.com/ZeonXr/oci-dash/main/compose.yaml -o compose.yaml
@@ -27,9 +27,9 @@ docker compose up -d --wait
 
 默认端口仅绑定 `127.0.0.1`。远程部署时，先通过 SSH 隧道完成管理员初始化，再配置 HTTPS 反向代理，见[访问说明](docs/OPERATIONS.md#https-与访问)。
 
-数据库和自动生成的 `.master-key` 保存在 Compose 同目录的 `./data`，完整备份时应包含整个目录。备份、恢复和升级步骤见[运维说明](docs/OPERATIONS.md)。
+数据库和自动生成的 `.master-key` 保存在 Compose 同目录的 `./data`，完整备份时应包含整个目录。数据库初始化随应用启动完成，无需额外数据库服务或初始化命令。备份、恢复和镜像更新步骤见[运维说明](docs/OPERATIONS.md)。
 
-更新镜像需执行以下命令，正在运行的容器不会自动升级：
+更新镜像前核对对应版本的部署要求，再执行以下命令；正在运行的容器不会自动更新：
 
 ```sh
 docker compose pull
@@ -61,7 +61,7 @@ volumes:
 
 | 文档                                 | 内容                         |
 | ------------------------------------ | ---------------------------- |
-| [运维说明](docs/OPERATIONS.md)       | 部署、HTTPS、备份恢复与升级  |
+| [运维说明](docs/OPERATIONS.md)       | 部署、HTTPS、备份恢复与更新  |
 | [架构与 API](docs/IMPLEMENTATION.md) | 模块职责、运行方式与接口契约 |
 | [统计说明](docs/ANALYTICS.md)        | 流量、费用与 CPU 的统计口径  |
 | [验证指南](docs/VERIFICATION.md)     | 测试方法、发布结果与验收边界 |

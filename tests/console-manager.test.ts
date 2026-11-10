@@ -14,6 +14,7 @@ import type {
   ConsoleTunnel,
 } from "@/server/console/types";
 import { CloudError } from "@/server/oci/types";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const actor: ConsoleActor = { userId: "user-1", username: "admin", sessionHash: "login-hash-1" };
 const otherActor: ConsoleActor = { ...actor, sessionHash: "another-login" };
@@ -45,6 +46,7 @@ function deferred<T>() {
 
 function fixture(limits: Partial<ConsoleLimits> = {}, db = new Database(":memory:")) {
   if (!handles.includes(db)) handles.push(db);
+  initializeTestDatabase(db);
   const store = createConsoleStore(db);
   const closed = deferred<void>();
   const stream = new PassThrough();

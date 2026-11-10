@@ -7,6 +7,7 @@ import type { ExecutionContext } from "@/server/oci/types";
 import { CloudError } from "@/server/oci/types";
 import { createJobStore } from "@/server/jobs/store";
 import { runWorker, type WorkerDependencies } from "@/server/jobs/worker";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const handles: Database.Database[] = [];
 const directories: { directory: string; base: string }[] = [];
@@ -43,6 +44,7 @@ function fixture() {
     const db = new Database(path);
     db.pragma("journal_mode=WAL");
     handles.push(db);
+    initializeTestDatabase(db);
     return {
       db,
       store: createJobStore({ db, getAccount: () => accountState, now: () => new Date(time) }),

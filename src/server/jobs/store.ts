@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { DrizzleQueryError } from "drizzle-orm";
+import { safeMessage } from "../errors";
 import { canResumeJob, isJobCancellable, isJobRetryable } from "@/lib/job-state";
 import type {
   AccountSummary,
@@ -91,7 +93,12 @@ function jsonValue(value: unknown, redact: boolean, depth = 0): unknown {
   throw new JobError("Job data must contain JSON values only.", "INVALID_JOB_DATA");
 }
 export function safeErrorMessage(error: unknown, secrets: string[] = []): string {
-  let message = error instanceof Error ? error.message : "The operation could not be completed.";
+  let message =
+    error instanceof DrizzleQueryError
+      ? safeMessage(error)
+      : error instanceof Error
+        ? error.message
+        : "The operation could not be completed.";
   message = message.replace(PRIVATE_KEY, "[REDACTED PRIVATE KEY]");
   for (const secret of secrets)
     if (secret.length > 8) message = message.split(secret).join("[REDACTED]");
@@ -201,87 +208,6 @@ function resourceKeys(operation: OperationRequest): string[] {
   }
   return [...new Set(keys)].sort();
 }
-export function ensureJobSchema(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS jobs (
-      id TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
-      region TEXT NOT NULL, resource_id TEXT, resource_lock TEXT NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('queued','running','retrying','succeeded','failed','cancel_requested','cancelled','interrupted')),
-      attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 4,
-      created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, next_run_at TEXT, last_error TEXT,
-      result_json TEXT, operation_json TEXT NOT NULL, requested_by TEXT NOT NULL,
-      idempotency_key TEXT, payload_hash TEXT NOT NULL, checkpoints_json TEXT NOT NULL DEFAULT '{}',
-      lease_owner TEXT, lease_expires_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
-      needs_reconcile INTEGER NOT NULL DEFAULT 0,
-      background INTEGER NOT NULL DEFAULT 0 CHECK(background IN (0,1))
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs(account_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS jobs_due ON jobs(state,next_run_at,created_at);
-    CREATE INDEX IF NOT EXISTS jobs_account_sync ON jobs(account_id,kind,created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_resource ON jobs(resource_lock) WHERE state IN ('running','cancel_requested');
-    CREATE INDEX IF NOT EXISTS jobs_active_kind_account ON jobs(kind,account_id) WHERE state IN ('running','cancel_requested');
-    CREATE TABLE IF NOT EXISTS job_resources (
-      job_id TEXT NOT NULL REFERENCES jobs(id), resource_key TEXT NOT NULL, PRIMARY KEY(job_id,resource_key)
-    );
-    CREATE INDEX IF NOT EXISTS job_resources_resource ON job_resources(resource_key,job_id);
-    CREATE TABLE IF NOT EXISTS job_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES jobs(id),
-      level TEXT NOT NULL, message TEXT NOT NULL, detail_json TEXT, created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS job_events_job ON job_events(job_id,id);
-    CREATE TABLE IF NOT EXISTS job_workers (
-      id TEXT PRIMARY KEY, started_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL,
-      lease_seconds INTEGER NOT NULL, stopped_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS inventory_refresh_state (
-      account_id TEXT PRIMARY KEY,
-      failure_count INTEGER NOT NULL DEFAULT 0,
-      last_failure_at TEXT,
-      retry_after TEXT,
-      manual_requested_at TEXT,
-      manual_job_id TEXT
-    );
-  `);
-  // Column checks retain compatibility with old databases. Resource-lock backfill
-  // runs once per database, under the same cross-process migration transaction.
-  db.transaction(() => {
-    const columns = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
-    if (!columns.some((column) => column.name === "background"))
-      db.exec(
-        "ALTER TABLE jobs ADD COLUMN background INTEGER NOT NULL DEFAULT 0 CHECK(background IN (0,1))",
-      );
-    if (!columns.some((column) => column.name === "waiting_for_completion"))
-      db.exec("ALTER TABLE jobs ADD COLUMN waiting_for_completion INTEGER NOT NULL DEFAULT 0");
-    if (!columns.some((column) => column.name === "completion_deadline_at"))
-      db.exec("ALTER TABLE jobs ADD COLUMN completion_deadline_at TEXT");
-    db.exec(
-      "CREATE INDEX IF NOT EXISTS jobs_background_history ON jobs(account_id,background,finished_at)",
-    );
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS jobs_manual_history
-        ON jobs(created_at DESC,id DESC) WHERE background=0;
-      CREATE INDEX IF NOT EXISTS jobs_manual_resource_history
-        ON jobs(account_id,resource_id,created_at DESC,id DESC) WHERE background=0;
-    `);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=3").get()) {
-      const insert = db.prepare(
-        "INSERT OR IGNORE INTO job_resources(job_id,resource_key) VALUES(?,?)",
-      );
-      for (const job of db.prepare("SELECT id,operation_json FROM jobs").all() as {
-        id: string;
-        operation_json: string;
-      }[]) {
-        for (const key of resourceKeys(JSON.parse(job.operation_json) as OperationRequest))
-          insert.run(job.id, key);
-      }
-      db.prepare("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?)").run(
-        new Date().toISOString(),
-      );
-    }
-  }).immediate();
-}
-
 export function createJobStore({
   db,
   getAccount,
@@ -290,7 +216,6 @@ export function createJobStore({
 }: JobStoreOptions) {
   if (!Number.isFinite(completionTimeoutMs) || completionTimeoutMs <= 0)
     throw new JobError("The completion timeout must be finite and positive.", "INVALID_TIMEOUT");
-  ensureJobSchema(db);
   if (!queryFunctions.has(db)) {
     // Keep the previous JavaScript includes semantics, including Unicode case
     // folding and literal %/_ characters, while filtering before pagination.

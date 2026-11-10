@@ -180,15 +180,6 @@ describe("atomic account save and background connection", () => {
     }
   });
 
-  it("keeps legacy names custom when migrating a database without name sources", () => {
-    const account = createAccount(input({ name: "oci_api_key" }), USERNAME);
-    getDatabase().exec("ALTER TABLE accounts DROP COLUMN name_source");
-    closeDatabase();
-    expect(getAccount(account.id)).toMatchObject({ name: "oci_api_key", nameSource: "custom" });
-    expect(setAccountTenancyName(account.id, "Cloud tenant", 0)).toBe(false);
-    expect(getAccount(account.id)?.name).toBe("oci_api_key");
-  });
-
   it("resets a legacy name explicitly, preserves it until verification, and reuses the queued lookup", async () => {
     const account = createAccount(input({ name: "oci_api_key" }), USERNAME);
     getDatabase()

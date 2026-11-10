@@ -1,8 +1,10 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import * as OTPAuth from "otpauth";
 import QRCode from "qrcode";
+import { and, eq, gt, lt, lte, ne, sql } from "drizzle-orm";
 import type { SessionUser } from "@/lib/contracts";
-import { getDatabase, audit } from "./db";
+import { getDatabase, getOrm, audit } from "./db";
+import { loginAttempts, sessions, users } from "./database/schema";
 import { decryptSecret, encryptSecret, hashPassword, hashToken, verifyPassword } from "./crypto";
 import { AppError } from "./errors";
 import { assertRequestOrigin } from "./request-origin";
@@ -15,21 +17,11 @@ import {
 
 export const SESSION_COOKIE = "oci_dash_session";
 const SESSION_SECONDS = 12 * 60 * 60;
-interface UserRow {
-  id: string;
-  username: string;
-  password_hash: string;
-  mfa_secret: string | null;
-  mfa_pending: string | null;
-  mfa_pending_expires: string | null;
-  recovery_codes: string;
-  last_otp_step: number;
-}
+type UserRow = typeof users.$inferSelect;
 const dummyPassword = `scrypt$${"0".repeat(32)}$${"0".repeat(128)}`;
 
 function userRow(id: string): UserRow {
-  const row = getDatabase().prepare("SELECT * FROM users WHERE id=?").get(id) as
-    UserRow | undefined;
+  const row = getOrm().select().from(users).where(eq(users.id, id)).get();
   if (!row) throw new AppError("请重新登录", 401, "UNAUTHORIZED");
   return row;
 }
@@ -53,44 +45,71 @@ export function sessionCookie(token: string, request: Request, remove = false): 
 export function requireUser(request: Request): SessionUser {
   const token = cookieToken(request);
   if (!token) throw new AppError("请先登录", 401, "UNAUTHORIZED");
-  const row = getDatabase()
-    .prepare(
-      "SELECT u.id,u.username,u.mfa_secret FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?",
+  const row = getOrm()
+    .select({ id: users.id, username: users.username, mfaSecret: users.mfaSecret })
+    .from(sessions)
+    .innerJoin(users, eq(sessions.userId, users.id))
+    .where(
+      and(
+        eq(sessions.tokenHash, hashToken(token)),
+        gt(sessions.expiresAt, new Date().toISOString()),
+      ),
     )
-    .get(hashToken(token), new Date().toISOString()) as
-    Pick<UserRow, "id" | "username" | "mfa_secret"> | undefined;
+    .get();
   if (!row) throw new AppError("登录已过期，请重新登录", 401, "UNAUTHORIZED");
-  return { id: row.id, username: row.username, mfaEnabled: !!row.mfa_secret };
+  return { id: row.id, username: row.username, mfaEnabled: !!row.mfaSecret };
 }
 export function assertSameOrigin(request: Request): void {
   assertRequestOrigin(request);
 }
 function limitLogin(subject: string): void {
   const db = getDatabase(),
+    orm = getOrm(),
     now = Date.now(),
     windowMs = 15 * 60 * 1000;
   db.transaction(() => {
-    db.prepare("DELETE FROM login_attempts WHERE window_start<=?").run(now - windowMs);
-    const global = db
-      .prepare("SELECT count,window_start FROM login_attempts WHERE subject='global'")
-      .get() as { count: number; window_start: number } | undefined;
-    if (global && now - global.window_start < 60000 && global.count >= 40)
+    orm
+      .delete(loginAttempts)
+      .where(lte(loginAttempts.windowStart, now - windowMs))
+      .run();
+    const global = orm
+      .select()
+      .from(loginAttempts)
+      .where(eq(loginAttempts.subject, "global"))
+      .get();
+    if (global && now - global.windowStart < 60000 && global.count >= 40)
       throw new AppError("登录请求较多，请一分钟后重试", 429, "LOGIN_RATE_LIMIT");
-    if (!global || now - global.window_start >= 60000)
-      db.prepare(
-        "INSERT INTO login_attempts(subject,count,window_start) VALUES('global',1,?) ON CONFLICT(subject) DO UPDATE SET count=1,window_start=excluded.window_start",
-      ).run(now);
-    else db.prepare("UPDATE login_attempts SET count=count+1 WHERE subject='global'").run();
-    const current = db
-      .prepare("SELECT count,window_start FROM login_attempts WHERE subject=?")
-      .get(subject) as { count: number; window_start: number } | undefined;
-    if (current && now - current.window_start < windowMs && current.count >= 10)
+    if (!global || now - global.windowStart >= 60000)
+      orm
+        .insert(loginAttempts)
+        .values({ subject: "global", count: 1, windowStart: now })
+        .onConflictDoUpdate({ target: loginAttempts.subject, set: { count: 1, windowStart: now } })
+        .run();
+    else
+      orm
+        .update(loginAttempts)
+        .set({ count: sql`${loginAttempts.count} + 1` })
+        .where(eq(loginAttempts.subject, "global"))
+        .run();
+    const current = orm
+      .select()
+      .from(loginAttempts)
+      .where(eq(loginAttempts.subject, subject))
+      .get();
+    if (current && now - current.windowStart < windowMs && current.count >= 10)
       throw new AppError("尝试次数过多，请 15 分钟后重试", 429, "LOGIN_RATE_LIMIT");
-    if (!current || now - current.window_start >= windowMs)
-      db.prepare(
-        "INSERT INTO login_attempts(subject,count,window_start) VALUES(?,1,?) ON CONFLICT(subject) DO UPDATE SET count=1,window_start=excluded.window_start",
-      ).run(subject, now);
-    else db.prepare("UPDATE login_attempts SET count=count+1 WHERE subject=?").run(subject);
+    if (!current || now - current.windowStart >= windowMs)
+      orm
+        .insert(loginAttempts)
+        .values({ subject, count: 1, windowStart: now })
+        .onConflictDoUpdate({ target: loginAttempts.subject, set: { count: 1, windowStart: now } })
+        .run();
+    else
+      orm
+        .update(loginAttempts)
+        .set({ count: sql`${loginAttempts.count} + 1` })
+        .where(eq(loginAttempts.subject, subject))
+        .run();
   }).immediate();
 }
 const totp = (secret: string, username: string) =>
@@ -103,32 +122,36 @@ const totp = (secret: string, username: string) =>
     secret: OTPAuth.Secret.fromBase32(secret),
   });
 function verifyFactor(row: UserRow, code: string): boolean {
-  if (!row.mfa_secret) return false;
+  if (!row.mfaSecret) return false;
   if (/^\d{6}$/.test(code)) {
-    const delta = totp(decryptSecret(row.mfa_secret), row.username).validate({
+    const delta = totp(decryptSecret(row.mfaSecret), row.username).validate({
       token: code,
       window: 1,
     });
     if (delta === null) return false;
     const step = Math.floor(Date.now() / 30000) + delta;
     return (
-      getDatabase()
-        .prepare("UPDATE users SET last_otp_step=? WHERE id=? AND last_otp_step<?")
-        .run(step, row.id, step).changes === 1
+      getOrm()
+        .update(users)
+        .set({ lastOtpStep: step })
+        .where(and(eq(users.id, row.id), lt(users.lastOtpStep, step)))
+        .run().changes === 1
     );
   }
   const normalized = code.replaceAll("-", "").toLowerCase();
   if (!/^[a-f0-9]{20}$/.test(normalized)) return false;
   const key = hashToken(normalized),
-    db = getDatabase();
+    db = getDatabase(),
+    orm = getOrm();
   return db.transaction(() => {
     const fresh = userRow(row.id),
-      codes = JSON.parse(fresh.recovery_codes) as string[];
+      codes = JSON.parse(fresh.recoveryCodes) as string[];
     if (!codes.includes(key)) return false;
-    db.prepare("UPDATE users SET recovery_codes=? WHERE id=?").run(
-      JSON.stringify(codes.filter((x) => x !== key)),
-      row.id,
-    );
+    orm
+      .update(users)
+      .set({ recoveryCodes: JSON.stringify(codes.filter((x) => x !== key)) })
+      .where(eq(users.id, row.id))
+      .run();
     return true;
   })();
 }
@@ -158,43 +181,50 @@ export function login(
   const subject = hashToken(username.toLowerCase());
   limitLogin(subject);
   const db = getDatabase(),
-    row = db.prepare("SELECT * FROM users WHERE username=?").get(username) as UserRow | undefined;
-  if (!verifyPassword(password, row?.password_hash ?? dummyPassword) || !row)
+    orm = getOrm(),
+    row = orm.select().from(users).where(eq(users.username, username)).get();
+  if (!verifyPassword(password, row?.passwordHash ?? dummyPassword) || !row)
     throw new AppError("账号或密码不正确", 401, "INVALID_CREDENTIALS");
-  if (row.mfa_secret && !code) throw new AppError("请输入动态验证码或恢复码", 401, "MFA_REQUIRED");
-  if (row.mfa_secret && !verifyFactor(row, code!))
+  if (row.mfaSecret && !code) throw new AppError("请输入动态验证码或恢复码", 401, "MFA_REQUIRED");
+  if (row.mfaSecret && !verifyFactor(row, code!))
     throw new AppError("验证码无效或已使用", 401, "INVALID_MFA");
   const token = randomBytes(32).toString("base64url"),
     now = new Date();
   db.transaction(() => {
-    db.prepare("DELETE FROM login_attempts WHERE subject=?").run(subject);
-    db.prepare("DELETE FROM sessions WHERE expires_at<=?").run(now.toISOString());
-    db.prepare(
-      "INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)",
-    ).run(
-      hashToken(token),
-      row.id,
-      new Date(now.getTime() + SESSION_SECONDS * 1000).toISOString(),
-      now.toISOString(),
-    );
+    orm.delete(loginAttempts).where(eq(loginAttempts.subject, subject)).run();
+    orm.delete(sessions).where(lte(sessions.expiresAt, now.toISOString())).run();
+    orm
+      .insert(sessions)
+      .values({
+        tokenHash: hashToken(token),
+        userId: row.id,
+        expiresAt: new Date(now.getTime() + SESSION_SECONDS * 1000).toISOString(),
+        createdAt: now.toISOString(),
+      })
+      .run();
   })();
   audit(row.username, "auth.login", "session", "登录成功");
-  return { token, user: { id: row.id, username: row.username, mfaEnabled: !!row.mfa_secret } };
+  return { token, user: { id: row.id, username: row.username, mfaEnabled: !!row.mfaSecret } };
 }
 export function logout(request: Request): void {
   const token = cookieToken(request);
-  if (token) getDatabase().prepare("DELETE FROM sessions WHERE token_hash=?").run(hashToken(token));
+  if (token)
+    getOrm()
+      .delete(sessions)
+      .where(eq(sessions.tokenHash, hashToken(token)))
+      .run();
 }
 export function changePassword(user: SessionUser, current: string, replacement: string): void {
   const row = userRow(user.id);
-  if (!verifyPassword(current, row.password_hash)) throw new AppError("当前密码不正确", 403);
+  if (!verifyPassword(current, row.passwordHash)) throw new AppError("当前密码不正确", 403);
   if (replacement.length < 12 || replacement.length > 256)
     throw new AppError("新密码需为 12–256 个字符");
   const hashed = hashPassword(replacement),
-    db = getDatabase();
+    db = getDatabase(),
+    orm = getOrm();
   db.transaction(() => {
-    db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(hashed, user.id);
-    db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
+    orm.update(users).set({ passwordHash: hashed }).where(eq(users.id, user.id)).run();
+    orm.delete(sessions).where(eq(sessions.userId, user.id)).run();
   })();
   if (!clearInitialAdminPassword(db.name))
     console.warn("Initial administrator password file cleanup failed.");
@@ -202,42 +232,50 @@ export function changePassword(user: SessionUser, current: string, replacement: 
 }
 export async function beginMfa(user: SessionUser, password: string) {
   const row = userRow(user.id);
-  if (!verifyPassword(password, row.password_hash)) throw new AppError("密码不正确", 403);
-  if (row.mfa_secret) throw new AppError("MFA 已启用", 409);
+  if (!verifyPassword(password, row.passwordHash)) throw new AppError("密码不正确", 403);
+  if (row.mfaSecret) throw new AppError("MFA 已启用", 409);
   const secret = new OTPAuth.Secret({ size: 20 }).base32,
     uri = totp(secret, user.username).toString();
-  getDatabase()
-    .prepare("UPDATE users SET mfa_pending=?,mfa_pending_expires=? WHERE id=?")
-    .run(encryptSecret(secret), new Date(Date.now() + 10 * 60 * 1000).toISOString(), user.id);
+  getOrm()
+    .update(users)
+    .set({
+      mfaPending: encryptSecret(secret),
+      mfaPendingExpires: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    })
+    .where(eq(users.id, user.id))
+    .run();
   return { secret, uri, qrDataUrl: await QRCode.toDataURL(uri, { width: 240, margin: 2 }) };
 }
 export function confirmMfa(user: SessionUser, code: string, keepSessionHash?: string): string[] {
   const row = userRow(user.id);
-  if (
-    !row.mfa_pending ||
-    !row.mfa_pending_expires ||
-    row.mfa_pending_expires < new Date().toISOString()
-  )
+  if (!row.mfaPending || !row.mfaPendingExpires || row.mfaPendingExpires < new Date().toISOString())
     throw new AppError("绑定请求已过期，请重新开始");
   if (
-    totp(decryptSecret(row.mfa_pending), user.username).validate({ token: code, window: 1 }) ===
-    null
+    totp(decryptSecret(row.mfaPending), user.username).validate({ token: code, window: 1 }) === null
   )
     throw new AppError("验证码不正确");
   const recoveryCodes = Array.from({ length: 10 }, () =>
     randomBytes(10).toString("hex").match(/.{4}/g)!.join("-"),
   );
+  const orm = getOrm();
   getDatabase().transaction(() => {
-    getDatabase()
-      .prepare(
-        "UPDATE users SET mfa_secret=mfa_pending,mfa_pending=NULL,mfa_pending_expires=NULL,recovery_codes=?,last_otp_step=-1 WHERE id=?",
-      )
-      .run(JSON.stringify(recoveryCodes.map((c) => hashToken(c.replaceAll("-", "")))), user.id);
+    orm
+      .update(users)
+      .set({
+        mfaSecret: users.mfaPending,
+        mfaPending: null,
+        mfaPendingExpires: null,
+        recoveryCodes: JSON.stringify(recoveryCodes.map((c) => hashToken(c.replaceAll("-", "")))),
+        lastOtpStep: -1,
+      })
+      .where(eq(users.id, user.id))
+      .run();
     if (keepSessionHash)
-      getDatabase()
-        .prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?")
-        .run(user.id, keepSessionHash);
-    else getDatabase().prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
+      orm
+        .delete(sessions)
+        .where(and(eq(sessions.userId, user.id), ne(sessions.tokenHash, keepSessionHash)))
+        .run();
+    else orm.delete(sessions).where(eq(sessions.userId, user.id)).run();
   })();
   audit(user.username, "auth.mfa-enable", "account", "MFA 绑定已验证并启用");
   return recoveryCodes;
@@ -249,21 +287,30 @@ export function disableMfa(
   keepSessionHash?: string,
 ): void {
   const db = getDatabase(),
+    orm = getOrm(),
     row = userRow(user.id);
-  if (!verifyPassword(password, row.password_hash)) throw new AppError("密码或验证码不正确", 403);
+  if (!verifyPassword(password, row.passwordHash)) throw new AppError("密码或验证码不正确", 403);
   db.transaction(() => {
     const current = userRow(user.id);
-    if (current.password_hash !== row.password_hash || !verifyFactor(current, code))
+    if (current.passwordHash !== row.passwordHash || !verifyFactor(current, code))
       throw new AppError("密码或验证码无效或已使用", 403);
-    db.prepare(
-      "UPDATE users SET mfa_secret=NULL,mfa_pending=NULL,mfa_pending_expires=NULL,recovery_codes='[]',last_otp_step=-1 WHERE id=?",
-    ).run(user.id);
+    orm
+      .update(users)
+      .set({
+        mfaSecret: null,
+        mfaPending: null,
+        mfaPendingExpires: null,
+        recoveryCodes: "[]",
+        lastOtpStep: -1,
+      })
+      .where(eq(users.id, user.id))
+      .run();
     if (keepSessionHash)
-      db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(
-        user.id,
-        keepSessionHash,
-      );
-    else db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
+      orm
+        .delete(sessions)
+        .where(and(eq(sessions.userId, user.id), ne(sessions.tokenHash, keepSessionHash)))
+        .run();
+    else orm.delete(sessions).where(eq(sessions.userId, user.id)).run();
   }).immediate();
   audit(user.username, "auth.mfa-disable", "account", "MFA 已关闭");
 }

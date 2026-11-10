@@ -10,6 +10,7 @@ import { getDatabase, closeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { handleApi } from "@/server/router";
 import { getJobStore } from "@/server/jobs";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const cloud = vi.hoisted(() => ({
   verify: vi.fn(),
@@ -56,6 +57,7 @@ function fixture() {
     db.pragma("journal_mode=WAL");
     db.pragma("foreign_keys=ON");
     db.pragma("busy_timeout=1000");
+    initializeTestDatabase(db);
     const store = createJobStore({
       db,
       getAccount: (id) => {
@@ -367,50 +369,6 @@ describe("transactional page-triggered inventory refresh", () => {
     });
   });
 
-  it("migrates existing user jobs without hiding or deleting their history", () => {
-    const db = new Database(join(directory(), "legacy-queue.sqlite"));
-    handles.push(db);
-    // Keep the old queue structure independent of today's indexes and migrations.
-    db.exec(`
-      CREATE TABLE jobs (
-        id TEXT PRIMARY KEY, kind TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT NOT NULL,
-        region TEXT NOT NULL, resource_id TEXT, resource_lock TEXT NOT NULL,
-        state TEXT NOT NULL CHECK(state IN ('queued','running','retrying','succeeded','failed','cancel_requested','cancelled','interrupted')),
-        attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 4,
-        created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, next_run_at TEXT, last_error TEXT,
-        result_json TEXT, operation_json TEXT NOT NULL, requested_by TEXT NOT NULL,
-        idempotency_key TEXT, payload_hash TEXT NOT NULL, checkpoints_json TEXT NOT NULL DEFAULT '{}',
-        lease_owner TEXT, lease_expires_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
-        needs_reconcile INTEGER NOT NULL DEFAULT 0
-      );
-    `);
-    const operation = {
-      kind: "sync-account",
-      accountId: "account-a",
-      region: "test-region",
-      payload: {},
-    };
-    db.prepare(
-      `
-      INSERT INTO jobs(id,kind,account_id,account_name,region,resource_lock,state,created_at,
-        finished_at,operation_json,requested_by,payload_hash,result_json,checkpoints_json)
-      VALUES('legacy-manual','sync-account','account-a','Account account-a','test-region',
-        'account-a:sync-account','succeeded','2026-01-01T00:00:00.000Z',
-        '2026-01-01T00:01:00.000Z',?,'admin','legacy-payload','{"warnings":[]}','{"saved":true}')
-    `,
-    ).run(JSON.stringify(operation));
-    const store = createJobStore({ db, getAccount: () => account() });
-    expect(store.listJobs()).toMatchObject([
-      { id: "legacy-manual", state: "succeeded", result: { warnings: [] } },
-    ]);
-    expect(db.prepare("SELECT background FROM jobs WHERE id='legacy-manual'").get()).toEqual({
-      background: 0,
-    });
-    expect(db.prepare("SELECT checkpoints_json FROM jobs WHERE id='legacy-manual'").get()).toEqual({
-      checkpoints_json: '{"saved":true}',
-    });
-  });
-
   it("does not schedule more work merely because time passes or the queue is opened again", () => {
     const f = fixture();
     const first = f.store.refreshInventory(["account-a"], "auto", "admin").jobs[0];
@@ -566,7 +524,7 @@ describe("inventory refresh API boundaries", () => {
     expect(refresh).toHaveBeenCalledWith(["account-a"], "manual", "admin");
   });
 
-  it("routes the legacy account sync through manual deduplication without repeating its audit event", async () => {
+  it("routes account sync through manual deduplication without repeating its audit event", async () => {
     const f = apiFixture();
     const first = await f.request("accounts/account-a/sync", "POST");
     const second = await f.request("accounts/account-a/sync", "POST");

@@ -6,6 +6,7 @@ import { runWorker } from "@/server/jobs/worker";
 import type { CloudDocument, OciClients } from "@/server/oci/sdk";
 import type { ExecutionContext, OciCredentials } from "@/server/oci/types";
 import type { AccountSummary, OperationRequest } from "@/lib/contracts";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const id = (kind: string) => `ocid1.${kind}.oc1..pendingtest`;
 const credentials: OciCredentials = {
@@ -85,6 +86,7 @@ describe("OCI accepted-operation polling", () => {
     });
     const db = new Database(":memory:");
     handles.push(db);
+    initializeTestDatabase(db);
     const store = createJobStore({ db, getAccount: () => account });
     const adapter = createOciAdapter({ clientFactory: () => cloud.value });
     const dependencies = {

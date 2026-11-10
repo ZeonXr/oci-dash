@@ -6,6 +6,7 @@ import { join, resolve, sep } from "node:path";
 import { createJobStore } from "@/server/jobs/store";
 import { checkRuntimeHealth } from "@/server/runtime/health";
 import type { RuntimeState } from "@/server/runtime/state";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const base = resolve(process.env.OCI_DASH_TEST_TMP || ".test-tmp");
 let directory: string;
@@ -22,6 +23,7 @@ beforeEach(async () => {
   const databasePath = join(directory, "test.db");
   database = new Database(databasePath);
   database.pragma("journal_mode = WAL");
+  initializeTestDatabase(database);
   store = createJobStore({ db: database, getAccount: () => null });
   state = {
     supervisorPid: process.pid,

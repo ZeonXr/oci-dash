@@ -1,7 +1,9 @@
 import { randomUUID, createPrivateKey, createPublicKey, createHash } from "node:crypto";
+import { and, eq, inArray, ne, notInArray } from "drizzle-orm";
 import type { AccountSummary } from "@/lib/contracts";
 import type { OciCredentials } from "./oci/types";
-import { getDatabase, audit } from "./db";
+import { getDatabase, getOrm, audit } from "./db";
+import { accounts, consoleSessions, jobs, resources } from "./database/schema";
 import { encryptSecret, decryptSecret } from "./crypto";
 import { AppError } from "./errors";
 
@@ -15,18 +17,14 @@ export interface AccountInput {
   privateKey: string;
 }
 export type AccountPatchInput = Partial<AccountInput> & { recoverConsoleCleanup?: boolean };
-type AccountRecord = AccountSummary & { credential: string; revision: number };
-type AccountRow = Omit<AccountRecord, "regions"> & { regions: string };
-const accountColumns = `id,name,name_source AS nameSource,tenancy_id AS tenancyId,user_id AS userId,fingerprint,
-  home_region AS homeRegion,regions,credential,status,last_sync_at AS lastSyncAt,
-  last_error AS lastError,created_at AS createdAt,revision`;
+type AccountRow = typeof accounts.$inferSelect;
+type AccountRecord = Omit<AccountRow, "regions"> & { regions: string[] };
 
 function readAccount(row: AccountRow): AccountRecord {
   return { ...row, regions: JSON.parse(row.regions) as string[] };
 }
 function storedAccount(id: string): AccountRecord | undefined {
-  const row = getDatabase().prepare(`SELECT ${accountColumns} FROM accounts WHERE id=?`).get(id) as
-    AccountRow | undefined;
+  const row = getOrm().select().from(accounts).where(eq(accounts.id, id)).get();
   return row && readAccount(row);
 }
 function publicAccount(row: AccountRecord): AccountSummary {
@@ -34,9 +32,7 @@ function publicAccount(row: AccountRecord): AccountSummary {
   return rest;
 }
 export function listAccounts(): AccountSummary[] {
-  return (getDatabase().prepare(`SELECT ${accountColumns} FROM accounts`).all() as AccountRow[])
-    .map(readAccount)
-    .map(publicAccount);
+  return getOrm().select().from(accounts).all().map(readAccount).map(publicAccount);
 }
 export function getAccount(id: string): AccountSummary | null {
   const row = storedAccount(id);
@@ -65,9 +61,11 @@ export function getCredentialSnapshot(
 export const getCredentials = (id: string, region?: string): OciCredentials =>
   getCredentialSnapshot(id, region).credentials;
 function assertUniqueTenancy(tenancyId: string, exceptId?: string): void {
-  const conflict = getDatabase()
-    .prepare("SELECT id,name FROM accounts WHERE tenancy_id=? AND id<>? LIMIT 1")
-    .get(tenancyId, exceptId ?? "") as { id: string; name: string } | undefined;
+  const conflict = getOrm()
+    .select({ id: accounts.id, name: accounts.name })
+    .from(accounts)
+    .where(and(eq(accounts.tenancyId, tenancyId), ne(accounts.id, exceptId ?? "")))
+    .get();
   if (conflict)
     throw new AppError(
       `此租户已配置在账号“${conflict.name}”中，请编辑该账号的区域或凭据，不要重复添加。`,
@@ -76,40 +74,46 @@ function assertUniqueTenancy(tenancyId: string, exceptId?: string): void {
     );
 }
 function assertAccountIdle(id: string): void {
-  const db = getDatabase();
   if (
-    db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='console_sessions'")
-      .get() &&
-    db.prepare("SELECT id FROM console_sessions WHERE account_id=? AND slot=1").get(id)
+    getOrm()
+      .select({ id: consoleSessions.id })
+      .from(consoleSessions)
+      .where(and(eq(consoleSessions.accountId, id), eq(consoleSessions.slot, 1)))
+      .get()
   )
     throw new AppError("账号仍有控制台会话或清理任务，请先断开并等待清理完成", 409, "ACCOUNT_BUSY");
   assertAccountTasksIdle(id);
 }
 function assertAccountTasksIdle(id: string): void {
-  const db = getDatabase();
-  if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").get())
-    return;
   if (
-    db
-      .prepare(
-        "SELECT id FROM jobs WHERE account_id=? AND state IN ('queued','running','retrying','cancel_requested','interrupted') LIMIT 1",
+    getOrm()
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.accountId, id),
+          inArray(jobs.state, ["queued", "running", "retrying", "cancel_requested", "interrupted"]),
+        ),
       )
-      .get(id)
+      .get()
   )
     throw new AppError("账号仍有未结束的任务，请先取消或等待任务结束", 409, "ACCOUNT_BUSY");
 }
 function assertConsoleCredentialRecovery(id: string): void {
   assertAccountTasksIdle(id);
-  const db = getDatabase();
-  const columns = db.prepare("PRAGMA table_info(console_sessions)").all() as { name: string }[];
-  const ready =
-    columns.some((column) => column.name === "credential_recovery_ready") &&
-    db
-      .prepare(
-        "SELECT id FROM console_sessions WHERE account_id=? AND slot=1 AND state='failed' AND cleanup_pending=1 AND credential_recovery_ready=1",
-      )
-      .get(id);
+  const ready = getOrm()
+    .select({ id: consoleSessions.id })
+    .from(consoleSessions)
+    .where(
+      and(
+        eq(consoleSessions.accountId, id),
+        eq(consoleSessions.slot, 1),
+        eq(consoleSessions.state, "failed"),
+        eq(consoleSessions.cleanupPending, 1),
+        eq(consoleSessions.credentialRecoveryReady, 1),
+      ),
+    )
+    .get();
   if (!ready)
     throw new AppError(
       "请先断开控制台，并等待当前清理请求结束后再恢复凭据；此操作仅适用于清理失败的会话",
@@ -144,13 +148,9 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
   return getDatabase()
     .transaction(() => {
       assertUniqueTenancy(input.tenancyId);
-      getDatabase()
-        .prepare(
-          `INSERT INTO accounts
-          (id,name,name_source,tenancy_id,user_id,fingerprint,home_region,regions,credential,status,created_at)
-          VALUES(@id,@name,@nameSource,@tenancyId,@userId,@fingerprint,@homeRegion,@regions,@credential,@status,@createdAt)`,
-        )
-        .run({
+      getOrm()
+        .insert(accounts)
+        .values({
           id,
           name,
           nameSource: customName ? "custom" : "pending",
@@ -162,7 +162,8 @@ export function createAccount(input: AccountInput, actor: string): AccountSummar
           credential: encryptSecret(input.privateKey.trim()),
           status: "unchecked",
           createdAt,
-        });
+        })
+        .run();
       audit(actor, "account.create", name, "账号配置已保存");
       return getAccount(id)!;
     })
@@ -246,28 +247,25 @@ export function updateAccount(id: string, input: AccountPatchInput, actor: strin
         changes.revision = existing.revision + 1;
       }
       const next = { ...current, ...changes };
-      getDatabase()
-        .prepare(
-          `UPDATE accounts SET name=@name,name_source=@nameSource,tenancy_id=@tenancyId,user_id=@userId,
-          fingerprint=@fingerprint,home_region=@homeRegion,regions=@regions,credential=@credential,
-          status=@status,last_sync_at=@lastSyncAt,last_error=@lastError,revision=@revision WHERE id=@id`,
-        )
-        .run({ ...next, regions: JSON.stringify(next.regions) });
+      getOrm()
+        .update(accounts)
+        .set({ ...changes, regions: JSON.stringify(next.regions) })
+        .where(eq(accounts.id, id))
+        .run();
       if (next.name !== current.name) updateJobAccountNames(id, next.name);
       if (recovering)
-        getDatabase()
-          .prepare(
-            "UPDATE console_sessions SET credential_recovery_ready=0 WHERE account_id=? AND slot=1",
-          )
-          .run(id);
+        getOrm()
+          .update(consoleSessions)
+          .set({ credentialRecoveryReady: 0 })
+          .where(and(eq(consoleSessions.accountId, id), eq(consoleSessions.slot, 1)))
+          .run();
       else if (credentialChanged)
-        getDatabase().prepare("DELETE FROM resources WHERE account_id=?").run(id);
+        getOrm().delete(resources).where(eq(resources.accountId, id)).run();
       else if (scopeChanged)
-        getDatabase()
-          .prepare(
-            `DELETE FROM resources WHERE account_id=? AND region NOT IN (${regions.map(() => "?").join(",")})`,
-          )
-          .run(id, ...regions);
+        getOrm()
+          .delete(resources)
+          .where(and(eq(resources.accountId, id), notInArray(resources.region, regions)))
+          .run();
     })
     .immediate();
   audit(
@@ -284,7 +282,7 @@ export function deleteAccount(id: string, actor: string): void {
   const db = getDatabase();
   db.transaction(() => {
     assertAccountIdle(id);
-    db.prepare("DELETE FROM accounts WHERE id=?").run(id);
+    getOrm().delete(accounts).where(eq(accounts.id, id)).run();
   }).immediate();
   audit(actor, "account.delete", account.name, "已移除本地配置，云资源未删除");
 }
@@ -295,16 +293,16 @@ export function setAccountStatus(
   expectedRevision: number,
 ): boolean {
   return (
-    getDatabase()
-      .prepare("UPDATE accounts SET status=?,last_error=? WHERE id=? AND revision=?")
-      .run(status, error, id, expectedRevision).changes === 1
+    getOrm()
+      .update(accounts)
+      .set({ status, lastError: error })
+      .where(and(eq(accounts.id, id), eq(accounts.revision, expectedRevision)))
+      .run().changes === 1
   );
 }
 
 function updateJobAccountNames(id: string, name: string): void {
-  const db = getDatabase();
-  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").get())
-    db.prepare("UPDATE jobs SET account_name=? WHERE account_id=?").run(name, id);
+  getOrm().update(jobs).set({ accountName: name }).where(eq(jobs.accountId, id)).run();
 }
 
 /** Apply verified OCI identity only while automatic naming and credentials are still current. */
@@ -320,11 +318,17 @@ export function setAccountTenancyName(
   return db
     .transaction(() => {
       const updated =
-        db
-          .prepare(
-            "UPDATE accounts SET name=?,name_source='tenancy' WHERE id=? AND revision=? AND name_source IN ('pending','tenancy')",
+        getOrm()
+          .update(accounts)
+          .set({ name, nameSource: "tenancy" })
+          .where(
+            and(
+              eq(accounts.id, id),
+              eq(accounts.revision, expectedRevision),
+              inArray(accounts.nameSource, ["pending", "tenancy"]),
+            ),
           )
-          .run(name, id, expectedRevision).changes === 1;
+          .run().changes === 1;
       if (updated) updateJobAccountNames(id, name);
       return updated;
     })
