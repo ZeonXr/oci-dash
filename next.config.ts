@@ -4,6 +4,7 @@ const config: NextConfig = {
   output: "standalone",
   serverExternalPackages: [
     "better-sqlite3",
+    "drizzle-orm",
     "oci-common",
     "oci-core",
     "oci-identity",
