@@ -77,6 +77,14 @@ npm run test:e2e:isolated -- --no-build
 
 结果对应指定源码和执行环境。完整日志以链接的 GitHub Actions 为准，历史通过数不代表后续提交或任意 OCI 环境都已通过。
 
+### v0.6.0 发布验收
+
+**2026-11-10**，源码 [`dd165a5`](https://github.com/ZeonXr/oci-dash/commit/dd165a5bc3bc8169671114819ab6bdd0aec285f3) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/42829228405) 和[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42829228863) 均通过。Linux 检查覆盖 736 项单元测试、118 项浏览器检查、5 项容器生命周期和 4 项备份恢复检查。Windows 本地结果为 730 项单元测试通过、6 项按平台跳过，118 项浏览器检查通过。
+
+AMD64、ARM64 原生镜像各通过 5 项运行时检查，公开匿名部署验收通过，推广日志确认 `promoted: true`。Release 正文与[版本说明](releases/v0.6.0.md) 一致；240 字节的 Compose 附件固定引用本版本，SHA-256 为 `40cb6b142237f26642526a1159800bdd8a40afe95aefa0c6493eddfeff5c837d`，与发布源码生成的内容一致。
+
+检查使用全新数据库、合成密钥及隔离容器，覆盖 Drizzle 初始化、共享事务、失败回滚和重新打开数据库。未验证或提供接入 Drizzle 之前数据库的升级转换。
+
 ### v0.5.8 发布验收
 
 变更与升级要求见[版本说明](releases/v0.5.8.md)。默认容器改为 root 运行，Compose 使用 Docker 默认权限，首次部署无需预先设置数据目录属主；备份工具兼容原普通用户与 root 所有的数据。
