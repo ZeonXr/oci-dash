@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
   existsSync,
@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeMasterKey, readMasterKey } from "@/server/master-key";
 import { decryptSecret, encryptSecret } from "@/server/crypto";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const base = resolve(".test-tmp");
 const bindingName = "encryption.master-key.sha256";
@@ -23,11 +24,6 @@ let directory: string;
 let path: string;
 let keyFile: string;
 let db: Database.Database;
-const schema = `
-  CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE accounts (credential TEXT NOT NULL);
-  CREATE TABLE users (mfa_secret TEXT, mfa_pending TEXT);
-`;
 const keyA = Buffer.alloc(32, 61);
 const keyB = Buffer.alloc(32, 62);
 const digest = (key: Buffer) => createHash("sha256").update(key).digest("hex");
@@ -47,6 +43,17 @@ function envelope(key: Buffer, value = "synthetic-test-secret"): string {
     cipher.getAuthTag().toString("base64url"),
     bytes.toString("base64url"),
   ].join(".");
+}
+function insertCredential(value: string): void {
+  db.prepare(
+    "INSERT INTO accounts(id,name,tenancy_id,user_id,fingerprint,home_region,regions,credential,created_at) VALUES(?,'Fixture','tenancy','user','fingerprint','region','[]',?,'2026-01-01')",
+  ).run(randomUUID(), value);
+}
+function insertMfa(secret: string | null, pending: string | null): void {
+  const id = randomUUID();
+  db.prepare(
+    "INSERT INTO users(id,username,password_hash,created_at,mfa_secret,mfa_pending) VALUES(?,?,'fixture-only','2026-01-01',?,?)",
+  ).run(id, id, secret, pending);
 }
 function binding(): string | undefined {
   return (
@@ -68,7 +75,7 @@ beforeEach(() => {
   vi.stubEnv("DATABASE_PATH", path);
   vi.stubEnv("MASTER_KEY", "");
   db = open();
-  db.exec(schema);
+  initializeTestDatabase(db);
 });
 afterEach(() => {
   handles.splice(0).forEach((handle) => {
@@ -88,7 +95,7 @@ describe("persistent master key initialization", () => {
     expect(binding()).toBe(`sha256:${digest(key)}`);
     if (process.platform !== "win32") expect(statSync(keyFile).mode & 0o777).toBe(0o600);
     const encrypted = encryptSecret("new-install-secret");
-    db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(encrypted);
+    insertCredential(encrypted);
     db.close();
     db = open();
     initializeMasterKey(db, path);
@@ -100,8 +107,8 @@ describe("persistent master key initialization", () => {
   it("persists a legacy environment key only after verifying credentials and both MFA columns", () => {
     vi.stubEnv("MASTER_KEY", keyA.toString("base64"));
     const encrypted = envelope(keyA);
-    db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(encrypted);
-    db.prepare("INSERT INTO users(mfa_secret,mfa_pending) VALUES(?,?)").run(encrypted, encrypted);
+    insertCredential(encrypted);
+    insertMfa(encrypted, encrypted);
     initializeMasterKey(db, path);
     expect(readFileSync(keyFile).equals(keyA)).toBe(true);
     expect(binding()).toBe(`sha256:${digest(keyA)}`);
@@ -112,7 +119,7 @@ describe("persistent master key initialization", () => {
 
   it("binds an existing valid legacy key file without replacing it", () => {
     writeFileSync(keyFile, keyA);
-    db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(envelope(keyA));
+    insertCredential(envelope(keyA));
     initializeMasterKey(db, path);
     expect(readFileSync(keyFile).equals(keyA)).toBe(true);
     expect(binding()).toBe(`sha256:${digest(keyA)}`);
@@ -121,12 +128,12 @@ describe("persistent master key initialization", () => {
   it.each(["account", "mfa", "pending-mfa"])(
     "refuses to generate a replacement when %s data exists",
     (kind) => {
-      if (kind === "account")
-        db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(envelope(keyA));
+      if (kind === "account") insertCredential(envelope(keyA));
       else
-        db.prepare(
-          `INSERT INTO users(${kind === "mfa" ? "mfa_secret" : "mfa_pending"}) VALUES(?)`,
-        ).run(envelope(keyA));
+        insertMfa(
+          kind === "mfa" ? envelope(keyA) : null,
+          kind === "pending-mfa" ? envelope(keyA) : null,
+        );
       expect(() => initializeMasterKey(db, path)).toThrow(/original encryption key is missing/);
       expect(existsSync(keyFile)).toBe(false);
       expect(binding()).toBeUndefined();
@@ -137,12 +144,12 @@ describe("persistent master key initialization", () => {
     "refuses an environment key that cannot decrypt existing %s",
     (kind) => {
       vi.stubEnv("MASTER_KEY", keyB.toString("base64"));
-      if (kind === "account")
-        db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(envelope(keyA));
+      if (kind === "account") insertCredential(envelope(keyA));
       else
-        db.prepare(
-          `INSERT INTO users(${kind === "mfa" ? "mfa_secret" : "mfa_pending"}) VALUES(?)`,
-        ).run(envelope(keyA));
+        insertMfa(
+          kind === "mfa" ? envelope(keyA) : null,
+          kind === "pending-mfa" ? envelope(keyA) : null,
+        );
       expect(() => initializeMasterKey(db, path)).toThrow(/cannot decrypt existing/);
       expect(existsSync(keyFile)).toBe(false);
       expect(binding()).toBeUndefined();
@@ -151,10 +158,8 @@ describe("persistent master key initialization", () => {
 
   it("verifies every encrypted record before publishing a legacy key", () => {
     vi.stubEnv("MASTER_KEY", keyA.toString("base64"));
-    db.prepare("INSERT INTO accounts(credential) VALUES(?),(?)").run(
-      envelope(keyA),
-      envelope(keyB),
-    );
+    insertCredential(envelope(keyA));
+    insertCredential(envelope(keyB));
     expect(() => initializeMasterKey(db, path)).toThrow(/cannot decrypt existing/);
     expect(existsSync(keyFile)).toBe(false);
     expect(binding()).toBeUndefined();
@@ -191,7 +196,7 @@ describe("persistent master key initialization", () => {
   it("does not overwrite a corrupted key file even when a valid environment key is available", () => {
     writeFileSync(keyFile, Buffer.alloc(4, 99));
     vi.stubEnv("MASTER_KEY", keyA.toString("base64"));
-    db.prepare("INSERT INTO accounts(credential) VALUES(?)").run(envelope(keyA));
+    insertCredential(envelope(keyA));
     expect(() => initializeMasterKey(db, path)).toThrow(/Invalid stored encryption key/);
     expect(readFileSync(keyFile).length).toBe(4);
     expect(binding()).toBeUndefined();
@@ -233,7 +238,7 @@ describe("persistent master key initialization", () => {
     "publishes a complete single key across concurrent processes (shared DB: %s)",
     async (sharedDb) => {
       const secondPath = sharedDb ? path : join(directory, "second.db");
-      if (!sharedDb) open(secondPath).exec(schema);
+      if (!sharedDb) initializeTestDatabase(open(secondPath));
       const child = (databasePath: string) =>
         new Promise<string>((accept, reject) => {
           execFile(

@@ -19,18 +19,12 @@ import {
   initialAdminState,
 } from "@/server/initial-admin";
 import { hashPassword, hashToken, verifyPassword } from "@/server/crypto";
+import { initializeTestDatabase } from "./fixtures/database";
 
 const base = resolve(process.env.OCI_DASH_TEST_TMP || ".test-tmp");
 const handles: Database.Database[] = [];
 const PASSWORD = "first-setup-test-password";
 let directory: string, path: string, passwordFile: string, db: Database.Database;
-const schema = `
-CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,created_at TEXT NOT NULL);
-CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-CREATE TABLE accounts (id TEXT PRIMARY KEY);
-CREATE TABLE sessions (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at TEXT NOT NULL,created_at TEXT NOT NULL);
-CREATE TABLE audit_events (id INTEGER PRIMARY KEY,actor TEXT,action TEXT,resource TEXT,result TEXT,created_at TEXT);
-`;
 interface User {
   id: string;
   username: string;
@@ -57,7 +51,7 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_PASSWORD", undefined);
   vi.stubEnv("ADMIN_USERNAME", undefined);
   db = open();
-  db.exec(schema);
+  initializeTestDatabase(db);
 });
 afterEach(() => {
   handles.splice(0).forEach((handle) => {
@@ -108,7 +102,7 @@ describe("administrator setup state", () => {
     },
   );
   it("backfills the marker for old users without resetting credentials or applying invalid environment values", () => {
-    db.prepare("INSERT INTO users VALUES(?,?,?,?)").run(
+    db.prepare("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)").run(
       "existing",
       "old-owner",
       hashPassword(PASSWORD),
@@ -138,7 +132,9 @@ describe("administrator setup state", () => {
     );
   });
   it("refuses to claim an old database containing cloud accounts but no administrator", () => {
-    db.prepare("INSERT INTO accounts VALUES(?)").run("synthetic-existing-account");
+    db.prepare(
+      "INSERT INTO accounts(id,name,tenancy_id,user_id,fingerprint,home_region,regions,credential,created_at) VALUES(?,'Fixture','tenancy','user','fingerprint','region','[]','fixture-only','2026-01-01')",
+    ).run("synthetic-existing-account");
     vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
     ensureInitialAdmin(db);
     expect(initialAdminState(db)).toBe("unavailable");

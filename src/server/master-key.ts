@@ -19,6 +19,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { eq, isNotNull } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/sqlite-core";
+import { ormFor } from "./database/client.ts";
+import { accounts, settings, users } from "./database/schema.ts";
 
 const bindingName = "encryption.master-key.sha256";
 const initialized = new Map<string, string>();
@@ -136,37 +140,44 @@ export function initializeMasterKey(db: Database.Database, databasePath: string)
   const absolutePath = resolve(/* turbopackIgnore: true */ databasePath);
   const path = keyPath(absolutePath);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const orm = ormFor(db);
   let resolvedFingerprint: string | undefined;
   db.transaction(() => {
     const configured = environmentKey();
     const stored = storedKey(path);
-    const row = db.prepare("SELECT value FROM settings WHERE key=?").get(bindingName) as
-      { value: string } | undefined;
+    const row = orm
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, bindingName))
+      .get();
     const binding = row?.value;
     if (binding !== undefined && !/^sha256:[a-f0-9]{64}$/.test(binding))
       throw new Error("Invalid database encryption key binding; restore a consistent backup");
-    const secrets = db.prepare(
-      "SELECT credential AS value FROM accounts UNION ALL SELECT mfa_secret AS value FROM users WHERE mfa_secret IS NOT NULL UNION ALL SELECT mfa_pending AS value FROM users WHERE mfa_pending IS NOT NULL",
-    );
-    const hasSecrets = secrets.get() !== undefined;
+    const secrets = unionAll(
+      orm.select({ value: users.mfaSecret }).from(users).where(isNotNull(users.mfaSecret)),
+      orm.select({ value: accounts.credential }).from(accounts),
+      orm.select({ value: users.mfaPending }).from(users).where(isNotNull(users.mfaPending)),
+    ).all();
+    const hasSecrets = secrets.length > 0;
     if (!stored && !configured && (hasSecrets || binding !== undefined))
       throw new Error(
         "The original encryption key is missing; restore .master-key or provide the original MASTER_KEY",
       );
     let key = stored ?? configured ?? randomBytes(32);
     assertKeyIdentity(key, configured, binding);
-    verifyEncryptedData(secrets.iterate(), key);
+    verifyEncryptedData(secrets, key);
     if (!stored) {
       key = publishKey(path, key);
       // Also protects databases sharing a directory from a competing file publisher.
       assertKeyIdentity(key, configured, binding);
-      verifyEncryptedData(secrets.iterate(), key);
+      verifyEncryptedData(secrets, key);
     }
     resolvedFingerprint = fingerprint(key);
-    db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)").run(
-      bindingName,
-      resolvedFingerprint,
-    );
+    orm
+      .insert(settings)
+      .values({ key: bindingName, value: resolvedFingerprint })
+      .onConflictDoNothing()
+      .run();
   }).immediate();
   if (!resolvedFingerprint) throw new Error("Encryption key initialization failed");
   initialized.set(absolutePath, resolvedFingerprint);

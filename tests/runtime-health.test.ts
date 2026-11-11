@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -21,6 +21,7 @@ beforeEach(async () => {
   mkdirSync(base, { recursive: true });
   directory = mkdtempSync(join(base, "runtime-health-"));
   const databasePath = join(directory, "test.db");
+  vi.stubEnv("DATABASE_PATH", databasePath);
   database = new Database(databasePath);
   database.pragma("journal_mode = WAL");
   initializeTestDatabase(database);
@@ -51,12 +52,34 @@ afterEach(async () => {
   server?.closeAllConnections();
   if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   database?.close();
+  vi.unstubAllEnvs();
   if (directory && resolve(directory).startsWith(base + sep)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe("combined application health", () => {
+  it("reads only the heartbeat table without initializing or migrating the probe database", async () => {
+    const path = join(directory, "probe-only.db");
+    const probe = new Database(path);
+    try {
+      probe.exec(
+        "CREATE TABLE job_workers (id TEXT PRIMARY KEY,last_heartbeat_at TEXT,lease_seconds INTEGER,stopped_at TEXT)",
+      );
+      probe
+        .prepare("INSERT INTO job_workers VALUES(?,?,?,NULL)")
+        .run(state.workerId, new Date().toISOString(), 30_000);
+      vi.stubEnv("DATABASE_PATH", path);
+      expect(await checkRuntimeHealth({ ...options, databasePath: path })).toBe(true);
+      expect(probe.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([
+        { name: "job_workers" },
+      ]);
+      expect(existsSync(join(directory, ".master-key"))).toBe(false);
+    } finally {
+      probe.close();
+    }
+  });
+
   it("requires the Web response and this runtime's heartbeat without writing to SQLite", async () => {
     const before = database.prepare("SELECT * FROM job_workers").all();
     expect(await checkRuntimeHealth(options)).toBe(true);

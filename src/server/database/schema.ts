@@ -8,7 +8,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import type { OperationKind } from "../../lib/contracts";
+import type { JobEvent, OperationKind } from "../../lib/contracts.ts";
 
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
@@ -181,7 +181,7 @@ export const jobEvents = sqliteTable(
     jobId: text("job_id")
       .notNull()
       .references(() => jobs.id),
-    level: text("level").notNull(),
+    level: text("level").notNull().$type<JobEvent["level"]>(),
     message: text("message").notNull(),
     detailJson: text("detail_json"),
     createdAt: text("created_at").notNull(),

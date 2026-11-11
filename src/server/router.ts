@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sql } from "drizzle-orm";
 import { version as packageVersion } from "../../package.json";
 import type { DashboardData, OperationRequest } from "@/lib/contracts";
 import { isJobPending } from "@/lib/job-state";
@@ -16,7 +17,7 @@ import {
   administratorSetupStatus,
   setupAdministrator,
 } from "./auth";
-import { getDatabase, audit } from "./db";
+import { getDatabase, getOrm, audit } from "./db";
 import { AppError, safeMessage } from "./errors";
 import { json, readJson, errorResponse } from "./http";
 import { accountSchema, accountPatchSchema, regionSchema, validateOperation } from "./validation";
@@ -58,7 +59,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
       method = request.method,
       url = new URL(request.url);
     if (method === "GET" && path === "health") {
-      getDatabase().prepare("SELECT 1").get();
+      getOrm().get(sql`SELECT 1`);
       return json({ ok: true, version: process.env.APP_VERSION ?? packageVersion });
     }
     if (!["GET", "HEAD"].includes(method)) assertSameOrigin(request);

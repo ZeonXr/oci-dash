@@ -1,7 +1,10 @@
 import Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { RUNTIME_STATE_PATH, type RuntimeState } from "./state";
+import { ormFor } from "../database/client";
+import { jobWorkers } from "../database/schema";
 
 interface HealthOptions {
   statePath?: string;
@@ -42,21 +45,26 @@ export async function checkRuntimeHealth(options: HealthOptions = {}): Promise<b
       options.databasePath ?? resolve(process.env.DATABASE_PATH ?? "data/oci-dash.db"),
       { readonly: true, fileMustExist: true, timeout: 1000 },
     );
-    const worker = database
-      .prepare("SELECT last_heartbeat_at, lease_seconds, stopped_at FROM job_workers WHERE id = ?")
-      .get(state.workerId) as
-      { last_heartbeat_at: string; lease_seconds: number; stopped_at: string | null } | undefined;
-    const heartbeat = worker ? Date.parse(worker.last_heartbeat_at) : NaN;
+    const worker = ormFor(database)
+      .select({
+        lastHeartbeatAt: jobWorkers.lastHeartbeatAt,
+        leaseSeconds: jobWorkers.leaseSeconds,
+        stoppedAt: jobWorkers.stoppedAt,
+      })
+      .from(jobWorkers)
+      .where(eq(jobWorkers.id, state.workerId))
+      .get();
+    const heartbeat = worker ? Date.parse(worker.lastHeartbeatAt) : NaN;
     const now = Date.now();
     if (
       !worker ||
-      worker.stopped_at ||
+      worker.stoppedAt ||
       !Number.isFinite(heartbeat) ||
-      !Number.isFinite(worker.lease_seconds) ||
-      worker.lease_seconds <= 0 ||
+      !Number.isFinite(worker.leaseSeconds) ||
+      worker.leaseSeconds <= 0 ||
       heartbeat < Date.parse(state.startedAt) ||
       heartbeat > now ||
-      heartbeat + worker.lease_seconds * 1000 <= now
+      heartbeat + worker.leaseSeconds * 1000 <= now
     ) {
       return false;
     }

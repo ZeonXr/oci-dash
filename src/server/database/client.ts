@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import * as schema from "./schema";
+import * as schema from "./schema.ts";
 
 export type OrmDatabase = BetterSQLite3Database<typeof schema>;
 const clients = new WeakMap<Database.Database, OrmDatabase>();

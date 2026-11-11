@@ -1,6 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { DrizzleQueryError } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  DrizzleQueryError,
+  eq,
+  exists,
+  getTableColumns,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  notExists,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
+import { alias, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { ormFor } from "../database/client";
+import {
+  jobs as jobTable,
+  jobEvents,
+  jobResources,
+  jobWorkers,
+  inventoryRefreshState,
+} from "../database/schema";
 import { safeMessage } from "../errors";
 import { canResumeJob, isJobCancellable, isJobRetryable } from "@/lib/job-state";
 import type {
@@ -43,11 +72,24 @@ const PRIVATE_KEY = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PR
 const secretField =
   /(?:private[_-]?key|password|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|^secret$|^credentials?$|^cookies?$)/i;
 const queryFunctions = new WeakSet<Database.Database>();
-const pendingCondition = (alias: string) =>
-  `(${alias}.state IN ('queued','running','retrying','cancel_requested') OR (${alias}.state='interrupted' AND ${alias}.next_run_at IS NOT NULL AND (${alias}.waiting_for_completion=1 OR ${alias}.attempt<${alias}.max_attempts)))`;
-const labelCase = `CASE kind ${Object.entries(operationLabels)
-  .map(([kind, label]) => `WHEN '${kind}' THEN '${label.replaceAll("'", "''")}'`)
-  .join(" ")} ELSE kind END`;
+type PendingColumns = {
+  [
+    Key in "state" | "nextRunAt" | "waitingForCompletion" | "attempt" | "maxAttempts"
+  ]: AnySQLiteColumn;
+};
+const pendingCondition = (table: PendingColumns) =>
+  or(
+    inArray(table.state, ["queued", "running", "retrying", "cancel_requested"]),
+    and(
+      eq(table.state, "interrupted"),
+      isNotNull(table.nextRunAt),
+      or(eq(table.waitingForCompletion, 1), lt(table.attempt, table.maxAttempts)),
+    ),
+  )!;
+const labelCase = sql<string>`CASE ${jobTable.kind} ${sql.join(
+  Object.entries(operationLabels).map(([kind, label]) => sql`WHEN ${kind} THEN ${label}`),
+  sql` `,
+)} ELSE ${jobTable.kind} END`;
 
 export class JobError extends Error {
   constructor(
@@ -110,44 +152,8 @@ function encode(value: unknown, redact = false, maximum = 128_000): string {
   return text;
 }
 
-interface JobRow {
-  id: string;
-  kind: OperationKind;
-  account_id: string;
-  account_name: string;
-  region: string;
-  resource_id: string | null;
-  resource_lock: string;
-  state: JobState;
-  attempt: number;
-  max_attempts: number;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-  next_run_at: string | null;
-  last_error: string | null;
-  result_json: string | null;
-  operation_json: string;
-  requested_by: string;
-  idempotency_key: string | null;
-  payload_hash: string;
-  checkpoints_json: string;
-  lease_owner: string | null;
-  lease_expires_at: string | null;
-  cancel_requested: number;
-  needs_reconcile: number;
-  background: number;
-  waiting_for_completion: number;
-  completion_deadline_at: string | null;
-}
-interface InventoryRefreshRow {
-  account_id: string;
-  failure_count: number;
-  last_failure_at: string | null;
-  retry_after: string | null;
-  manual_requested_at: string | null;
-  manual_job_id: string | null;
-}
+type JobRow = typeof jobTable.$inferSelect;
+type InventoryRefreshRow = typeof inventoryRefreshState.$inferSelect;
 export interface ClaimedJob {
   summary: JobSummary;
   operation: OperationRequest;
@@ -172,21 +178,21 @@ function summary(r: JobRow): JobSummary {
   return {
     id: r.id,
     kind: r.kind,
-    accountId: r.account_id,
-    accountName: r.account_name,
+    accountId: r.accountId,
+    accountName: r.accountName,
     region: r.region,
-    resourceId: r.resource_id,
+    resourceId: r.resourceId,
     state: r.state,
     attempt: r.attempt,
-    maxAttempts: r.max_attempts,
-    waitingForCompletion: Boolean(r.waiting_for_completion),
-    completionDeadlineAt: r.completion_deadline_at,
-    createdAt: r.created_at,
-    startedAt: r.started_at,
-    finishedAt: r.finished_at,
-    nextRunAt: r.next_run_at,
-    lastError: r.last_error,
-    result: r.result_json ? JSON.parse(r.result_json) : null,
+    maxAttempts: r.maxAttempts,
+    waitingForCompletion: Boolean(r.waitingForCompletion),
+    completionDeadlineAt: r.completionDeadlineAt,
+    createdAt: r.createdAt,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    nextRunAt: r.nextRunAt,
+    lastError: r.lastError,
+    result: r.resultJson ? JSON.parse(r.resultJson) : null,
   };
 }
 function resourceKeys(operation: OperationRequest): string[] {
@@ -224,9 +230,9 @@ export function createJobStore({
     );
     queryFunctions.add(db);
   }
+  const orm = ormFor(db);
   const timestamp = () => now().toISOString();
-  const row = (id: string) =>
-    db.prepare("SELECT * FROM jobs WHERE id=?").get(id) as JobRow | undefined;
+  const row = (id: string) => orm.select().from(jobTable).where(eq(jobTable.id, id)).get();
   function required(id: string): JobRow {
     const found = row(id);
     if (!found) throw new JobError("Task not found.", "JOB_NOT_FOUND", 404);
@@ -238,60 +244,88 @@ export function createJobStore({
     message: string,
     detail?: Record<string, unknown>,
   ): void {
-    db.prepare(
-      "INSERT INTO job_events(job_id,level,message,detail_json,created_at) VALUES(?,?,?,?,?)",
-    ).run(
-      id,
-      level,
-      safeErrorMessage(new Error(message)),
-      detail ? encode(detail, true, 64_000) : null,
-      timestamp(),
-    );
+    orm
+      .insert(jobEvents)
+      .values({
+        jobId: id,
+        level,
+        message: safeErrorMessage(new Error(message)),
+        detailJson: detail ? encode(detail, true, 64_000) : null,
+        createdAt: timestamp(),
+      })
+      .run();
   }
   function owned(id: string, workerId: string): JobRow {
     const found = required(id);
     if (
-      found.lease_owner !== workerId ||
-      !found.lease_expires_at ||
-      found.lease_expires_at <= timestamp() ||
+      found.leaseOwner !== workerId ||
+      !found.leaseExpiresAt ||
+      found.leaseExpiresAt <= timestamp() ||
       !["running", "cancel_requested"].includes(found.state)
     )
       throw new LeaseLostError();
     return found;
   }
   function activeAccountSync(accountId: string): JobRow | undefined {
-    return db
-      .prepare(
-        `SELECT * FROM jobs WHERE account_id=? AND kind='sync-account' AND cancel_requested=0
-        AND (state IN ('queued','running','retrying') OR
-          (state='interrupted' AND next_run_at IS NOT NULL AND (attempt<max_attempts OR waiting_for_completion=1)))
-        ORDER BY created_at DESC,rowid DESC LIMIT 1`,
+    return orm
+      .select()
+      .from(jobTable)
+      .where(
+        and(
+          eq(jobTable.accountId, accountId),
+          eq(jobTable.kind, "sync-account"),
+          eq(jobTable.cancelRequested, 0),
+          or(
+            inArray(jobTable.state, ["queued", "running", "retrying"]),
+            and(
+              eq(jobTable.state, "interrupted"),
+              isNotNull(jobTable.nextRunAt),
+              or(lt(jobTable.attempt, jobTable.maxAttempts), eq(jobTable.waitingForCompletion, 1)),
+            ),
+          ),
+        ),
       )
-      .get(accountId) as JobRow | undefined;
+      .orderBy(desc(jobTable.createdAt), desc(sql`${jobTable}.rowid`))
+      .limit(1)
+      .get();
   }
   function refreshState(accountId: string): InventoryRefreshRow {
-    db.prepare("INSERT OR IGNORE INTO inventory_refresh_state(account_id) VALUES(?)").run(
-      accountId,
-    );
-    return db
-      .prepare("SELECT * FROM inventory_refresh_state WHERE account_id=?")
-      .get(accountId) as InventoryRefreshRow;
+    orm.insert(inventoryRefreshState).values({ accountId }).onConflictDoNothing().run();
+    return orm
+      .select()
+      .from(inventoryRefreshState)
+      .where(eq(inventoryRefreshState.accountId, accountId))
+      .get()!;
   }
   function pruneAutomaticHistory(accountId: string): void {
-    // Keep the latest completed automatic refresh, plus every live job. Explicit user
-    // jobs and their references/events are never removed by this retention policy.
-    const obsolete = db
-      .prepare(
-        `SELECT id FROM jobs WHERE account_id=? AND kind='sync-account' AND background=1
-        AND lease_owner IS NULL AND (state IN ('succeeded','failed','cancelled') OR
-          (state='interrupted' AND next_run_at IS NULL))
-        ORDER BY COALESCE(finished_at,created_at) DESC,rowid DESC LIMIT -1 OFFSET 1`,
+    // Retain the latest finished automatic refresh and every live or explicit task.
+    const obsolete = orm
+      .select({ id: jobTable.id })
+      .from(jobTable)
+      .where(
+        and(
+          eq(jobTable.accountId, accountId),
+          eq(jobTable.kind, "sync-account"),
+          eq(jobTable.background, 1),
+          isNull(jobTable.leaseOwner),
+          or(
+            inArray(jobTable.state, ["succeeded", "failed", "cancelled"]),
+            and(eq(jobTable.state, "interrupted"), isNull(jobTable.nextRunAt)),
+          ),
+        ),
       )
-      .all(accountId) as { id: string }[];
+      .orderBy(
+        desc(sql`coalesce(${jobTable.finishedAt}, ${jobTable.createdAt})`),
+        desc(sql`${jobTable}.rowid`),
+      )
+      // SQLite's unlimited limit must be bound; Drizzle omits negative literals.
+      .limit(sql.placeholder("historyLimit"))
+      .offset(1)
+      .all({ historyLimit: -1 });
     for (const { id } of obsolete) {
-      db.prepare("DELETE FROM job_events WHERE job_id=?").run(id);
-      db.prepare("DELETE FROM job_resources WHERE job_id=?").run(id);
-      db.prepare("DELETE FROM jobs WHERE id=?").run(id);
+      orm.delete(jobEvents).where(eq(jobEvents.jobId, id)).run();
+      orm.delete(jobResources).where(eq(jobResources.jobId, id)).run();
+      orm.delete(jobTable).where(eq(jobTable.id, id)).run();
     }
   }
   function recordSyncOutcome(
@@ -300,16 +334,18 @@ export function createJobStore({
     result?: Record<string, unknown>,
   ): void {
     if (job.kind !== "sync-account") return;
-    const previous = refreshState(job.account_id);
+    const previous = refreshState(job.accountId);
     const partial =
       state === "succeeded" && Array.isArray(result?.warnings) && result.warnings.length > 0;
     if (state === "succeeded" && !partial) {
-      db.prepare(
-        "UPDATE inventory_refresh_state SET failure_count=0,last_failure_at=NULL,retry_after=NULL WHERE account_id=?",
-      ).run(job.account_id);
+      orm
+        .update(inventoryRefreshState)
+        .set({ failureCount: 0, lastFailureAt: null, retryAfter: null })
+        .where(eq(inventoryRefreshState.accountId, job.accountId))
+        .run();
     } else {
       const failures =
-        state === "cancelled" ? previous.failure_count : Math.min(previous.failure_count + 1, 32);
+        state === "cancelled" ? previous.failureCount : Math.min(previous.failureCount + 1, 32);
       const wait =
         state === "cancelled"
           ? INVENTORY_FRESH_MS
@@ -317,11 +353,17 @@ export function createJobStore({
               AUTO_REFRESH_BACKOFF_MAX_MS,
               INVENTORY_FRESH_MS * 2 ** Math.max(0, failures - 1),
             );
-      db.prepare(
-        "UPDATE inventory_refresh_state SET failure_count=?,last_failure_at=?,retry_after=? WHERE account_id=?",
-      ).run(failures, timestamp(), new Date(now().getTime() + wait).toISOString(), job.account_id);
+      orm
+        .update(inventoryRefreshState)
+        .set({
+          failureCount: failures,
+          lastFailureAt: timestamp(),
+          retryAfter: new Date(now().getTime() + wait).toISOString(),
+        })
+        .where(eq(inventoryRefreshState.accountId, job.accountId))
+        .run();
     }
-    pruneAutomaticHistory(job.account_id);
+    pruneAutomaticHistory(job.accountId);
   }
   function enqueueOperation(operation: OperationRequest, requestedBy: string): JobSummary {
     if (
@@ -368,11 +410,13 @@ export function createJobStore({
     return db
       .transaction(() => {
         if (key) {
-          const previous = db
-            .prepare("SELECT * FROM jobs WHERE account_id=? AND idempotency_key=?")
-            .get(account.id, key) as JobRow | undefined;
+          const previous = orm
+            .select()
+            .from(jobTable)
+            .where(and(eq(jobTable.accountId, account.id), eq(jobTable.idempotencyKey, key)))
+            .get();
           if (previous) {
-            if (previous.payload_hash !== hash)
+            if (previous.payloadHash !== hash)
               throw new JobError(
                 "This idempotency key was used for a different request.",
                 "IDEMPOTENCY_CONFLICT",
@@ -387,31 +431,28 @@ export function createJobStore({
           operation.kind === "sync-account"
             ? "sync-account"
             : operation.resourceId || `${operation.kind}:${operation.region}`;
-        db.prepare(
-          `INSERT INTO jobs(id,kind,account_id,account_name,region,resource_id,resource_lock,state,
-        max_attempts,created_at,next_run_at,operation_json,requested_by,idempotency_key,payload_hash)
-        VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?,?,?)`,
-        ).run(
-          id,
-          operation.kind,
-          account.id,
-          account.name,
-          operation.region,
-          operation.resourceId || null,
-          `${account.id}:${resource}`,
-          MAX_ATTEMPTS,
-          created,
-          created,
-          serialized,
-          requestedBy,
-          key,
-          hash,
-        );
-        for (const resourceKey of resourceKeys(normalized))
-          db.prepare("INSERT INTO job_resources(job_id,resource_key) VALUES(?,?)").run(
+        orm
+          .insert(jobTable)
+          .values({
             id,
-            resourceKey,
-          );
+            kind: operation.kind,
+            accountId: account.id,
+            accountName: account.name,
+            region: operation.region,
+            resourceId: operation.resourceId || null,
+            resourceLock: `${account.id}:${resource}`,
+            state: "queued",
+            maxAttempts: MAX_ATTEMPTS,
+            createdAt: created,
+            nextRunAt: created,
+            operationJson: serialized,
+            requestedBy,
+            idempotencyKey: key,
+            payloadHash: hash,
+          })
+          .run();
+        for (const resourceKey of resourceKeys(normalized))
+          orm.insert(jobResources).values({ jobId: id, resourceKey }).run();
         event(id, "info", "Task accepted and saved.", { requestedBy });
         return summary(required(id));
       })
@@ -426,7 +467,7 @@ export function createJobStore({
           throw new JobError("The requesting user is required.", "INVALID_REQUESTER");
         const existing = activeAccountSync(accountId);
         if (existing) {
-          db.prepare("UPDATE jobs SET background=0 WHERE id=?").run(existing.id);
+          orm.update(jobTable).set({ background: 0 }).where(eq(jobTable.id, existing.id)).run();
           return summary(existing);
         }
         return enqueueOperation(
@@ -469,10 +510,12 @@ export function createJobStore({
             });
           };
           const manual = (job: JobRow) => {
-            db.prepare("UPDATE jobs SET background=0 WHERE id=?").run(job.id);
-            db.prepare(
-              "UPDATE inventory_refresh_state SET manual_requested_at=?,manual_job_id=? WHERE account_id=?",
-            ).run(timestamp(), job.id, accountId);
+            orm.update(jobTable).set({ background: 0 }).where(eq(jobTable.id, job.id)).run();
+            orm
+              .update(inventoryRefreshState)
+              .set({ manualRequestedAt: timestamp(), manualJobId: job.id })
+              .where(eq(inventoryRefreshState.accountId, accountId))
+              .run();
           };
           const existing = activeAccountSync(accountId);
           if (existing) {
@@ -486,19 +529,21 @@ export function createJobStore({
           if (
             account.status === "connected" &&
             Number.isFinite(lastSync) &&
-            metadata.last_failure_at &&
-            lastSync > Date.parse(metadata.last_failure_at)
+            metadata.lastFailureAt &&
+            lastSync > Date.parse(metadata.lastFailureAt)
           ) {
-            db.prepare(
-              "UPDATE inventory_refresh_state SET failure_count=0,last_failure_at=NULL,retry_after=NULL WHERE account_id=?",
-            ).run(accountId);
-            metadata.failure_count = 0;
-            metadata.last_failure_at = null;
-            metadata.retry_after = null;
+            orm
+              .update(inventoryRefreshState)
+              .set({ failureCount: 0, lastFailureAt: null, retryAfter: null })
+              .where(eq(inventoryRefreshState.accountId, accountId))
+              .run();
+            metadata.failureCount = 0;
+            metadata.lastFailureAt = null;
+            metadata.retryAfter = null;
           }
           if (mode === "auto") {
-            if (metadata.retry_after && Date.parse(metadata.retry_after) > currentTime) {
-              add("backoff", null, metadata.retry_after);
+            if (metadata.retryAfter && Date.parse(metadata.retryAfter) > currentTime) {
+              add("backoff", null, metadata.retryAfter);
               continue;
             }
             if (
@@ -510,9 +555,9 @@ export function createJobStore({
               add("fresh", null, new Date(lastSync + INVENTORY_FRESH_MS).toISOString());
               continue;
             }
-          } else if (metadata.manual_requested_at && metadata.manual_job_id) {
-            const requested = Date.parse(metadata.manual_requested_at);
-            const prior = row(metadata.manual_job_id);
+          } else if (metadata.manualRequestedAt && metadata.manualJobId) {
+            const requested = Date.parse(metadata.manualRequestedAt);
+            const prior = row(metadata.manualJobId);
             if (
               prior &&
               currentTime >= requested &&
@@ -530,10 +575,11 @@ export function createJobStore({
             { kind: "sync-account", accountId, region: account.homeRegion, payload: {} },
             requestedBy,
           );
-          db.prepare("UPDATE jobs SET background=? WHERE id=?").run(
-            mode === "auto" ? 1 : 0,
-            created.id,
-          );
+          orm
+            .update(jobTable)
+            .set({ background: mode === "auto" ? 1 : 0 })
+            .where(eq(jobTable.id, created.id))
+            .run();
           const job = required(created.id);
           if (mode === "manual") manual(job);
           add("queued", job);
@@ -543,21 +589,34 @@ export function createJobStore({
       .immediate();
   }
   function listAccountSyncJobs(): JobSummary[] {
-    return (
-      db
-        .prepare(
-          `SELECT * FROM (
-            SELECT j.*,j.rowid AS insertion_order,
-              ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY
-                CASE WHEN state IN ('queued','running','retrying','cancel_requested') OR
-                  (state='interrupted' AND next_run_at IS NOT NULL AND (attempt<max_attempts OR waiting_for_completion=1) AND cancel_requested=0)
-                  THEN 0 ELSE 1 END,
-                created_at DESC,j.rowid DESC) AS account_rank
-            FROM jobs j WHERE kind='sync-account'
-          ) WHERE account_rank=1 ORDER BY created_at DESC,insertion_order DESC`,
-        )
-        .all() as JobRow[]
-    ).map(summary);
+    const priority = or(
+      inArray(jobTable.state, ["queued", "running", "retrying", "cancel_requested"]),
+      and(
+        eq(jobTable.state, "interrupted"),
+        isNotNull(jobTable.nextRunAt),
+        or(lt(jobTable.attempt, jobTable.maxAttempts), eq(jobTable.waitingForCompletion, 1)),
+        eq(jobTable.cancelRequested, 0),
+      ),
+    );
+    const ranked = orm
+      .select({
+        ...getTableColumns(jobTable),
+        insertionOrder: sql<number>`${jobTable}.rowid`.as("insertion_order"),
+        accountRank:
+          sql<number>`row_number() over (partition by ${jobTable.accountId} order by case when ${priority} then 0 else 1 end, ${jobTable.createdAt} desc, ${jobTable}.rowid desc)`.as(
+            "account_rank",
+          ),
+      })
+      .from(jobTable)
+      .where(eq(jobTable.kind, "sync-account"))
+      .as("ranked_sync");
+    return orm
+      .select()
+      .from(ranked)
+      .where(eq(ranked.accountRank, 1))
+      .orderBy(desc(ranked.createdAt), desc(ranked.insertionOrder))
+      .all()
+      .map(summary);
   }
   function cancelJob(id: string): JobSummary {
     return db
@@ -565,10 +624,12 @@ export function createJobStore({
         const current = required(id);
         if (!isJobCancellable(summary(current))) return summary(current);
         if (current.state === "running" || current.state === "cancel_requested") {
-          if (!current.cancel_requested) {
-            db.prepare(
-              "UPDATE jobs SET state='cancel_requested',cancel_requested=1 WHERE id=?",
-            ).run(id);
+          if (!current.cancelRequested) {
+            orm
+              .update(jobTable)
+              .set({ state: "cancel_requested", cancelRequested: 1 })
+              .where(eq(jobTable.id, id))
+              .run();
             event(
               id,
               "warning",
@@ -576,9 +637,17 @@ export function createJobStore({
             );
           }
         } else {
-          db.prepare(
-            "UPDATE jobs SET state='cancelled',cancel_requested=1,finished_at=?,next_run_at=NULL,waiting_for_completion=0 WHERE id=?",
-          ).run(timestamp(), id);
+          orm
+            .update(jobTable)
+            .set({
+              state: "cancelled",
+              cancelRequested: 1,
+              finishedAt: timestamp(),
+              nextRunAt: null,
+              waitingForCompletion: 0,
+            })
+            .where(eq(jobTable.id, id))
+            .run();
           event(
             id,
             "warning",
@@ -600,12 +669,24 @@ export function createJobStore({
             "JOB_NOT_RETRYABLE",
             409,
           );
-        if (current.lease_owner)
+        if (current.leaseOwner)
           throw new JobError("The previous worker still owns this task.", "JOB_IS_RUNNING", 409);
-        db.prepare(
-          `UPDATE jobs SET state='queued',cancel_requested=0,finished_at=NULL,next_run_at=?,last_error=NULL,
-        max_attempts=?,needs_reconcile=?,background=0,waiting_for_completion=0,completion_deadline_at=NULL WHERE id=?`,
-        ).run(timestamp(), current.attempt + MAX_ATTEMPTS, current.attempt > 0 ? 1 : 0, id);
+        orm
+          .update(jobTable)
+          .set({
+            state: "queued",
+            cancelRequested: 0,
+            finishedAt: null,
+            nextRunAt: timestamp(),
+            lastError: null,
+            maxAttempts: current.attempt + MAX_ATTEMPTS,
+            needsReconcile: current.attempt > 0 ? 1 : 0,
+            background: 0,
+            waitingForCompletion: 0,
+            completionDeadlineAt: null,
+          })
+          .where(eq(jobTable.id, id))
+          .run();
         event(
           id,
           "info",
@@ -616,21 +697,31 @@ export function createJobStore({
       .immediate();
   }
   function reclaimExpired(): void {
-    const expired = db
-      .prepare(
-        "SELECT * FROM jobs WHERE state IN ('running','cancel_requested') AND lease_expires_at<=?",
+    const expired = orm
+      .select()
+      .from(jobTable)
+      .where(
+        and(
+          inArray(jobTable.state, ["running", "cancel_requested"]),
+          lte(jobTable.leaseExpiresAt, timestamp()),
+        ),
       )
-      .all(timestamp()) as JobRow[];
+      .all();
     for (const current of expired) {
-      const automatic = !current.cancel_requested && canResumeJob(summary(current));
-      db.prepare(
-        `UPDATE jobs SET state='interrupted',lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=1,
-        next_run_at=?,last_error=? WHERE id=?`,
-      ).run(
-        automatic ? timestamp() : null,
-        "The worker lease expired before the outcome was confirmed. Saved checkpoints must be reconciled with OCI.",
-        current.id,
-      );
+      const automatic = !current.cancelRequested && canResumeJob(summary(current));
+      orm
+        .update(jobTable)
+        .set({
+          state: "interrupted",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          needsReconcile: 1,
+          nextRunAt: automatic ? timestamp() : null,
+          lastError:
+            "The worker lease expired before the outcome was confirmed. Saved checkpoints must be reconciled with OCI.",
+        })
+        .where(eq(jobTable.id, current.id))
+        .run();
       event(
         current.id,
         "warning",
@@ -646,65 +737,114 @@ export function createJobStore({
     return db
       .transaction(() => {
         reclaimExpired();
-        // All schedulers share these bounds, not just one process's promise pool:
-        // two account reads, one write, and no read/write overlap within an account.
-        const current = db
-          .prepare(
-            `SELECT j.* FROM jobs j WHERE j.state IN ('queued','retrying','interrupted')
-        AND j.next_run_at IS NOT NULL AND j.next_run_at<=? AND (j.attempt<j.max_attempts OR j.waiting_for_completion=1) AND j.cancel_requested=0
-        AND NOT EXISTS(SELECT 1 FROM job_resources candidate JOIN job_resources occupied ON occupied.resource_key=candidate.resource_key
-          JOIN jobs active ON active.id=occupied.job_id WHERE candidate.job_id=j.id AND active.state IN ('running','cancel_requested'))
-        AND NOT EXISTS(SELECT 1 FROM jobs active WHERE active.state IN ('running','cancel_requested') AND (
-          (j.kind<>'sync-account' AND active.kind<>'sync-account') OR
-          (active.account_id=j.account_id AND (j.kind='sync-account' OR active.kind='sync-account'))
-        ))
-        AND (j.kind<>'sync-account' OR (SELECT COUNT(*) FROM jobs active
-          WHERE active.kind='sync-account' AND active.state IN ('running','cancel_requested')) < ?)
-        ORDER BY j.background,j.next_run_at,j.created_at,j.id LIMIT 1`,
+        // The transaction shares resource locks and concurrency bounds across all schedulers.
+        const active = alias(jobTable, "active_jobs");
+        const candidate = alias(jobResources, "candidate_resources");
+        const occupied = alias(jobResources, "occupied_resources");
+        const resourceConflict = orm
+          .select({ id: candidate.jobId })
+          .from(candidate)
+          .innerJoin(occupied, eq(occupied.resourceKey, candidate.resourceKey))
+          .innerJoin(active, eq(active.id, occupied.jobId))
+          .where(
+            and(
+              eq(candidate.jobId, jobTable.id),
+              inArray(active.state, ["running", "cancel_requested"]),
+            ),
+          );
+        const accountConflict = orm
+          .select({ id: active.id })
+          .from(active)
+          .where(
+            and(
+              inArray(active.state, ["running", "cancel_requested"]),
+              or(
+                and(ne(jobTable.kind, "sync-account"), ne(active.kind, "sync-account")),
+                and(
+                  eq(active.accountId, jobTable.accountId),
+                  or(eq(jobTable.kind, "sync-account"), eq(active.kind, "sync-account")),
+                ),
+              ),
+            ),
+          );
+        const activeSyncs = orm
+          .select({ total: count() })
+          .from(active)
+          .where(
+            and(
+              eq(active.kind, "sync-account"),
+              inArray(active.state, ["running", "cancel_requested"]),
+            ),
+          );
+        const current = orm
+          .select()
+          .from(jobTable)
+          .where(
+            and(
+              inArray(jobTable.state, ["queued", "retrying", "interrupted"]),
+              isNotNull(jobTable.nextRunAt),
+              lte(jobTable.nextRunAt, timestamp()),
+              or(lt(jobTable.attempt, jobTable.maxAttempts), eq(jobTable.waitingForCompletion, 1)),
+              eq(jobTable.cancelRequested, 0),
+              notExists(resourceConflict),
+              notExists(accountConflict),
+              or(
+                ne(jobTable.kind, "sync-account"),
+                lt(sql<number>`(${activeSyncs})`, MAX_CONCURRENT_ACCOUNT_SYNCS),
+              ),
+            ),
           )
-          .get(timestamp(), MAX_CONCURRENT_ACCOUNT_SYNCS) as JobRow | undefined;
+          .orderBy(jobTable.background, jobTable.nextRunAt, jobTable.createdAt, jobTable.id)
+          .limit(1)
+          .get();
         if (!current) return null;
-        db.prepare(
-          `UPDATE jobs SET state='running',attempt=attempt+CASE WHEN waiting_for_completion=1 THEN 0 ELSE 1 END,started_at=COALESCE(started_at,?),
-        finished_at=NULL,next_run_at=NULL,lease_owner=?,lease_expires_at=?,
-        completion_deadline_at=COALESCE(completion_deadline_at,?) WHERE id=?`,
-        ).run(
-          timestamp(),
-          workerId,
-          new Date(now().getTime() + leaseMs).toISOString(),
-          current.kind === "sync-account"
-            ? null
-            : new Date(now().getTime() + completionTimeoutMs).toISOString(),
-          current.id,
-        );
+        orm
+          .update(jobTable)
+          .set({
+            state: "running",
+            attempt: sql`${jobTable.attempt}+case when ${jobTable.waitingForCompletion}=1 then 0 else 1 end`,
+            startedAt: sql`coalesce(${jobTable.startedAt},${timestamp()})`,
+            finishedAt: null,
+            nextRunAt: null,
+            leaseOwner: workerId,
+            leaseExpiresAt: new Date(now().getTime() + leaseMs).toISOString(),
+            completionDeadlineAt: sql`coalesce(${jobTable.completionDeadlineAt},${current.kind === "sync-account" ? null : new Date(now().getTime() + completionTimeoutMs).toISOString()})`,
+          })
+          .where(eq(jobTable.id, current.id))
+          .run();
         event(
           current.id,
           "info",
-          current.needs_reconcile
+          current.needsReconcile
             ? "Recovery started; reconciling saved checkpoints with OCI."
             : "Execution started.",
-          { attempt: current.attempt + (current.waiting_for_completion ? 0 : 1), workerId },
+          { attempt: current.attempt + (current.waitingForCompletion ? 0 : 1), workerId },
         );
         const claimed = required(current.id);
         return {
           summary: summary(claimed),
-          operation: JSON.parse(claimed.operation_json),
-          checkpoints: JSON.parse(claimed.checkpoints_json),
-          requestedBy: claimed.requested_by,
-          needsReconcile: Boolean(claimed.needs_reconcile),
+          operation: JSON.parse(claimed.operationJson),
+          checkpoints: JSON.parse(claimed.checkpointsJson),
+          requestedBy: claimed.requestedBy,
+          needsReconcile: Boolean(claimed.needsReconcile),
         };
       })
       .immediate();
   }
   function renewLease(id: string, workerId: string, leaseMs = DEFAULT_LEASE_MS): boolean {
     return (
-      db
-        .prepare(
-          `UPDATE jobs SET lease_expires_at=? WHERE id=? AND lease_owner=?
-      AND state IN ('running','cancel_requested') AND lease_expires_at>?`,
+      orm
+        .update(jobTable)
+        .set({ leaseExpiresAt: new Date(now().getTime() + leaseMs).toISOString() })
+        .where(
+          and(
+            eq(jobTable.id, id),
+            eq(jobTable.leaseOwner, workerId),
+            inArray(jobTable.state, ["running", "cancel_requested"]),
+            gt(jobTable.leaseExpiresAt, timestamp()),
+          ),
         )
-        .run(new Date(now().getTime() + leaseMs).toISOString(), id, workerId, timestamp())
-        .changes === 1
+        .run().changes === 1
     );
   }
   function checkpoint(id: string, workerId: string, key: string, value: unknown): void {
@@ -716,9 +856,13 @@ export function createJobStore({
     )
       throw new JobError("This checkpoint key cannot be persisted.", "INVALID_CHECKPOINT");
     db.transaction(() => {
-      const data = JSON.parse(owned(id, workerId).checkpoints_json) as Record<string, unknown>;
+      const data = JSON.parse(owned(id, workerId).checkpointsJson) as Record<string, unknown>;
       data[key] = value;
-      db.prepare("UPDATE jobs SET checkpoints_json=? WHERE id=?").run(encode(data), id);
+      orm
+        .update(jobTable)
+        .set({ checkpointsJson: encode(data) })
+        .where(eq(jobTable.id, id))
+        .run();
       event(id, "info", "Checkpoint saved.", { checkpoint: key });
     }).immediate();
   }
@@ -731,10 +875,21 @@ export function createJobStore({
   ): void {
     db.transaction(() => {
       const current = owned(id, workerId);
-      db.prepare(
-        `UPDATE jobs SET state=?,result_json=?,last_error=?,finished_at=?,next_run_at=NULL,
-        lease_owner=NULL,lease_expires_at=NULL,needs_reconcile=0,waiting_for_completion=0 WHERE id=?`,
-      ).run(state, result ? encode(result, true) : null, error || null, timestamp(), id);
+      orm
+        .update(jobTable)
+        .set({
+          state,
+          resultJson: result ? encode(result, true) : null,
+          lastError: error || null,
+          finishedAt: timestamp(),
+          nextRunAt: null,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          needsReconcile: 0,
+          waitingForCompletion: 0,
+        })
+        .where(eq(jobTable.id, id))
+        .run();
       event(
         id,
         state === "failed" ? "error" : state === "cancelled" ? "warning" : "info",
@@ -751,7 +906,7 @@ export function createJobStore({
   function retryLater(id: string, workerId: string, error: string, delayMs: number): void {
     db.transaction(() => {
       const current = owned(id, workerId);
-      if (current.cancel_requested) {
+      if (current.cancelRequested) {
         finish(
           id,
           workerId,
@@ -761,15 +916,24 @@ export function createJobStore({
         );
         return;
       }
-      if (current.attempt >= current.max_attempts) {
+      if (current.attempt >= current.maxAttempts) {
         finish(id, workerId, "failed", undefined, error);
         return;
       }
       const due = new Date(now().getTime() + Math.max(0, delayMs)).toISOString();
-      db.prepare(
-        `UPDATE jobs SET state='retrying',last_error=?,next_run_at=?,needs_reconcile=1,
-        lease_owner=NULL,lease_expires_at=NULL,waiting_for_completion=0 WHERE id=?`,
-      ).run(error, due, id);
+      orm
+        .update(jobTable)
+        .set({
+          state: "retrying",
+          lastError: error,
+          nextRunAt: due,
+          needsReconcile: 1,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          waitingForCompletion: 0,
+        })
+        .where(eq(jobTable.id, id))
+        .run();
       event(
         id,
         "warning",
@@ -780,13 +944,13 @@ export function createJobStore({
   }
   function assertCompletionWindow(id: string, workerId: string): void {
     const current = owned(id, workerId);
-    if (current.completion_deadline_at && current.completion_deadline_at <= timestamp())
+    if (current.completionDeadlineAt && current.completionDeadlineAt <= timestamp())
       throw new JobError(COMPLETION_TIMEOUT_MESSAGE, "COMPLETION_TIMEOUT");
   }
   function waitForCompletion(id: string, workerId: string, message: string): void {
     db.transaction(() => {
       const current = owned(id, workerId);
-      if (current.cancel_requested) {
+      if (current.cancelRequested) {
         finish(
           id,
           workerId,
@@ -796,20 +960,29 @@ export function createJobStore({
         );
         return;
       }
-      // The deadline was persisted on the first claim. Reopening the database,
-      // recovering a lease, or repeating a successful status read never extends it.
+      // Reopening, lease recovery and successful status reads never extend the saved deadline.
       const deadline =
-        current.completion_deadline_at ??
+        current.completionDeadlineAt ??
         new Date(now().getTime() + completionTimeoutMs).toISOString();
       if (deadline <= timestamp()) {
         finish(id, workerId, "failed", undefined, COMPLETION_TIMEOUT_MESSAGE);
         return;
       }
       const due = new Date(Math.min(now().getTime() + 5000, Date.parse(deadline))).toISOString();
-      db.prepare(
-        `UPDATE jobs SET state='retrying',last_error=NULL,next_run_at=?,needs_reconcile=1,
-        waiting_for_completion=1,completion_deadline_at=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=?`,
-      ).run(due, deadline, id);
+      orm
+        .update(jobTable)
+        .set({
+          state: "retrying",
+          lastError: null,
+          nextRunAt: due,
+          needsReconcile: 1,
+          waitingForCompletion: 1,
+          completionDeadlineAt: deadline,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+        })
+        .where(eq(jobTable.id, id))
+        .run();
       event(id, "info", message, {
         waitingForCompletion: true,
         nextRunAt: due,
@@ -820,55 +993,77 @@ export function createJobStore({
   function interrupt(id: string, workerId: string, reason: string): void {
     db.transaction(() => {
       const current = owned(id, workerId);
-      db.prepare(
-        `UPDATE jobs SET state='interrupted',last_error=?,next_run_at=?,needs_reconcile=1,
-        lease_owner=NULL,lease_expires_at=NULL WHERE id=?`,
-      ).run(
-        reason,
-        canResumeJob(summary(current)) && !current.cancel_requested ? timestamp() : null,
-        id,
-      );
+      orm
+        .update(jobTable)
+        .set({
+          state: "interrupted",
+          lastError: reason,
+          nextRunAt:
+            canResumeJob(summary(current)) && !current.cancelRequested ? timestamp() : null,
+          needsReconcile: 1,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+        })
+        .where(eq(jobTable.id, id))
+        .run();
       event(
         id,
         "warning",
         "Worker stopped before confirming the outcome. Recovery will reconcile remote state.",
         { reason },
       );
-      if (!canResumeJob(summary(current)) || current.cancel_requested)
-        recordSyncOutcome(current, current.cancel_requested ? "cancelled" : "failed");
+      if (!canResumeJob(summary(current)) || current.cancelRequested)
+        recordSyncOutcome(current, current.cancelRequested ? "cancelled" : "failed");
     }).immediate();
   }
   function heartbeat(workerId: string, leaseMs = DEFAULT_LEASE_MS): void {
-    db.prepare(
-      `INSERT INTO job_workers(id,started_at,last_heartbeat_at,lease_seconds,stopped_at) VALUES(?,?,?,?,NULL)
-      ON CONFLICT(id) DO UPDATE SET last_heartbeat_at=excluded.last_heartbeat_at,lease_seconds=excluded.lease_seconds,stopped_at=NULL`,
-    ).run(workerId, timestamp(), timestamp(), Math.ceil(leaseMs / 1000));
+    const time = timestamp(),
+      leaseSeconds = Math.ceil(leaseMs / 1000);
+    orm
+      .insert(jobWorkers)
+      .values({
+        id: workerId,
+        startedAt: time,
+        lastHeartbeatAt: time,
+        leaseSeconds,
+        stoppedAt: null,
+      })
+      .onConflictDoUpdate({
+        target: jobWorkers.id,
+        set: { lastHeartbeatAt: time, leaseSeconds, stoppedAt: null },
+      })
+      .run();
   }
   function getWorkerStatus(): WorkerStatus {
-    const latest = (db
-      .prepare(
-        "SELECT * FROM job_workers WHERE stopped_at IS NULL ORDER BY last_heartbeat_at DESC LIMIT 1",
+    const latest =
+      orm
+        .select()
+        .from(jobWorkers)
+        .where(isNull(jobWorkers.stoppedAt))
+        .orderBy(desc(jobWorkers.lastHeartbeatAt))
+        .limit(1)
+        .get() ||
+      orm.select().from(jobWorkers).orderBy(desc(jobWorkers.lastHeartbeatAt)).limit(1).get();
+    const active = orm
+      .select({ total: count() })
+      .from(jobTable)
+      .where(
+        and(
+          inArray(jobTable.state, ["running", "cancel_requested"]),
+          gt(jobTable.leaseExpiresAt, timestamp()),
+        ),
       )
-      .get() ||
-      db.prepare("SELECT * FROM job_workers ORDER BY last_heartbeat_at DESC LIMIT 1").get()) as
-      | { id: string; last_heartbeat_at: string; lease_seconds: number; stopped_at: string | null }
-      | undefined;
-    const active = db
-      .prepare(
-        "SELECT COUNT(*) AS count FROM jobs WHERE state IN ('running','cancel_requested') AND lease_expires_at>?",
-      )
-      .get(timestamp()) as { count: number };
+      .get()!;
     return {
       online: Boolean(
         latest &&
-        !latest.stopped_at &&
-        new Date(latest.last_heartbeat_at).getTime() + latest.lease_seconds * 1000 >
-          now().getTime(),
+        !latest.stoppedAt &&
+        Date.parse(latest.lastHeartbeatAt) + latest.leaseSeconds * 1000 > now().getTime(),
       ),
       workerId: latest?.id || null,
-      lastHeartbeatAt: latest?.last_heartbeat_at || null,
-      activeJobs: active.count,
-      leaseSeconds: latest?.lease_seconds || DEFAULT_LEASE_MS / 1000,
+      lastHeartbeatAt: latest?.lastHeartbeatAt || null,
+      activeJobs: active.total,
+      leaseSeconds: latest?.leaseSeconds || DEFAULT_LEASE_MS / 1000,
     };
   }
   return {
@@ -890,101 +1085,101 @@ export function createJobStore({
     getWorkerStatus,
     getAccount,
     stopWorker(workerId: string) {
-      db.prepare("UPDATE job_workers SET stopped_at=? WHERE id=?").run(timestamp(), workerId);
+      orm
+        .update(jobWorkers)
+        .set({ stoppedAt: timestamp() })
+        .where(eq(jobWorkers.id, workerId))
+        .run();
     },
     getJob(id: string): JobSummary | null {
       const found = row(id);
       return found ? summary(found) : null;
     },
     listJobs(limit = 100): JobSummary[] {
-      return (
-        db
-          .prepare("SELECT * FROM jobs WHERE background=0 ORDER BY created_at DESC,id DESC LIMIT ?")
-          .all(
-            Math.max(1, Math.min(1000, Math.floor(Number.isFinite(limit) ? limit : 100))),
-          ) as JobRow[]
-      ).map(summary);
+      return orm
+        .select()
+        .from(jobTable)
+        .where(eq(jobTable.background, 0))
+        .orderBy(desc(jobTable.createdAt), desc(jobTable.id))
+        .limit(Math.max(1, Math.min(1000, Math.floor(Number.isFinite(limit) ? limit : 100))))
+        .all()
+        .map(summary);
     },
     queryJobs(input: JobListQuery): JobPage {
-      const conditions = ["background=0"];
-      const values: (string | number)[] = [];
-      for (const [column, value] of [
-        ["account_id", input.accountId],
-        ["resource_id", input.resourceId],
-        ["state", input.state],
-      ]) {
-        if (value) {
-          conditions.push(`${column}=?`);
-          values.push(value);
-        }
-      }
-      if (input.query) {
+      const conditions: SQL[] = [eq(jobTable.background, 0)];
+      if (input.accountId) conditions.push(eq(jobTable.accountId, input.accountId));
+      if (input.resourceId) conditions.push(eq(jobTable.resourceId, input.resourceId));
+      if (input.state) conditions.push(eq(jobTable.state, input.state));
+      if (input.query)
         conditions.push(
-          `job_search_includes(id || ' ' || ${labelCase} || ' ' || account_name || ' ' || COALESCE(resource_id,'') || ' ' || COALESCE(last_error,''), ?)`,
+          sql`job_search_includes(${jobTable.id} || ' ' || ${labelCase} || ' ' || ${jobTable.accountName} || ' ' || coalesce(${jobTable.resourceId},'') || ' ' || coalesce(${jobTable.lastError},''), ${input.query})`,
         );
-        values.push(input.query);
-      }
-      const where = conditions.join(" AND ");
-      const order = input.sort === "ascending" ? "ASC" : "DESC";
+      const where = and(...conditions),
+        order = input.sort === "ascending" ? asc : desc;
       return db.transaction(() => {
-        const total = db
-          .prepare(`SELECT count(*) FROM jobs WHERE ${where}`)
-          .pluck()
-          .get(...values) as number;
+        const total = orm.select({ total: count() }).from(jobTable).where(where).get()!.total;
         const pageSize = Math.max(1, Math.min(100, input.pageSize));
         const page = Math.max(1, Math.min(input.page, Math.max(1, Math.ceil(total / pageSize))));
-        const rows = db
-          .prepare(
-            `SELECT * FROM jobs WHERE ${where} ORDER BY created_at ${order},id ${order} LIMIT ? OFFSET ?`,
-          )
-          .all(...values, pageSize, (page - 1) * pageSize) as JobRow[];
+        const rows = orm
+          .select()
+          .from(jobTable)
+          .where(where)
+          .orderBy(order(jobTable.createdAt), order(jobTable.id))
+          .limit(pageSize)
+          .offset((page - 1) * pageSize)
+          .all();
         return { jobs: rows.map(summary), total, page, pageSize };
       })();
     },
     listActiveJobs(): JobSummary[] {
-      return (
-        db
-          .prepare(
-            `
-        SELECT j.* FROM jobs j WHERE j.background=0 AND (
-          ${pendingCondition("j")} OR (
-            j.state='succeeded' AND EXISTS (
-              SELECT 1 FROM jobs sync
-              WHERE sync.id=json_extract(j.result_json,'$.synchronization.jobId')
-                AND sync.account_id=j.account_id
-                AND sync.kind='sync-account'
-                AND json_extract(j.result_json,'$.synchronization.status')='queued'
-                AND ${pendingCondition("sync")}
-            )
-          )
-        ) ORDER BY j.created_at DESC,j.id DESC
-      `,
-          )
-          .all() as JobRow[]
-      ).map(summary);
+      const sync = alias(jobTable, "following_sync");
+      const followup = orm
+        .select({ id: sync.id })
+        .from(sync)
+        .where(
+          and(
+            eq(
+              sync.id,
+              sql<string>`json_extract(${jobTable.resultJson},'$.synchronization.jobId')`,
+            ),
+            eq(sync.accountId, jobTable.accountId),
+            eq(sync.kind, "sync-account"),
+            sql`json_extract(${jobTable.resultJson},'$.synchronization.status')='queued'`,
+            pendingCondition(sync),
+          ),
+        );
+      return orm
+        .select()
+        .from(jobTable)
+        .where(
+          and(
+            eq(jobTable.background, 0),
+            or(pendingCondition(jobTable), and(eq(jobTable.state, "succeeded"), exists(followup))),
+          ),
+        )
+        .orderBy(desc(jobTable.createdAt), desc(jobTable.id))
+        .all()
+        .map(summary);
     },
     getJobEvents(id: string): JobEvent[] {
       required(id);
-      return (
-        db.prepare("SELECT * FROM job_events WHERE job_id=? ORDER BY id").all(id) as {
-          id: number;
-          job_id: string;
-          level: JobEvent["level"];
-          message: string;
-          detail_json: string | null;
-          created_at: string;
-        }[]
-      ).map((e) => ({
-        id: e.id,
-        jobId: e.job_id,
-        level: e.level,
-        message: e.message,
-        detail: e.detail_json ? JSON.parse(e.detail_json) : null,
-        createdAt: e.created_at,
-      }));
+      return orm
+        .select()
+        .from(jobEvents)
+        .where(eq(jobEvents.jobId, id))
+        .orderBy(jobEvents.id)
+        .all()
+        .map((e) => ({
+          id: e.id,
+          jobId: e.jobId,
+          level: e.level,
+          message: e.message,
+          detail: e.detailJson ? JSON.parse(e.detailJson) : null,
+          createdAt: e.createdAt,
+        }));
     },
     cancellationRequested(id: string): boolean {
-      return Boolean(required(id).cancel_requested);
+      return Boolean(required(id).cancelRequested);
     },
     progress(id: string, workerId: string, message: string, detail?: Record<string, unknown>) {
       db.transaction(() => {
@@ -1005,7 +1200,7 @@ export function createJobStore({
       return db
         .transaction(() => {
           const current = owned(id, workerId);
-          if (current.cancel_requested) return false;
+          if (current.cancelRequested) return false;
           action();
           return true;
         })

@@ -2,6 +2,9 @@ import type Database from "better-sqlite3";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, openSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { eq } from "drizzle-orm";
+import { ormFor } from "./database/client.ts";
+import { accounts, auditEvents, sessions, settings, users } from "./database/schema.ts";
 import { hashPassword, hashToken } from "./crypto.ts";
 
 export const INITIAL_ADMIN_SETUP_KEY = "auth.setup.completed";
@@ -20,10 +23,17 @@ class InitialAdminError extends Error {
 
 /** Presence of the completion marker is authoritative, even after accidental user deletion. */
 export function initialAdminState(db: Database.Database): InitialAdminState {
-  if (db.prepare("SELECT id FROM users LIMIT 1").get()) return "completed";
-  if (db.prepare("SELECT value FROM settings WHERE key=?").get(INITIAL_ADMIN_SETUP_KEY))
+  const orm = ormFor(db);
+  if (orm.select({ id: users.id }).from(users).limit(1).get()) return "completed";
+  if (
+    orm
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, INITIAL_ADMIN_SETUP_KEY))
+      .get()
+  )
     return "completed";
-  if (db.prepare("SELECT id FROM accounts LIMIT 1").get()) return "unavailable";
+  if (orm.select({ id: accounts.id }).from(accounts).limit(1).get()) return "unavailable";
   return "required";
 }
 
@@ -40,10 +50,11 @@ export function assertInitialAdminSetupAvailable(db: Database.Database): void {
 }
 
 function markComplete(db: Database.Database, timestamp: string): void {
-  db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)").run(
-    INITIAL_ADMIN_SETUP_KEY,
-    timestamp,
-  );
+  ormFor(db)
+    .insert(settings)
+    .values({ key: INITIAL_ADMIN_SETUP_KEY, value: timestamp })
+    .onConflictDoNothing()
+    .run();
 }
 
 function normalizedUsername(username: string, password: string): string {
@@ -57,8 +68,9 @@ function normalizedUsername(username: string, password: string): string {
 
 /** Preserve existing users; only an explicitly configured password initializes an empty database. */
 export function ensureInitialAdmin(db: Database.Database): void {
+  const orm = ormFor(db);
   db.transaction(() => {
-    if (db.prepare("SELECT id FROM users LIMIT 1").get()) {
+    if (orm.select({ id: users.id }).from(users).limit(1).get()) {
       markComplete(db, new Date().toISOString());
       return;
     }
@@ -67,12 +79,15 @@ export function ensureInitialAdmin(db: Database.Database): void {
     if (!password) return;
     const username = normalizedUsername(process.env.ADMIN_USERNAME || "admin", password);
     const timestamp = new Date().toISOString();
-    db.prepare("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)").run(
-      randomUUID(),
-      username,
-      hashPassword(password),
-      timestamp,
-    );
+    orm
+      .insert(users)
+      .values({
+        id: randomUUID(),
+        username,
+        passwordHash: hashPassword(password),
+        createdAt: timestamp,
+      })
+      .run();
     markComplete(db, timestamp);
   }).immediate();
 }
@@ -87,6 +102,7 @@ export function createInitialAdminSession(
   const name = normalizedUsername(username, password);
   if (!Number.isSafeInteger(sessionSeconds) || sessionSeconds <= 0)
     throw new Error("Invalid initial administrator session lifetime");
+  const orm = ormFor(db);
   return db
     .transaction(() => {
       assertInitialAdminSetupAvailable(db);
@@ -94,24 +110,30 @@ export function createInitialAdminSession(
         token = randomBytes(32).toString("base64url"),
         now = new Date();
       const timestamp = now.toISOString();
-      db.prepare("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)").run(
-        id,
-        name,
-        hashPassword(password),
-        timestamp,
-      );
-      db.prepare(
-        "INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)",
-      ).run(
-        hashToken(token),
-        id,
-        new Date(now.getTime() + sessionSeconds * 1000).toISOString(),
-        timestamp,
-      );
+      orm
+        .insert(users)
+        .values({ id, username: name, passwordHash: hashPassword(password), createdAt: timestamp })
+        .run();
+      orm
+        .insert(sessions)
+        .values({
+          tokenHash: hashToken(token),
+          userId: id,
+          expiresAt: new Date(now.getTime() + sessionSeconds * 1000).toISOString(),
+          createdAt: timestamp,
+        })
+        .run();
       markComplete(db, timestamp);
-      db.prepare(
-        "INSERT INTO audit_events(actor,action,resource,result,created_at) VALUES(?,?,?,?,?)",
-      ).run(name, "auth.setup", "account", "管理员初始化完成", timestamp);
+      orm
+        .insert(auditEvents)
+        .values({
+          actor: name,
+          action: "auth.setup",
+          resource: "account",
+          result: "管理员初始化完成",
+          createdAt: timestamp,
+        })
+        .run();
       return { user: { id, username: name, mfaEnabled: false as const }, token };
     })
     .immediate();

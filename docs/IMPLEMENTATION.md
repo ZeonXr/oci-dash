@@ -34,7 +34,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
-表结构集中在 `src/server/database/schema.ts`。常规查询使用 Drizzle ORM，`getOrm()` 与 `getDatabase()` 共用同一个 `better-sqlite3` 连接，ORM 查询参与原生连接上的同步事务。任务领取、租约和启动时的密钥、管理员初始化保留必要的参数化 SQL；控制台占用保留原有条件写入及事务边界。任务资源锁在创建任务的同一事务内写入。
+表结构集中在 `src/server/database/schema.ts`。业务查询、任务状态和初始化读写统一使用 Drizzle ORM；`getOrm()` 与 `ormFor(db)` 复用现有 `better-sqlite3` 连接，ORM 查询参与该连接上的同步事务。任务领取、租约、控制台占用和管理员初始化保留原有条件写入及事务边界。复杂筛选、窗口函数、JSON 字段和约束使用局部 SQL 表达式，任务资源锁仍在创建任务的同一事务内写入。
 
 `drizzle-kit` 根据 TypeScript schema 生成 `drizzle/` 内的 SQL 和元数据。应用启动通过 Drizzle 官方 migrator 初始化空数据库，并根据 `__drizzle_migrations` 跳过已经应用的迁移；镜像包含迁移文件，部署不需要额外命令或服务。当前基线不包含接入 Drizzle 之前的数据库转换、分散的字段补丁或历史资源锁回填。使用独立空数据目录部署，已有旧数据库另行保留。开发命令与审核要求见[数据库开发](../CONTRIBUTING.md#数据库开发)。
 
