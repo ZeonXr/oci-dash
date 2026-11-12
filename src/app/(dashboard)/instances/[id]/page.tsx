@@ -430,19 +430,24 @@ export default function InstanceDetailPage() {
         </div>
       )}
       <Tabs value={tab} onValueChange={setTab} className="gap-6">
-        <TabsList className="max-w-full overflow-x-auto" aria-label="实例详情">
-          {tabs.map((item) => (
-            <TabsTrigger
-              key={item.id}
-              value={item.id}
-              id={`tab-${item.id}`}
-              aria-controls={`panel-${item.id}`}
-              className="shrink-0"
-            >
-              {item.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="min-w-0 overflow-x-auto overflow-y-hidden pb-1">
+          <TabsList variant="line" className="gap-4" aria-label="实例详情">
+            {tabs.map((item) => (
+              <TabsTrigger
+                key={item.id}
+                value={item.id}
+                id={`tab-${item.id}`}
+                aria-controls={`panel-${item.id}`}
+                className="shrink-0 px-2"
+                onFocus={(event) =>
+                  event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
+                }
+              >
+                {item.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
         <TabsContent
           value={tab}
           id={`panel-${tab}`}
