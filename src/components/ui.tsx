@@ -593,7 +593,7 @@ export function Modal({
       <DialogContent
         showCloseButton={false}
         className={cn(
-          "flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden",
+          "flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0",
           wide && "sm:max-w-3xl",
         )}
         aria-modal="true"
@@ -612,23 +612,23 @@ export function Modal({
           }
         }}
       >
-        <DialogHeader className="shrink-0 pr-6">
+        <DialogHeader className="shrink-0 border-b bg-muted/50 px-6 py-4 pr-12">
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription id={descriptionId}>{description}</DialogDescription>}
         </DialogHeader>
         <div
           data-slot="dialog-body"
-          className="-mx-6 grid min-h-0 min-w-0 gap-4 overflow-y-auto px-6"
+          className="relative grid min-h-0 min-w-0 flex-1 gap-4 overflow-y-auto px-6 py-4"
         >
           {children}
         </div>
-        {footer && <DialogFooter className="shrink-0">{footer}</DialogFooter>}
+        {footer && <DialogFooter className="mx-0 mb-0 shrink-0">{footer}</DialogFooter>}
         <DialogClose asChild>
           <UiButton
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="absolute top-2 right-2"
+            className="absolute top-3 right-3"
             disabled={busy}
             aria-label="关闭对话框"
           >
