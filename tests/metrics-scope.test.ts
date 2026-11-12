@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AccountSummary, InstanceSummary, MetricsResult } from "@/lib/contracts";
-import { closeDatabase, getDatabase } from "@/server/db";
+import { closeDatabase, getDatabase, initializeDatabase } from "@/server/db";
 import { createAccount, deleteAccount, updateAccount } from "@/server/accounts";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { saveInventory } from "@/server/inventory";
@@ -30,7 +30,7 @@ beforeAll(() => {
   privateKey = pair.privateKey;
   fingerprint = createHash("md5").update(pair.publicKey).digest("hex").match(/.{2}/g)!.join(":");
 });
-beforeEach(() => {
+beforeEach(async () => {
   closeDatabase();
   base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
@@ -40,8 +40,8 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", "metrics-test");
   vi.stubEnv("ADMIN_PASSWORD", "metrics-test-password");
   vi.stubEnv("APP_ORIGIN", origin);
-  getDatabase();
-  token = login("metrics-test", "metrics-test-password").token;
+  await initializeDatabase();
+  token = (await login("metrics-test", "metrics-test-password")).token;
   account = createAccount(
     {
       name: "fixture",

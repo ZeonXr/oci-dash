@@ -95,7 +95,10 @@ function traffic(a: AccountSummary): TrafficAccountData {
 }
 function fixture(
   initial = [account("one")],
-  options: Pick<AnalyticsServiceOptions, "timeoutMs" | "instances"> = {},
+  options: Pick<
+    AnalyticsServiceOptions,
+    "timeoutMs" | "instances" | "isCurrent" | "snapshots"
+  > = {},
 ) {
   let clock = NOW;
   let revision = 0;
@@ -122,11 +125,13 @@ function fixture(
         region: "ap-tokyo-1",
       },
     }),
-    isCurrent: (id, r) => available.some((a) => a.id === id) && revision === r,
+    isCurrent:
+      options.isCurrent ?? ((id, r) => available.some((a) => a.id === id) && revision === r),
     now: () => clock,
     costs: { read: costRead },
     traffic: { read: trafficRead },
     timeoutMs: options.timeoutMs,
+    snapshots: options.snapshots,
   });
   return {
     service,
@@ -443,6 +448,87 @@ describe("analytics whole-query budgets and current region scope", () => {
     expect(next.cached).toBe(false);
     expect(next.rows).toHaveLength(3);
   });
+
+  it.each(["traffic", "costs"] as const)(
+    "avoids database access and snapshot writes after the last %s subscriber leaves",
+    async (kind) => {
+      const a = account("one");
+      let closed = false;
+      const assertOpen = () => {
+        if (closed) throw new Error("Synthetic database is closed");
+      };
+      const current = vi.fn(() => {
+        assertOpen();
+        return true;
+      });
+      const instances = vi.fn(() => {
+        assertOpen();
+        return [instance(a)];
+      });
+      const snapshots = {
+        get: vi.fn(() => {
+          assertOpen();
+          return undefined;
+        }),
+        set: vi.fn(() => {
+          assertOpen();
+        }),
+      };
+      const f = fixture([a], { isCurrent: current, instances, snapshots });
+      const first = await f.service[kind](range);
+      f.advance(3000);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let readFinished = false;
+      if (kind === "costs")
+        f.costRead.mockImplementationOnce(async () => {
+          await gate;
+          readFinished = true;
+          return cost(a, "EUR", "999");
+        });
+      else
+        f.trafficRead.mockImplementationOnce(async () => {
+          await gate;
+          readFinished = true;
+          return traffic(a);
+        });
+      const read = kind === "costs" ? f.costRead : f.trafficRead;
+      const controller = new AbortController();
+      const pending = f.service[kind](range, true, controller.signal);
+      const rejected = expect(pending).rejects.toMatchObject({ code: "ANALYTICS_CANCELLED" });
+      let before: number[];
+      try {
+        await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+        before = [
+          current.mock.calls.length,
+          instances.mock.calls.length,
+          snapshots.get.mock.calls.length,
+          snapshots.set.mock.calls.length,
+        ];
+        controller.abort();
+        await rejected;
+        closed = true;
+      } finally {
+        release();
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(readFinished).toBe(true);
+      expect([
+        current.mock.calls.length,
+        instances.mock.calls.length,
+        snapshots.get.mock.calls.length,
+        snapshots.set.mock.calls.length,
+      ]).toEqual(before!);
+      closed = false;
+      const cached = await f.service[kind](range);
+      expect(cached.cached).toBe(true);
+      expect(cached.rows).toEqual(first.rows);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(snapshots.set).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("never starts a query for an already-aborted caller", async () => {
     const f = fixture();

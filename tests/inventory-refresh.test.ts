@@ -6,7 +6,7 @@ import type { AccountSummary, InventoryResult } from "@/lib/contracts";
 import { createJobStore } from "@/server/jobs/store";
 import { runWorker, type WorkerDependencies } from "@/server/jobs/worker";
 import { requestInventoryRefresh } from "@/server/inventory-refresh";
-import { getDatabase, closeDatabase } from "@/server/db";
+import { getDatabase, closeDatabase, initializeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { handleApi } from "@/server/router";
 import { getJobStore } from "@/server/jobs";
@@ -415,11 +415,12 @@ describe("transactional page-triggered inventory refresh", () => {
   });
 });
 
-function apiFixture() {
+async function apiFixture() {
   vi.stubEnv("DATABASE_PATH", join(directory(), "api.sqlite"));
   vi.stubEnv("ADMIN_USERNAME", "refresh-admin");
   vi.stubEnv("ADMIN_PASSWORD", "test-only-refresh-password");
   vi.stubEnv("APP_ORIGIN", ORIGIN);
+  await initializeDatabase();
   const db = getDatabase();
   for (const id of ["account-a", "account-b"]) {
     db.prepare(
@@ -437,7 +438,7 @@ function apiFixture() {
       new Date().toISOString(),
     );
   }
-  const token = login("refresh-admin", "test-only-refresh-password").token;
+  const token = (await login("refresh-admin", "test-only-refresh-password")).token;
   const request = (
     path: string,
     method = "GET",
@@ -462,7 +463,7 @@ function apiFixture() {
 
 describe("inventory refresh API boundaries", () => {
   it("enqueues all accounts when omitted and returns the shared response contract without cloud calls", async () => {
-    const f = apiFixture();
+    const f = await apiFixture();
     const response = await f.request("inventory/refresh", "POST", { mode: "auto" });
     expect(response.status).toBe(202);
     const body = await response.json();
@@ -479,7 +480,7 @@ describe("inventory refresh API boundaries", () => {
   });
 
   it("requires login, same Origin and a valid explicit mode", async () => {
-    const f = apiFixture();
+    const f = await apiFixture();
     expect(
       (await f.request("inventory/refresh", "POST", { mode: "auto" }, { cookie: "" })).status,
     ).toBe(401);
@@ -504,7 +505,7 @@ describe("inventory refresh API boundaries", () => {
   });
 
   it("keeps GET inventory routes passive", async () => {
-    const f = apiFixture();
+    const f = await apiFixture();
     for (const path of ["dashboard", "accounts", "instances", "jobs"])
       expect((await f.request(path)).status).toBe(200);
     expect((await f.request("inventory/refresh")).status).toBe(404);
@@ -525,7 +526,7 @@ describe("inventory refresh API boundaries", () => {
   });
 
   it("routes account sync through manual deduplication without repeating its audit event", async () => {
-    const f = apiFixture();
+    const f = await apiFixture();
     const first = await f.request("accounts/account-a/sync", "POST");
     const second = await f.request("accounts/account-a/sync", "POST");
     expect(first.status).toBe(202);

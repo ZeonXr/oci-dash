@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { closeDatabase } from "@/server/db";
+import { closeDatabase, initializeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { handleApi } from "@/server/router";
 
@@ -31,7 +31,7 @@ const origin = "https://analytics-api.invalid";
 let directory = "",
   base = "",
   token = "";
-beforeEach(() => {
+beforeEach(async () => {
   forbidden.mockClear();
   closeDatabase();
   base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
@@ -42,7 +42,8 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", "analytics-test");
   vi.stubEnv("ADMIN_PASSWORD", "analytics-test-password");
   vi.stubEnv("APP_ORIGIN", origin);
-  token = login("analytics-test", "analytics-test-password").token;
+  await initializeDatabase();
+  token = (await login("analytics-test", "analytics-test-password")).token;
 });
 afterEach(() => {
   closeDatabase();

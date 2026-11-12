@@ -3,10 +3,11 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
-  scryptSync,
+  scrypt,
   timingSafeEqual,
 } from "node:crypto";
 import { readMasterKey } from "./master-key.ts";
+import { AppError } from "./errors.ts";
 
 export function encryptSecret(value: string): string {
   const iv = randomBytes(12),
@@ -33,14 +34,36 @@ export function decryptSecret(value: string): string {
 }
 
 export const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
-export function hashPassword(password: string): string {
+let passwordComputations = 0;
+async function passwordDigest(password: string, salt: string): Promise<Buffer> {
+  if (passwordComputations >= 2)
+    throw new AppError("密码处理请求较多，请稍后重试", 429, "PASSWORD_BUSY");
+  passwordComputations++;
+  try {
+    return await new Promise<Buffer>((resolve, reject) => {
+      scrypt(
+        password,
+        salt,
+        64,
+        { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+        (error, key) => {
+          if (error) reject(error);
+          else resolve(key);
+        },
+      );
+    });
+  } finally {
+    passwordComputations--;
+  }
+}
+export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  const hash = await passwordDigest(password, salt);
   return `scrypt$${salt}$${hash.toString("hex")}`;
 }
-export function verifyPassword(password: string, stored: string): boolean {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [kind, salt, digest] = stored.split("$");
   if (kind !== "scrypt" || !salt || !/^[a-f0-9]{128}$/.test(digest ?? "")) return false;
-  const actual = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  const actual = await passwordDigest(password, salt);
   return timingSafeEqual(actual, Buffer.from(digest, "hex"));
 }

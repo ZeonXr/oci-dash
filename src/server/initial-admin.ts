@@ -67,24 +67,34 @@ function normalizedUsername(username: string, password: string): string {
 }
 
 /** Preserve existing users; only an explicitly configured password initializes an empty database. */
-export function ensureInitialAdmin(db: Database.Database): void {
+export async function ensureInitialAdmin(db: Database.Database): Promise<void> {
   const orm = ormFor(db);
+  const required = db
+    .transaction(() => {
+      if (orm.select({ id: users.id }).from(users).limit(1).get()) {
+        markComplete(db, new Date().toISOString());
+        return false;
+      }
+      return initialAdminState(db) === "required";
+    })
+    .immediate();
+  const password = process.env.ADMIN_PASSWORD;
+  if (!required || !password) return;
+  const username = normalizedUsername(process.env.ADMIN_USERNAME || "admin", password);
+  const passwordHash = await hashPassword(password);
   db.transaction(() => {
     if (orm.select({ id: users.id }).from(users).limit(1).get()) {
       markComplete(db, new Date().toISOString());
       return;
     }
     if (initialAdminState(db) !== "required") return;
-    const password = process.env.ADMIN_PASSWORD;
-    if (!password) return;
-    const username = normalizedUsername(process.env.ADMIN_USERNAME || "admin", password);
     const timestamp = new Date().toISOString();
     orm
       .insert(users)
       .values({
         id: randomUUID(),
         username,
-        passwordHash: hashPassword(password),
+        passwordHash,
         createdAt: timestamp,
       })
       .run();
@@ -93,15 +103,17 @@ export function ensureInitialAdmin(db: Database.Database): void {
 }
 
 /** The user, session and completion marker commit together under one cross-process write lock. */
-export function createInitialAdminSession(
+export async function createInitialAdminSession(
   db: Database.Database,
   username: string,
   password: string,
   sessionSeconds: number,
-): { user: { id: string; username: string; mfaEnabled: false }; token: string } {
+): Promise<{ user: { id: string; username: string; mfaEnabled: false }; token: string }> {
   const name = normalizedUsername(username, password);
   if (!Number.isSafeInteger(sessionSeconds) || sessionSeconds <= 0)
     throw new Error("Invalid initial administrator session lifetime");
+  assertInitialAdminSetupAvailable(db);
+  const passwordHash = await hashPassword(password);
   const orm = ormFor(db);
   return db
     .transaction(() => {
@@ -110,10 +122,7 @@ export function createInitialAdminSession(
         token = randomBytes(32).toString("base64url"),
         now = new Date();
       const timestamp = now.toISOString();
-      orm
-        .insert(users)
-        .values({ id, username: name, passwordHash: hashPassword(password), createdAt: timestamp })
-        .run();
+      orm.insert(users).values({ id, username: name, passwordHash, createdAt: timestamp }).run();
       orm
         .insert(sessions)
         .values({

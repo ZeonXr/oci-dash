@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import * as OTPAuth from "otpauth";
 import { DrizzleQueryError } from "drizzle-orm";
 import type { InstanceSummary } from "@/lib/contracts";
-import { closeDatabase, getDatabase } from "@/server/db";
+import { closeDatabase, getDatabase, initializeDatabase } from "@/server/db";
 import {
   assertSameOrigin,
   beginMfa,
@@ -19,6 +19,7 @@ import {
   sessionCookie,
 } from "@/server/auth";
 import { decryptSecret, encryptSecret, hashToken } from "@/server/crypto";
+import * as passwordCrypto from "@/server/crypto";
 import {
   checkPrivateKey,
   createAccount,
@@ -64,7 +65,7 @@ beforeAll(() => {
   privateKey = pair.privateKey;
   fingerprint = createHash("md5").update(pair.publicKey).digest("hex").match(/.{2}/g)!.join(":");
 });
-beforeEach(() => {
+beforeEach(async () => {
   closeDatabase();
   const base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
@@ -78,10 +79,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-11-07T12:00:05Z"));
   for (const mock of Object.values(cloud)) mock.mockReset();
-  getDatabase();
+  await initializeDatabase();
 });
 afterEach(() => {
   closeDatabase();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   for (const { path, base } of directories.splice(0)) {
@@ -107,7 +109,7 @@ function request(
     ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
   });
 }
-const loggedIn = () => login(USERNAME, PASSWORD);
+const loggedIn = async () => await login(USERNAME, PASSWORD);
 const otp = (secret: string) =>
   new OTPAuth.TOTP({
     algorithm: "SHA1",
@@ -206,33 +208,33 @@ describe("session and request boundaries", () => {
     expect(getDatabase().prepare("SELECT count(*) FROM login_attempts").pluck().get()).toBe(0);
   });
 
-  it("removes a legacy generated initial password only after a successful password change", () => {
+  it("removes a legacy generated initial password only after a successful password change", async () => {
     const db = getDatabase();
     const path = join(dirname(db.name), ".initial-admin-password");
     writeFileSync(path, PASSWORD + "\n", { mode: 0o600 });
-    const current = login(USERNAME, PASSWORD);
-    expect(() =>
+    const current = await login(USERNAME, PASSWORD);
+    await expect(
       changePassword(current.user, "wrong-password", "replacement-password-901"),
-    ).toThrow();
+    ).rejects.toThrow();
     expect(existsSync(path)).toBe(true);
-    changePassword(current.user, PASSWORD, "replacement-password-901");
+    await changePassword(current.user, PASSWORD, "replacement-password-901");
     expect(existsSync(path)).toBe(false);
     expect(() => requireUser(request("auth/me", { token: current.token }))).toThrow();
-    expect(login(USERNAME, "replacement-password-901").user.id).toBe(current.user.id);
+    expect((await login(USERNAME, "replacement-password-901")).user.id).toBe(current.user.id);
     closeDatabase();
     getDatabase();
     expect(existsSync(path)).toBe(false);
   });
 
-  it("keeps a committed password change successful when initial-password cleanup fails", () => {
-    const current = loggedIn();
+  it("keeps a committed password change successful when initial-password cleanup fails", async () => {
+    const current = await loggedIn();
     mkdirSync(join(dirname(getDatabase().name), ".initial-admin-password"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(() =>
+      await expect(
         changePassword(current.user, PASSWORD, "replacement-password-901"),
-      ).not.toThrow();
-      expect(login(USERNAME, "replacement-password-901").user.id).toBe(current.user.id);
+      ).resolves.toBeUndefined();
+      expect((await login(USERNAME, "replacement-password-901")).user.id).toBe(current.user.id);
       expect(warn.mock.calls).toEqual([["Initial administrator password file cleanup failed."]]);
     } finally {
       warn.mockRestore();
@@ -240,7 +242,7 @@ describe("session and request boundaries", () => {
   });
 
   it("returns empty persisted resources on a fresh database without querying OCI", async () => {
-    const { token } = loggedIn();
+    const { token } = await loggedIn();
     for (const [path, expected] of [
       ["accounts", { accounts: [], syncJobs: [] }],
       ["instances", { instances: [] }],
@@ -269,7 +271,7 @@ describe("session and request boundaries", () => {
   });
 
   it("returns recent terminal context separately from every active instance job", async () => {
-    const { token } = loggedIn();
+    const { token } = await loggedIn();
     const account = createAccount(accountInput(), USERNAME);
     const store = getJobStore();
     const operation = (resourceId: string) => ({
@@ -327,7 +329,7 @@ describe("session and request boundaries", () => {
     expect(requireUser(request("auth/me", { token })).username).toBe(USERNAME);
     logout(request("auth/logout", { token }));
     expect(() => requireUser(request("auth/me", { token }))).toThrow();
-    const second = loggedIn();
+    const second = await loggedIn();
     vi.setSystemTime(new Date(Date.now() + 13 * 60 * 60 * 1000));
     expect(() => requireUser(request("auth/me", { token: second.token }))).toThrow();
   });
@@ -359,12 +361,12 @@ describe("session and request boundaries", () => {
       ),
     ).toThrow();
   });
-  it("bounds random-username login work and prunes old attempt records", () => {
+  it("bounds random-username login work and prunes old attempt records", async () => {
     const db = getDatabase();
     db.prepare("INSERT INTO login_attempts(subject,count,window_start) VALUES('global',40,?)").run(
       Date.now(),
     );
-    expect(() => login("unknown-random-name", "incorrect")).toThrow(
+    await expect(login("unknown-random-name", "incorrect")).rejects.toThrow(
       expect.objectContaining({ code: "LOGIN_RATE_LIMIT" }),
     );
     expect(
@@ -376,28 +378,161 @@ describe("session and request boundaries", () => {
     db.prepare(
       "INSERT INTO login_attempts(subject,count,window_start) VALUES('expired-other',1,?)",
     ).run(Date.now() - 20 * 60 * 1000);
-    loggedIn();
+    await loggedIn();
     expect(
       db.prepare("SELECT subject FROM login_attempts WHERE subject='expired-other'").get(),
     ).toBeUndefined();
   });
-  it("revokes every session after a password change and does not reset it on database reopen", () => {
-    const a = loggedIn(),
-      b = loggedIn();
-    expect(() => changePassword(a.user, "wrong", "replacement-password-902")).toThrow();
-    changePassword(a.user, PASSWORD, "replacement-password-902");
+  it("revokes every session after a password change and does not reset it on database reopen", async () => {
+    const a = await loggedIn(),
+      b = await loggedIn();
+    await expect(changePassword(a.user, "wrong", "replacement-password-902")).rejects.toThrow();
+    await changePassword(a.user, PASSWORD, "replacement-password-902");
     for (const token of [a.token, b.token])
       expect(() => requireUser(request("auth/me", { token }))).toThrow();
     closeDatabase();
-    expect(() => login(USERNAME, PASSWORD)).toThrow();
-    expect(login(USERNAME, "replacement-password-902").user.username).toBe(USERNAME);
+    await expect(login(USERNAME, PASSWORD)).rejects.toThrow();
+    expect((await login(USERNAME, "replacement-password-902")).user.username).toBe(USERNAME);
+  });
+});
+
+describe("asynchronous authentication boundaries", () => {
+  it("returns 429 without issuing a session when password computations are occupied", async () => {
+    const pending = [login(USERNAME, PASSWORD), login(USERNAME, PASSWORD)];
+    try {
+      const response = await handleApi(
+        request("auth/login", { method: "POST", body: { username: USERNAME, password: PASSWORD } }),
+        ["auth", "login"],
+      );
+      expect(response.status).toBe(429);
+      expect(response.headers.has("set-cookie")).toBe(false);
+      expect(await response.json()).toMatchObject({ code: "PASSWORD_BUSY" });
+    } finally {
+      await Promise.all(pending);
+    }
+  });
+
+  it.each(["password", "mfa"])(
+    "rechecks %s changes before creating a login session",
+    async (field) => {
+      const db = getDatabase();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.spyOn(passwordCrypto, "verifyPassword").mockImplementation(async () => {
+        expect(db.inTransaction).toBe(false);
+        await gate;
+        return true;
+      });
+      const pending = login(USERNAME, PASSWORD);
+      try {
+        if (field === "password")
+          db.prepare("UPDATE users SET password_hash=?").run("changed-during-verification");
+        else
+          db.prepare("UPDATE users SET mfa_secret=?").run(
+            encryptSecret(new OTPAuth.Secret({ size: 20 }).base32),
+          );
+      } finally {
+        release();
+      }
+      await expect(pending).rejects.toMatchObject({
+        code: field === "password" ? "INVALID_CREDENTIALS" : "MFA_REQUIRED",
+      });
+      expect(db.prepare("SELECT count(*) FROM sessions").pluck().get()).toBe(0);
+    },
+  );
+
+  it("allows only one concurrent password change to commit against the same old hash", async () => {
+    const current = await loggedIn();
+    const passwords = [
+      "replacement-concurrent-password-one",
+      "replacement-concurrent-password-two",
+    ];
+    const outcomes = await Promise.allSettled(
+      passwords.map((password) => changePassword(current.user, PASSWORD, password)),
+    );
+    expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((result) => result.status === "rejected")!;
+    expect(rejected.status === "rejected" && rejected.reason).toMatchObject({
+      code: "CREDENTIALS_CHANGED",
+    });
+    expect(getDatabase().prepare("SELECT count(*) FROM sessions").pluck().get()).toBe(0);
+    const winner = outcomes.findIndex((result) => result.status === "fulfilled");
+    expect((await login(USERNAME, passwords[winner])).user.id).toBe(current.user.id);
+    await expect(login(USERNAME, PASSWORD)).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+  });
+
+  it("does not overwrite an enrollment started while another MFA request computes its password", async () => {
+    const current = await loggedIn();
+    const outcomes = await Promise.allSettled([
+      beginMfa(current.user, PASSWORD),
+      beginMfa(current.user, PASSWORD),
+    ]);
+    const succeeded = outcomes.filter((result) => result.status === "fulfilled");
+    expect(succeeded).toHaveLength(1);
+    const rejected = outcomes.find((result) => result.status === "rejected")!;
+    expect(rejected.status === "rejected" && rejected.reason).toMatchObject({
+      code: "CREDENTIALS_CHANGED",
+    });
+    const encrypted = getDatabase()
+      .prepare("SELECT mfa_pending FROM users")
+      .pluck()
+      .get() as string;
+    expect(decryptSecret(encrypted)).toBe(succeeded[0].value.secret);
+  });
+
+  it("does not disable a replacement MFA secret after verifying a snapshot of the old credentials", async () => {
+    const current = await loggedIn();
+    const setup = await beginMfa(current.user, PASSWORD);
+    const codes = confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
+    const db = getDatabase();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(passwordCrypto, "verifyPassword").mockImplementation(async () => {
+      expect(db.inTransaction).toBe(false);
+      await gate;
+      return true;
+    });
+    const pending = disableMfa(current.user, PASSWORD, codes[0], hashToken(current.token));
+    const changed = encryptSecret(new OTPAuth.Secret({ size: 20 }).base32);
+    try {
+      db.prepare("UPDATE users SET mfa_secret=?").run(changed);
+    } finally {
+      release();
+    }
+    await expect(pending).rejects.toMatchObject({ status: 403 });
+    expect(db.prepare("SELECT mfa_secret FROM users").pluck().get()).toBe(changed);
+    expect(
+      JSON.parse(db.prepare("SELECT recovery_codes FROM users").pluck().get() as string),
+    ).toHaveLength(10);
   });
 });
 
 describe("MFA activation, replay and recovery", () => {
+  it.each(["totp", "recovery"])(
+    "rolls back %s consumption when creating a login session fails",
+    async (factor) => {
+      const current = await loggedIn();
+      const setup = await beginMfa(current.user, PASSWORD);
+      const codes = confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
+      const db = getDatabase();
+      const code = factor === "totp" ? otp(setup.secret) : codes[0];
+      const before = db.prepare("SELECT recovery_codes,last_otp_step FROM users").get();
+      db.exec(
+        "CREATE TRIGGER reject_login_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'synthetic session failure'); END",
+      );
+      await expect(login(USERNAME, PASSWORD, code)).rejects.toThrow("synthetic session failure");
+      expect(db.prepare("SELECT recovery_codes,last_otp_step FROM users").get()).toEqual(before);
+      db.exec("DROP TRIGGER reject_login_session");
+      expect((await login(USERNAME, PASSWORD, code)).user.mfaEnabled).toBe(true);
+    },
+  );
   it("requires a verified pending setup and revokes other existing sessions when enabled", async () => {
-    const current = loggedIn(),
-      other = loggedIn();
+    const current = await loggedIn(),
+      other = await loggedIn();
     const setup = await beginMfa(current.user, PASSWORD);
     expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
     expect(() => confirmMfa(current.user, "not-a-code", hashToken(current.token))).toThrow();
@@ -413,23 +548,23 @@ describe("MFA activation, replay and recovery", () => {
     expect(stored.mfa_secret).not.toContain(setup.secret);
     expect(stored.mfa_pending).toBeNull();
     for (const code of codes) expect(stored.recovery_codes).not.toContain(code.replaceAll("-", ""));
-    expect(() => login(USERNAME, PASSWORD)).toThrow(
+    await expect(login(USERNAME, PASSWORD)).rejects.toThrow(
       expect.objectContaining({ code: "MFA_REQUIRED" }),
     );
   });
   it("rejects expired pending enrollment without locking out password login", async () => {
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       setup = await beginMfa(auth.user, PASSWORD);
     vi.setSystemTime(new Date(Date.now() + 11 * 60 * 1000));
     expect(() => confirmMfa(auth.user, otp(setup.secret))).toThrow();
-    expect(loggedIn().user.mfaEnabled).toBe(false);
+    expect((await loggedIn()).user.mfaEnabled).toBe(false);
   });
   it("allows each recovery code once, removes its hash, and rejects TOTP replay", async () => {
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       setup = await beginMfa(auth.user, PASSWORD);
     const codes = confirmMfa(auth.user, otp(setup.secret), hashToken(auth.token));
-    expect(login(USERNAME, PASSWORD, codes[0].toUpperCase()).user.mfaEnabled).toBe(true);
-    expect(() => login(USERNAME, PASSWORD, codes[0])).toThrow(
+    expect((await login(USERNAME, PASSWORD, codes[0].toUpperCase())).user.mfaEnabled).toBe(true);
+    await expect(login(USERNAME, PASSWORD, codes[0])).rejects.toThrow(
       expect.objectContaining({ code: "INVALID_MFA" }),
     );
     const stored = getDatabase().prepare("SELECT recovery_codes FROM users").get() as {
@@ -440,20 +575,22 @@ describe("MFA activation, replay and recovery", () => {
       hashToken(codes[0].replaceAll("-", "")),
     );
     const code = otp(setup.secret);
-    expect(login(USERNAME, PASSWORD, code).user.mfaEnabled).toBe(true);
-    expect(() => login(USERNAME, PASSWORD, code)).toThrow(
+    expect((await login(USERNAME, PASSWORD, code)).user.mfaEnabled).toBe(true);
+    await expect(login(USERNAME, PASSWORD, code)).rejects.toThrow(
       expect.objectContaining({ code: "INVALID_MFA" }),
     );
     vi.setSystemTime(new Date(Date.now() + 30000));
-    expect(login(USERNAME, PASSWORD, otp(setup.secret)).user.mfaEnabled).toBe(true);
+    expect((await login(USERNAME, PASSWORD, otp(setup.secret))).user.mfaEnabled).toBe(true);
   });
   it("requires a factor to disable MFA and revokes other sessions and all old recovery codes", async () => {
-    const current = loggedIn(),
+    const current = await loggedIn(),
       setup = await beginMfa(current.user, PASSWORD);
     const codes = confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
-    const other = login(USERNAME, PASSWORD, codes[0]);
-    expect(() => disableMfa(current.user, PASSWORD, "invalid", hashToken(current.token))).toThrow();
-    disableMfa(current.user, PASSWORD, codes[1], hashToken(current.token));
+    const other = await login(USERNAME, PASSWORD, codes[0]);
+    await expect(
+      disableMfa(current.user, PASSWORD, "invalid", hashToken(current.token)),
+    ).rejects.toThrow();
+    await disableMfa(current.user, PASSWORD, codes[1], hashToken(current.token));
     expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
     expect(() => requireUser(request("auth/me", { token: other.token }))).toThrow();
     const row = getDatabase().prepare("SELECT mfa_secret,recovery_codes FROM users").get() as {
@@ -464,21 +601,23 @@ describe("MFA activation, replay and recovery", () => {
     expect(JSON.parse(row.recovery_codes)).toEqual([]);
   });
   it("rejects a TOTP already consumed by login before disabling MFA", async () => {
-    const current = loggedIn(),
+    const current = await loggedIn(),
       setup = await beginMfa(current.user, PASSWORD);
     confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
     const usedCode = otp(setup.secret);
-    login(USERNAME, PASSWORD, usedCode);
-    expect(() => disableMfa(current.user, PASSWORD, usedCode, hashToken(current.token))).toThrow();
+    await login(USERNAME, PASSWORD, usedCode);
+    await expect(
+      disableMfa(current.user, PASSWORD, usedCode, hashToken(current.token)),
+    ).rejects.toThrow();
     expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(true);
     vi.setSystemTime(new Date(Date.now() + 30000));
-    disableMfa(current.user, PASSWORD, otp(setup.secret), hashToken(current.token));
+    await disableMfa(current.user, PASSWORD, otp(setup.secret), hashToken(current.token));
     expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
   });
   it.each(["totp", "recovery"])(
     "rolls back %s consumption when MFA session revocation fails",
     async (factor) => {
-      const current = loggedIn(),
+      const current = await loggedIn(),
         setup = await beginMfa(current.user, PASSWORD);
       const codes = confirmMfa(current.user, otp(setup.secret), hashToken(current.token));
       const db = getDatabase();
@@ -486,7 +625,7 @@ describe("MFA activation, replay and recovery", () => {
       const before = db.prepare("SELECT mfa_secret,recovery_codes,last_otp_step FROM users").get();
       db.exec(`CREATE TRIGGER reject_session_revocation BEFORE DELETE ON sessions
         BEGIN SELECT RAISE(ABORT, 'synthetic revocation failure'); END`);
-      expect(() => disableMfa(current.user, PASSWORD, code)).toThrow(
+      await expect(disableMfa(current.user, PASSWORD, code)).rejects.toThrow(
         "synthetic revocation failure",
       );
       expect(db.prepare("SELECT mfa_secret,recovery_codes,last_otp_step FROM users").get()).toEqual(
@@ -494,7 +633,7 @@ describe("MFA activation, replay and recovery", () => {
       );
       expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(true);
       db.exec("DROP TRIGGER reject_session_revocation");
-      disableMfa(current.user, PASSWORD, code, hashToken(current.token));
+      await disableMfa(current.user, PASSWORD, code, hashToken(current.token));
       expect(requireUser(request("auth/me", { token: current.token })).mfaEnabled).toBe(false);
     },
   );
@@ -502,7 +641,7 @@ describe("MFA activation, replay and recovery", () => {
 
 describe("credential storage, account revisions and jobs", () => {
   it("keeps failed ORM query parameters out of HTTP errors, logs and task messages", async () => {
-    const { token } = loggedIn();
+    const { token } = await loggedIn();
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const input = accountInput({ name: "sensitive-account-label" });
     getDatabase().exec(`CREATE TRIGGER reject_orm_insert BEFORE INSERT ON accounts
@@ -556,7 +695,7 @@ describe("credential storage, account revisions and jobs", () => {
     expect(() => checkPrivateKey(privateKey, "00:".repeat(15) + "00")).toThrow(
       expect.objectContaining({ code: "KEY_FINGERPRINT_MISMATCH" }),
     );
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       account = createAccount(accountInput(), USERNAME);
     const row = getDatabase()
       .prepare("SELECT credential FROM accounts WHERE id=?")
@@ -572,7 +711,7 @@ describe("credential storage, account revisions and jobs", () => {
     expect(getAccount(account.id)).not.toHaveProperty("revision");
   });
   it("a name-only HTTP PATCH preserves regions, encrypted credentials and revision", async () => {
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       account = createAccount(accountInput(), USERNAME),
       snapshot = getCredentialSnapshot(account.id);
     const cached = instance(account.id, "rename-cache");
@@ -632,7 +771,7 @@ describe("credential storage, account revisions and jobs", () => {
     ]);
   });
   it("rejects stale verification status callbacks after a credential/scope revision changes", async () => {
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       account = createAccount(accountInput(), USERNAME),
       snapshot = getCredentialSnapshot(account.id);
     let finish!: (value: { tenancyName: string; homeRegion: string; regions: string[] }) => void;
@@ -663,7 +802,7 @@ describe("credential storage, account revisions and jobs", () => {
     expect(getAccount(account.id)?.lastError).toBeNull();
   });
   it("explicit connection verification resolves automatic names and preserves custom names", async () => {
-    const auth = loggedIn();
+    const auth = await loggedIn();
     for (const [index, name] of [undefined, "My OCI account"].entries()) {
       const account = createAccount(
         accountInput({ name, tenancyId: fakeOcid("tenancy", "named" + index) }),
@@ -687,7 +826,7 @@ describe("credential storage, account revisions and jobs", () => {
     expect(cloud.verify).toHaveBeenCalledTimes(2);
   });
   it("connection verification reports discovered regions without expanding the configured scope", async () => {
-    const auth = loggedIn(),
+    const auth = await loggedIn(),
       account = createAccount(accountInput(), USERNAME);
     const before = getCredentialSnapshot(account.id).revision;
     cloud.verify.mockResolvedValue({

@@ -73,7 +73,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         })
         .strict()
         .parse(await readJson(request));
-      const result = setupAdministrator(input.username, input.password);
+      const result = await setupAdministrator(input.username, input.password);
       return json({ user: result.user }, 201, {
         "Set-Cookie": sessionCookie(result.token, request),
       });
@@ -86,7 +86,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
           code: z.string().max(80).optional(),
         })
         .parse(await readJson(request));
-      const result = login(input.username, input.password, input.code);
+      const result = await login(input.username, input.password, input.code);
       return json({ user: result.user }, 200, {
         "Set-Cookie": sessionCookie(result.token, request),
       });
@@ -301,7 +301,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
             newPassword: z.string().min(12).max(256),
           })
           .parse(value);
-        changePassword(user, input.currentPassword, input.newPassword);
+        await changePassword(user, input.currentPassword, input.newPassword);
         return json({ ok: true, relogin: true }, 200, {
           "Set-Cookie": sessionCookie("", request, true),
         });
@@ -318,7 +318,7 @@ export async function handleApi(request: Request, segments: string[]): Promise<R
         const input = z
           .object({ password: z.string().max(256), code: z.string().min(6).max(80) })
           .parse(value);
-        disableMfa(user, input.password, input.code, currentSessionHash(request));
+        await disableMfa(user, input.password, input.code, currentSessionHash(request));
         return json({ ok: true });
       }
     }

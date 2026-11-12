@@ -25,8 +25,7 @@ interface ContainerState {
   ExitCode: number;
 }
 interface RuntimeIdentity {
-  webPid: number;
-  workerPid: number;
+  pid: number;
   workerId: string;
 }
 interface ShutdownProbe {
@@ -60,17 +59,16 @@ const restarts = (): number => Number(docker("inspect", "--format", "{{.RestartC
 function runtime(): RuntimeIdentity {
   const value = parseObject(
     execute(
-      "console.log(require('node:fs').readFileSync(require('node:path').join(require('node:os').tmpdir(),'oci-dash-runtime.json'),'utf8'))",
+      "const a=require('node:assert/strict'),f=require('node:fs'),p=require('node:path'),D=require('better-sqlite3');const nodes=f.readdirSync('/proc').filter(n=>/^\\d+$/.test(n)&&Number(n)!==process.pid).flatMap(n=>{try{const command=f.readFileSync('/proc/'+n+'/cmdline','utf8').split('\\0');return p.basename(command[0])==='node'&&!command.some(v=>v.endsWith('dist/health.mjs'))?[{pid:Number(n),command}]:[]}catch{return []}});a.equal(nodes.length,1,'Expected exactly one persistent application Node process');a.ok(nodes[0].command.some(v=>v.endsWith('dist/runtime.mjs')),'Expected the unified runtime entry');const d=new D('/data/oci-dash.db',{readonly:true,fileMustExist:true});const worker=d.prepare('SELECT id FROM job_workers WHERE stopped_at IS NULL ORDER BY last_heartbeat_at DESC LIMIT 1').get();d.close();console.log(JSON.stringify({pid:nodes[0].pid,workerId:worker?.id}));",
     ),
     "Runtime identity",
   );
-  assert.ok(positiveInteger(value.webPid), "Runtime Web PID must be a positive integer");
-  assert.ok(positiveInteger(value.workerPid), "Runtime worker PID must be a positive integer");
+  assert.ok(positiveInteger(value.pid), "Runtime PID must be a positive integer");
   assert.ok(
     typeof value.workerId === "string" && value.workerId.length > 0,
     "Runtime worker identity must be a nonempty string",
   );
-  return { webPid: value.webPid, workerPid: value.workerPid, workerId: value.workerId };
+  return { pid: value.pid, workerId: value.workerId };
 }
 function shutdownProbe(text: string): ShutdownProbe {
   const value = parseObject(text, "Shutdown probe");
@@ -145,7 +143,8 @@ try {
     image,
   );
   containerCreated = true;
-  await waitFor(healthy, "initial Web and worker health");
+  await waitFor(healthy, "initial application readiness");
+  runtime();
   assert.equal(execute("console.log(process.getuid())"), "0", "The default container user is root");
   assert.equal(
     execute("console.log(require('node:fs').readFileSync('/proc/1/comm','utf8').trim())"),
@@ -157,7 +156,7 @@ try {
       "const a=require('node:assert/strict'),f=require('node:fs'),o=require('node:os');a.equal(o.tmpdir(),'/dev/shm');a.equal(Number(f.statfsSync(o.tmpdir()).type),0x01021994);console.log('ok')",
     ),
     "ok",
-    "Temporary runtime and SSH files must use the container's built-in memory filesystem",
+    "Temporary SSH files must use the container's built-in memory filesystem",
   );
   assert.equal(accountIdentity(), "", "Empty deployments must wait for browser setup");
   assert.equal(
@@ -176,17 +175,23 @@ try {
     "PASS: empty container accepts first administrator setup and login without environment configuration",
   );
 
-  // Model a previous non-root deployment before the existing restart checks.
+  // Confirm that an existing data directory retains its owner through restarts.
   execute(
     "const f=require('node:fs'),p=require('node:path');for(const name of f.readdirSync('/data'))f.chownSync(p.join('/data',name),1000,1000);f.chmodSync('/data',0o700);f.chownSync('/data',1000,1000);",
   );
-  for (const role of ["worker", "web"] as const) {
+  {
     const before = runtime();
     const previousRestarts = restarts();
-    execute(`process.kill(${before[`${role}Pid`]}, 'SIGKILL')`);
+    // Tini may exit before docker exec can report the killer's status. Recovery
+    // below proves the application was killed and restarted successfully.
+    spawnSync("docker", ["exec", name, "node", "-e", `process.kill(${before.pid}, 'SIGKILL')`], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: 7000,
+    });
     await waitFor(
       () => restarts() > previousRestarts && healthy() && runtime().workerId !== before.workerId,
-      `Docker recovery after ${role} failure`,
+      "Docker recovery after application failure",
     );
     assert.equal(
       accountIdentity(),
@@ -205,23 +210,19 @@ try {
     );
     authenticate("login");
     console.log(
-      `PASS: ${role} failure restarts the application and preserves legacy node-owned data`,
+      "PASS: application failure restarts the container and preserves data, secrets and ownership",
     );
   }
 
   const current = runtime();
-  execute(`process.kill(${current.workerPid}, 'SIGSTOP')`);
-  execute(
-    `const D=require('better-sqlite3');const d=new D('/data/oci-dash.db');d.prepare('UPDATE job_workers SET last_heartbeat_at=? WHERE id=?').run(new Date(Date.now()-60000).toISOString(),${JSON.stringify(current.workerId)});d.close();`,
-  );
-  assert.equal(
-    execute("fetch('http://127.0.0.1:3000/api/health').then(r=>console.log(r.status))"),
-    "200",
-  );
-  assert.equal(healthy(), false, "Web availability must not mask an unresponsive worker");
-  execute(`process.kill(${current.workerPid}, 'SIGCONT')`);
-  await waitFor(healthy, "worker heartbeat resumes");
-  console.log("PASS: combined health detects a stalled worker while the Web remains available");
+  execute(`process.kill(${current.pid}, 'SIGSTOP')`);
+  try {
+    assert.equal(healthy(), false, "The HTTP probe must detect a stalled application");
+  } finally {
+    execute(`process.kill(${current.pid}, 'SIGCONT')`);
+  }
+  await waitFor(healthy, "application event loop resumes");
+  console.log("PASS: the bounded HTTP probe detects a stalled application and recovers on resume");
 
   const beforeStop = runtime();
   docker("stop", "--time", "35", name);
@@ -242,12 +243,12 @@ try {
     "node",
     image,
     "-e",
-    `require('node:fs').cpSync('/source','/data',{recursive:true});const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});const w=d.prepare('SELECT stopped_at FROM job_workers WHERE id=?').get(${JSON.stringify(beforeStop.workerId)});console.log(JSON.stringify({stopped:Boolean(w?.stopped_at),users:d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(',')}));d.close();`,
+    `require('node:fs').cpSync('/source','/data',{recursive:true});const checked=JSON.parse(require('node:child_process').execFileSync(process.execPath,['dist/check-data.mjs'],{encoding:'utf8'}).split('\\n')[0]);require('node:assert/strict').equal(checked.ok,true);require('node:assert/strict').equal(checked.administrators,1);const D=require('better-sqlite3');const d=new D('/data/oci-dash.db',{readonly:true});const w=d.prepare('SELECT stopped_at FROM job_workers WHERE id=?').get(${JSON.stringify(beforeStop.workerId)});console.log(JSON.stringify({stopped:Boolean(w?.stopped_at),users:d.prepare('SELECT id FROM users ORDER BY id').pluck().all().join(',')}));d.close();`,
   );
   const result = shutdownProbe(probe);
   assert.equal(result.stopped, true, "Worker must record its graceful shutdown");
   assert.equal(result.users, admin);
-  console.log("PASS: SIGTERM shuts down both processes cleanly and records the stopped worker");
+  console.log("PASS: SIGTERM shuts down the application cleanly and records the stopped worker");
 } catch (error) {
   if (containerCreated) {
     try {

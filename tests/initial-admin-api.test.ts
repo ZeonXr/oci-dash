@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeDatabase, getDatabase } from "@/server/db";
+import { closeDatabase, getDatabase, initializeDatabase } from "@/server/db";
 import { handleApi } from "@/server/router";
 import { login, requireUser, SESSION_COOKIE } from "@/server/auth";
 import { encryptSecret, hashPassword, hashToken } from "@/server/crypto";
@@ -11,7 +11,7 @@ const origin = "https://setup.example.invalid";
 const password = "web-setup-test-password";
 const base = resolve(process.env.OCI_DASH_TEST_TMP || ".test-tmp");
 let directory: string, path: string;
-beforeEach(() => {
+beforeEach(async () => {
   closeDatabase();
   mkdirSync(base, { recursive: true });
   directory = mkdtempSync(join(base, "initial-admin-api-"));
@@ -21,7 +21,7 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_PASSWORD", undefined);
   vi.stubEnv("ADMIN_USERNAME", undefined);
   vi.stubEnv("APP_ORIGIN", origin);
-  getDatabase();
+  await initializeDatabase();
 });
 afterEach(() => {
   closeDatabase();
@@ -38,7 +38,10 @@ function request(route: string, body?: unknown, headers: Record<string, string> 
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
-const status = () => handleApi(request("auth/status"), ["auth", "status"]);
+const status = async () => {
+  await initializeDatabase();
+  return handleApi(request("auth/status"), ["auth", "status"]);
+};
 const setup = (
   body: unknown = { username: "owner", password },
   headers: Record<string, string> = {},
@@ -82,7 +85,7 @@ describe("first administrator HTTP setup", () => {
     vi.stubEnv("ADMIN_PASSWORD", "short");
     vi.stubEnv("ADMIN_USERNAME", "different");
     expect(await (await status()).json()).toEqual({ setupRequired: false });
-    expect(login("owner", password).user).toEqual(body.user);
+    expect((await login("owner", password)).user).toEqual(body.user);
     expect(existsSync(join(directory, ".initial-admin-password"))).toBe(false);
   });
 
@@ -93,7 +96,7 @@ describe("first administrator HTTP setup", () => {
     const response = await setup();
     expect(response.status).toBe(201);
     expect(response.headers.has("set-cookie")).toBe(true);
-    expect(() => login("owner", password)).toThrowError(
+    await expect(login("owner", password)).rejects.toThrowError(
       expect.objectContaining({ code: "LOGIN_RATE_LIMIT" }),
     );
     expect(count("users")).toBe(1);
@@ -149,14 +152,14 @@ describe("first administrator HTTP setup", () => {
   });
 
   it("backfills legacy users without resetting their credentials", async () => {
-    const hash = hashPassword(password);
+    const hash = await hashPassword(password);
     getDatabase()
       .prepare("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)")
       .run("legacy-admin", "legacy", hash, new Date().toISOString());
     closeDatabase();
     expect(await (await status()).json()).toEqual({ setupRequired: false });
     expect(marker()).toBeTruthy();
-    expect(login("legacy", password).user.id).toBe("legacy-admin");
+    expect((await login("legacy", password)).user.id).toBe("legacy-admin");
     expect((await setup()).status).toBe(409);
     expect(getDatabase().prepare("SELECT password_hash FROM users").pluck().get()).toBe(hash);
   });
@@ -259,7 +262,7 @@ describe("first administrator HTTP setup", () => {
     vi.stubEnv("ADMIN_PASSWORD", password);
     vi.stubEnv("ADMIN_USERNAME", "environment-owner");
     expect(await (await status()).json()).toEqual({ setupRequired: false });
-    expect(login("environment-owner", password).user.username).toBe("environment-owner");
+    expect((await login("environment-owner", password)).user.username).toBe("environment-owner");
     expect((await setup()).status).toBe(409);
     expect(existsSync(join(directory, ".initial-admin-password"))).toBe(false);
   });

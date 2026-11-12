@@ -7,19 +7,24 @@ import { ormFor } from "./database/client";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { auditEvents } from "./database/schema";
 
+const STARTUP_BUSY_TIMEOUT_MS = 10_000;
+const RUNTIME_BUSY_TIMEOUT_MS = 250;
+
 let connection: Database.Database | undefined;
 let currentPath: string | undefined;
+let initialization: { db: Database.Database; promise: Promise<void> } | undefined;
 
 export function getDatabase(): Database.Database {
   const path = resolve(/* turbopackIgnore: true */ process.env.DATABASE_PATH ?? "data/oci-dash.db");
   if (connection && path === currentPath) return connection;
+  initialization = undefined;
   connection?.close();
   connection = undefined;
   currentPath = undefined;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
   try {
-    db.pragma("busy_timeout = 10000");
+    db.pragma(`busy_timeout = ${STARTUP_BUSY_TIMEOUT_MS}`);
     const prepareSchema = () => {
       db.pragma("journal_mode = WAL");
       db.pragma("foreign_keys = ON");
@@ -34,7 +39,8 @@ export function getDatabase(): Database.Database {
       prepareSchema();
     }
     initializeMasterKey(db, path);
-    ensureInitialAdmin(db);
+    // A runtime lock conflict must not block HTTP handling and worker heartbeats for seconds.
+    db.pragma(`busy_timeout = ${RUNTIME_BUSY_TIMEOUT_MS}`);
   } catch (error) {
     db.close();
     throw error;
@@ -49,7 +55,21 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
+export async function initializeDatabase(): Promise<void> {
+  const db = getDatabase();
+  if (initialization?.db === db) return initialization.promise;
+  const pending = { db, promise: ensureInitialAdmin(db) };
+  initialization = pending;
+  try {
+    await pending.promise;
+  } catch (error) {
+    if (initialization === pending) initialization = undefined;
+    throw error;
+  }
+}
+
 export function closeDatabase(): void {
+  initialization = undefined;
   connection?.close();
   connection = undefined;
   currentPath = undefined;

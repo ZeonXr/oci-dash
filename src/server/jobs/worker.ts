@@ -27,6 +27,10 @@ export interface WorkerDependencies {
 }
 export interface RunWorkerOptions {
   signal: AbortSignal;
+  /** Dependencies and the first heartbeat are ready; no task has been claimed yet. */
+  onReady?: () => void;
+  /** Reports the first scheduler failure immediately, before active work drains. */
+  onFatal?: (error: unknown) => void;
   pollIntervalMs?: number;
   /** Claim at most one task and await its outcome, without filling concurrent slots. */
   once?: boolean;
@@ -306,8 +310,6 @@ async function executeClaimed(
 
 /** Runs only queued jobs. Tests replace every cloud dependency with an offline adapter. */
 export async function runWorker(options: RunWorkerOptions): Promise<void> {
-  const dependencies = options.dependencies || (await defaultDependencies());
-  const store = dependencies.store;
   const workerId = options.workerId || randomUUID();
   const leaseMs = Math.max(100, options.leaseMs || DEFAULT_LEASE_MS);
   const heartbeatIntervalMs = Math.max(
@@ -317,54 +319,71 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
   const pollIntervalMs = Math.max(10, options.pollIntervalMs ?? 500);
   const shutdown = new AbortController();
   const stop = () => shutdown.abort(options.signal.reason || new Error("Worker stopped."));
-  options.signal.addEventListener("abort", stop, { once: true });
-  if (options.signal.aborted) stop();
+  let initializedStore: JobStore | undefined;
+  let heartbeat: NodeJS.Timeout | undefined;
   let fatalError: unknown;
+  let failed = false;
   const active = new Set<Promise<void>>();
   let wake: (() => void) | undefined;
-  const launch = (job: ClaimedJob) => {
-    const execution = executeClaimed(
-      job,
-      workerId,
-      dependencies,
-      shutdown.signal,
-      leaseMs,
-      heartbeatIntervalMs,
-    )
-      .catch((error) => {
-        fatalError ??= error;
-        shutdown.abort(error);
-      })
-      .finally(() => {
-        active.delete(execution);
-        wake?.();
-      });
-    active.add(execution);
-  };
-  const waitForWork = () =>
-    new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer);
-        shutdown.signal.removeEventListener("abort", done);
-        if (wake === done) wake = undefined;
-        resolve();
-      };
-      const timer = setTimeout(done, pollIntervalMs);
-      wake = done;
-      shutdown.signal.addEventListener("abort", done, { once: true });
-      if (shutdown.signal.aborted) done();
-    });
-  store.heartbeat(workerId, leaseMs);
-  const heartbeat = setInterval(() => {
+  const fail = (error: unknown) => {
+    if (failed) return;
+    failed = true;
+    fatalError = error;
     try {
-      store.heartbeat(workerId, leaseMs);
-    } catch (error) {
-      fatalError = error;
+      options.onFatal?.(error);
+    } catch {
+      // A lifecycle observer cannot replace the original failure or prevent cleanup.
+    } finally {
       shutdown.abort(error);
     }
-  }, heartbeatIntervalMs);
-  heartbeat.unref();
+  };
+  options.signal.addEventListener("abort", stop, { once: true });
+  if (options.signal.aborted) stop();
   try {
+    if (shutdown.signal.aborted) return;
+    const dependencies = options.dependencies || (await defaultDependencies());
+    const store = dependencies.store;
+    if (shutdown.signal.aborted) return;
+    initializedStore = store;
+    const launch = (job: ClaimedJob) => {
+      const execution = executeClaimed(
+        job,
+        workerId,
+        dependencies,
+        shutdown.signal,
+        leaseMs,
+        heartbeatIntervalMs,
+      )
+        .catch(fail)
+        .finally(() => {
+          active.delete(execution);
+          wake?.();
+        });
+      active.add(execution);
+    };
+    const waitForWork = () =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          shutdown.signal.removeEventListener("abort", done);
+          if (wake === done) wake = undefined;
+          resolve();
+        };
+        const timer = setTimeout(done, pollIntervalMs);
+        wake = done;
+        shutdown.signal.addEventListener("abort", done, { once: true });
+        if (shutdown.signal.aborted) done();
+      });
+    store.heartbeat(workerId, leaseMs);
+    heartbeat = setInterval(() => {
+      try {
+        store.heartbeat(workerId, leaseMs);
+      } catch (error) {
+        fail(error);
+      }
+    }, heartbeatIntervalMs);
+    heartbeat.unref();
+    options.onReady?.();
     while (!shutdown.signal.aborted) {
       // The database enforces the two-read/one-write limits across all workers;
       // this local bound only caps execution objects owned by this process.
@@ -378,16 +397,19 @@ export async function runWorker(options: RunWorkerOptions): Promise<void> {
       await waitForWork();
     }
   } catch (error) {
-    fatalError ??= error;
-    shutdown.abort(error);
+    fail(error);
   } finally {
     // Keep process and job heartbeats alive until every running task has persisted
     // its outcome/interruption. The entrypoint's existing shutdown deadline still
     // handles a transport that cannot return promptly.
     await Promise.allSettled([...active]);
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     options.signal.removeEventListener("abort", stop);
-    store.stopWorker(workerId);
+    try {
+      initializedStore?.stopWorker(workerId);
+    } catch (error) {
+      fail(error);
+    }
   }
-  if (fatalError) throw fatalError;
+  if (failed) throw fatalError;
 }

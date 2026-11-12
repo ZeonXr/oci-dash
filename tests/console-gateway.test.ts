@@ -2,7 +2,9 @@ import {
   createServer,
   request as httpRequest,
   type IncomingHttpHeaders,
+  type IncomingMessage,
   type Server,
+  type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
@@ -14,6 +16,8 @@ import { createConsoleGateway } from "@/server/console/gateway";
 import type { ConsoleManager } from "@/server/console/manager";
 import type { ConsoleActor } from "@/server/console/types";
 import { AppError } from "@/server/errors";
+import { createHttpHandler } from "@/server/runtime/http";
+import { configuredOrigin, gatewayRequestUrl } from "@/server/request-origin";
 
 const ORIGIN = "https://console-tests.invalid";
 const COOKIE = "test_session=gateway-test-login";
@@ -26,7 +30,7 @@ const actor: ConsoleActor = {
   sessionHash: "hashed-test-login",
 };
 const gateways: ReturnType<typeof createConsoleGateway>[] = [];
-const upstreams: Server[] = [];
+const servers: Server[] = [];
 const clients: WebSocket[] = [];
 
 interface HttpResult {
@@ -83,28 +87,38 @@ function bytes(value: RawData): Buffer {
 async function fixture(options: { origin?: string | null; requestOrigin?: string } = {}) {
   const requests: { method: string; path: string; headers: IncomingHttpHeaders; body: Buffer }[] =
     [];
-  const upstream = createServer((request, response) => {
+  const page = vi.fn(async (request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on("end", () => {
-      requests.push({
-        method: request.method!,
-        path: request.url!,
-        headers: request.headers,
-        body: Buffer.concat(chunks),
-      });
-      response.writeHead(201, {
-        "content-type": "application/octet-stream",
-        "set-cookie": ["first=one; Path=/; HttpOnly", "second=two; Path=/; SameSite=Lax"],
-        "x-upstream": "loopback-test",
-      });
-      response.end(Buffer.from([0, 255, 7, 128, 66]));
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requests.push({
+      method: request.method!,
+      path: request.url!,
+      headers: request.headers,
+      body: Buffer.concat(chunks),
     });
+    response.writeHead(201, {
+      "content-type": "application/octet-stream",
+      "set-cookie": ["first=one; Path=/; HttpOnly", "second=two; Path=/; SameSite=Lax"],
+      "x-handler": "direct-page",
+    });
+    response.end(Buffer.from([0, 255, 7, 128, 66]));
   });
-  upstreams.push(upstream);
-  await new Promise<void>((resolve, reject) => {
-    upstream.once("error", reject);
-    upstream.listen(0, "127.0.0.1", () => resolve());
+  const apiHandler = vi.fn(async (request: Request, _segments: string[]) => {
+    const url = new URL(request.url);
+    requests.push({
+      method: request.method,
+      path: url.pathname + url.search,
+      headers: Object.fromEntries(request.headers),
+      body: Buffer.from(await request.arrayBuffer()),
+    });
+    const headers = new Headers({
+      "content-type": "application/octet-stream",
+      "cache-control": "no-store",
+      "x-handler": "direct-api",
+    });
+    headers.append("set-cookie", "first=one; Path=/; HttpOnly");
+    headers.append("set-cookie", "second=two; Path=/; SameSite=Lax");
+    return new Response(Buffer.from([0, 255, 7, 128, 66]), { status: 201, headers });
   });
   let session: ConsoleSessionSummary = {
     id: SESSION_ID,
@@ -153,16 +167,48 @@ async function fixture(options: { origin?: string | null; requestOrigin?: string
     return actor;
   });
   const recordEvent = vi.fn();
+  const origin = options.origin === null ? undefined : (options.origin ?? ORIGIN);
   const gateway = createConsoleGateway({
     manager,
-    upstreamPort: (upstream.address() as AddressInfo).port,
-    ...(options.origin === null ? {} : { origin: options.origin ?? ORIGIN }),
+    origin,
     authenticate,
     recordEvent,
   });
   gateways.push(gateway);
-  await gateway.listen(0, "127.0.0.1");
-  const port = (gateway.server.address() as AddressInfo).port;
+  const handle = createHttpHandler({
+    origin,
+    ready: () => true,
+    health: () => Response.json({ ok: true }),
+    api: apiHandler,
+    console: () => gateway,
+    page,
+  });
+  const server = createServer((request, response) => {
+    void handle(request, response).catch(() => response.destroy());
+  });
+  servers.push(server);
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      const url = gatewayRequestUrl(
+        request.url ?? "/",
+        request.headers.host ?? "",
+        request.headers.origin,
+        configuredOrigin(origin),
+      );
+      if (!/^\/api\/console\/sessions\/[a-f0-9-]{36}\/socket$/.test(url.pathname))
+        throw new AppError("Unknown upgrade path", 404);
+      void gateway.upgrade(request, socket, head).catch(() => socket.destroy());
+    } catch (error) {
+      socket.end(
+        `HTTP/1.1 ${error instanceof AppError ? error.status : 400} Connection Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+      );
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const port = (server.address() as AddressInfo).port;
   const requestOrigin =
     options.requestOrigin ??
     options.origin ??
@@ -202,9 +248,11 @@ async function fixture(options: { origin?: string | null; requestOrigin?: string
   };
   return {
     gateway,
+    server,
     port,
-    upstream,
     requests,
+    page,
+    apiHandler,
     manager,
     authenticate,
     recordEvent,
@@ -245,7 +293,7 @@ afterEach(async () => {
   }
   await Promise.all(gateways.splice(0).map((gateway) => gateway.close()));
   await Promise.all(
-    upstreams.splice(0).map(
+    servers.splice(0).map(
       (server) =>
         new Promise<void>((resolve) => {
           server.close(() => resolve());
@@ -258,8 +306,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-describe("console gateway HTTP proxy", () => {
-  it("forwards ordinary HTTP body, path, cookie, status and separate Set-Cookie headers", async () => {
+describe("shared HTTP server with console handling", () => {
+  it("passes ordinary body, path and cookie directly to the page handler and preserves its response", async () => {
     const f = await fixture();
     const body = Buffer.from([0, 255, 1, 128, 33]);
     const result = await http(f.port, "/ordinary/path?value=one%20two", {
@@ -278,7 +326,7 @@ describe("console gateway HTTP proxy", () => {
       "first=one; Path=/; HttpOnly",
       "second=two; Path=/; SameSite=Lax",
     ]);
-    expect(result.headers["x-upstream"]).toBe("loopback-test");
+    expect(result.headers["x-handler"]).toBe("direct-page");
     expect(f.requests).toEqual([
       expect.objectContaining({
         method: "POST",
@@ -293,24 +341,51 @@ describe("console gateway HTTP proxy", () => {
     expect(f.authenticate).not.toHaveBeenCalled();
   });
 
-  it("responds safely when the loopback application is unavailable", async () => {
+  it("responds safely when the page handler is unavailable", async () => {
     const f = await fixture();
-    await new Promise<void>((resolve) => f.upstream.close(() => resolve()));
+    f.page.mockRejectedValueOnce(new Error("Synthetic page failure"));
     const result = await http(f.port, "/normal-page");
     expect(result.status).toBe(503);
     expect(JSON.parse(result.body.toString())).toMatchObject({ code: "APP_UNAVAILABLE" });
     expect(result.headers["cache-control"]).toBe("no-store");
   });
 
+  it("passes API Request metadata and body directly and preserves separate response cookies", async () => {
+    const f = await fixture();
+    const body = JSON.stringify({ synthetic: true });
+    const result = await f.api("/api/auth/login?source=direct", { method: "POST", body });
+    expect(result.status).toBe(201);
+    expect(result.body).toEqual(Buffer.from([0, 255, 7, 128, 66]));
+    expect(result.headers["set-cookie"]).toEqual([
+      "first=one; Path=/; HttpOnly",
+      "second=two; Path=/; SameSite=Lax",
+    ]);
+    expect(result.headers["x-handler"]).toBe("direct-api");
+    expect(f.requests).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        path: "/api/auth/login?source=direct",
+        body: Buffer.from(body),
+        headers: expect.objectContaining({ cookie: COOKIE, origin: ORIGIN }),
+      }),
+    ]);
+    expect(f.apiHandler.mock.calls[0][1]).toEqual(["auth", "login"]);
+    expect(f.page).not.toHaveBeenCalled();
+    expect(f.authenticate).not.toHaveBeenCalled();
+  });
+
   it("allows relative health reads through an internal Host while rejecting absolute foreign targets", async () => {
     const f = await fixture();
     const headers = { host: "127.0.0.1:3000" };
     const healthy = await http(f.port, "/api/health", { headers });
-    expect(healthy.status).toBe(201);
-    expect(f.requests[0]).toMatchObject({ path: "/api/health", headers });
+    expect(healthy.status).toBe(200);
+    expect(JSON.parse(healthy.body.toString())).toEqual({ ok: true });
+    expect(f.requests).toEqual([]);
     const foreign = await http(f.port, "https://other.invalid/api/health", { headers });
     expect(foreign.status).toBe(400);
-    expect(f.requests).toHaveLength(1);
+    expect(f.requests).toHaveLength(0);
+    expect(f.page).not.toHaveBeenCalled();
+    expect(f.apiHandler).not.toHaveBeenCalled();
     expect(f.authenticate).not.toHaveBeenCalled();
   });
 });
@@ -330,9 +405,9 @@ describe("console gateway without a fixed public origin", () => {
     expect(f.manager.connect).toHaveBeenCalledWith(SESSION_ID, TICKET, actor);
   });
 
-  it("supports HTTPS proxy Origins and preserves the external Host on the loopback hop", async () => {
+  it("supports HTTPS Origins and preserves the authoritative Host for direct page and API handling", async () => {
     const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
-    const result = await f.api("/api/auth/login", {
+    const result = await f.api("/ordinary/login", {
       method: "POST",
       body: JSON.stringify({ username: "synthetic" }),
       headers: {
@@ -345,6 +420,18 @@ describe("console gateway without a fixed public origin", () => {
     expect(f.requests[0].headers.host).toBe("PANEL.EXAMPLE:443");
     expect(f.requests[0].headers["x-forwarded-host"]).toBeUndefined();
     expect(f.requests[0].headers["x-forwarded-proto"]).toBeUndefined();
+    const login = await f.api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: "synthetic" }),
+      headers: {
+        host: "PANEL.EXAMPLE:443",
+        "x-forwarded-host": "attacker.example",
+        "x-forwarded-proto": "http",
+      },
+    });
+    expect(login.status).toBe(201);
+    expect(new URL(f.apiHandler.mock.calls[0][0].url).hostname).toBe("panel.example");
+    expect(f.apiHandler.mock.calls[0][0].headers.get("host")).toBe("PANEL.EXAMPLE:443");
     const created = await f.api("https://panel.example/api/console/sessions", {
       method: "POST",
       body: JSON.stringify({ instanceId: "test-instance" }),
@@ -355,7 +442,7 @@ describe("console gateway without a fixed public origin", () => {
   });
 
   it.each(["", "null", "https://other.example"])(
-    "rejects %s Origin on proxy writes and websocket upgrades",
+    "rejects %s Origin on API writes and websocket upgrades",
     async (origin) => {
       const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
       const denied = await f.api("/api/auth/login", {
@@ -372,7 +459,7 @@ describe("console gateway without a fixed public origin", () => {
     },
   );
 
-  it("rejects cross-site and missing Host before proxying a write", async () => {
+  it("rejects cross-site and missing Host before dispatching a write", async () => {
     const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
     const invalidHeaders: Record<string, string>[] = [
       { "sec-fetch-site": "cross-site" },
@@ -385,7 +472,7 @@ describe("console gateway without a fixed public origin", () => {
     expect(f.requests).toHaveLength(0);
   });
 
-  it("rejects absolute foreign HTTP and websocket targets before forwarding or consuming tickets", async () => {
+  it("rejects absolute foreign HTTP and websocket targets before dispatching or consuming tickets", async () => {
     const f = await fixture({ origin: null, requestOrigin: "https://panel.example" });
     for (const target of [
       "https://other.example/api/auth/login",
@@ -413,6 +500,32 @@ describe("console gateway without a fixed public origin", () => {
 });
 
 describe("console gateway HTTP API", () => {
+  it("retains its authentication and mutation Origin checks for standard Request callers", async () => {
+    const f = await fixture();
+    const body = JSON.stringify({ instanceId: "test-instance" });
+    const unauthenticated = await f.gateway.handleRequest(
+      new Request(`${ORIGIN}/api/console/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body,
+      }),
+    );
+    expect(unauthenticated.status).toBe(401);
+    const crossOrigin = await f.gateway.handleRequest(
+      new Request(`${ORIGIN}/api/console/sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: COOKIE,
+          origin: "https://other.invalid",
+        },
+        body,
+      }),
+    );
+    expect(crossOrigin.status).toBe(403);
+    expect(f.manager.create).not.toHaveBeenCalled();
+  });
+
   it("requires authentication for read and write console endpoints", async () => {
     const f = await fixture();
     for (const [method, path] of [
@@ -579,7 +692,7 @@ describe("console gateway HTTP API", () => {
     expect(f.manager.create).not.toHaveBeenCalled();
   });
 
-  it("preserves manager authorization errors and keeps unknown console routes out of the upstream", async () => {
+  it("preserves manager authorization errors and keeps unknown console routes out of page and API handlers", async () => {
     const f = await fixture();
     f.manager.get.mockImplementation(() => {
       throw new AppError("another login owns this console", 403, "CONSOLE_FORBIDDEN");
@@ -761,8 +874,78 @@ describe("console gateway binary transport and closure", () => {
     expect(client.readyState).toBe(WebSocket.CLOSED);
     expect(f.stream.destroyed).toBe(true);
     expect(f.manager.shutdown).toHaveBeenCalledTimes(1);
+    expect(f.server.listening).toBe(true);
+    expect((await http(f.port, "/normal-page")).status).toBe(201);
+    const unavailable = await f.api("/api/console/session");
+    expect(unavailable.status).toBe(503);
+    expect(JSON.parse(unavailable.body.toString())).toMatchObject({ code: "CONSOLE_UNAVAILABLE" });
+    const denied = await rejected(f.client());
+    expect(denied.status).toBe(503);
+    expect(f.manager.connect).toHaveBeenCalledTimes(1);
     await f.gateway.close();
     expect(f.manager.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminates pending upgrades and destroys a backend connection that finishes after close", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lateStream = new Duplex({
+      read() {},
+      write(_chunk, _encoding, done) {
+        done();
+      },
+    });
+    f.manager.connect.mockImplementation(async () => {
+      await pending;
+      return lateStream;
+    });
+    const client = f.client();
+    const closed = new Promise<void>((resolve) => client.once("close", () => resolve()));
+    try {
+      await vi.waitFor(() => expect(f.manager.connect).toHaveBeenCalledOnce());
+      await f.gateway.close();
+      await closed;
+      expect(client.readyState).toBe(WebSocket.CLOSED);
+      expect(f.manager.shutdown).toHaveBeenCalledOnce();
+      expect(lateStream.destroyed).toBe(false);
+      release();
+      await vi.waitFor(() => expect(lateStream.destroyed).toBe(true));
+      expect(f.recordEvent).not.toHaveBeenCalled();
+    } finally {
+      release();
+      lateStream.destroy();
+    }
+  });
+
+  it("waits for manager shutdown without taking ownership of the shared HTTP server", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.manager.shutdown.mockImplementation(async () => {
+      await pending;
+      f.stream.destroy();
+    });
+    let stopped = false;
+    const closing = f.gateway.close().then(() => {
+      stopped = true;
+    });
+    try {
+      expect(f.manager.shutdown).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(stopped).toBe(false);
+      expect(f.server.listening).toBe(true);
+      release();
+      await closing;
+      expect(stopped).toBe(true);
+    } finally {
+      release();
+      await closing;
+    }
   });
 
   it.each(["revoked", "changed-owner"] as const)(

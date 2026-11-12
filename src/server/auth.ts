@@ -5,6 +5,7 @@ import { and, eq, gt, lt, lte, ne, sql } from "drizzle-orm";
 import type { SessionUser } from "@/lib/contracts";
 import { getDatabase, getOrm, audit } from "./db";
 import { loginAttempts, sessions, users } from "./database/schema";
+import { ormFor } from "./database/client";
 import { decryptSecret, encryptSecret, hashPassword, hashToken, verifyPassword } from "./crypto";
 import { AppError } from "./errors";
 import { assertRequestOrigin } from "./request-origin";
@@ -20,8 +21,8 @@ const SESSION_SECONDS = 12 * 60 * 60;
 type UserRow = typeof users.$inferSelect;
 const dummyPassword = `scrypt$${"0".repeat(32)}$${"0".repeat(128)}`;
 
-function userRow(id: string): UserRow {
-  const row = getOrm().select().from(users).where(eq(users.id, id)).get();
+function userRow(id: string, db = getDatabase()): UserRow {
+  const row = ormFor(db).select().from(users).where(eq(users.id, id)).get();
   if (!row) throw new AppError("请重新登录", 401, "UNAUTHORIZED");
   return row;
 }
@@ -121,7 +122,8 @@ const totp = (secret: string, username: string) =>
     period: 30,
     secret: OTPAuth.Secret.fromBase32(secret),
   });
-function verifyFactor(row: UserRow, code: string): boolean {
+function verifyFactor(row: UserRow, code: string, db = getDatabase()): boolean {
+  const orm = ormFor(db);
   if (!row.mfaSecret) return false;
   if (/^\d{6}$/.test(code)) {
     const delta = totp(decryptSecret(row.mfaSecret), row.username).validate({
@@ -131,7 +133,7 @@ function verifyFactor(row: UserRow, code: string): boolean {
     if (delta === null) return false;
     const step = Math.floor(Date.now() / 30000) + delta;
     return (
-      getOrm()
+      orm
         .update(users)
         .set({ lastOtpStep: step })
         .where(and(eq(users.id, row.id), lt(users.lastOtpStep, step)))
@@ -140,11 +142,9 @@ function verifyFactor(row: UserRow, code: string): boolean {
   }
   const normalized = code.replaceAll("-", "").toLowerCase();
   if (!/^[a-f0-9]{20}$/.test(normalized)) return false;
-  const key = hashToken(normalized),
-    db = getDatabase(),
-    orm = getOrm();
+  const key = hashToken(normalized);
   return db.transaction(() => {
-    const fresh = userRow(row.id),
+    const fresh = userRow(row.id, db),
       codes = JSON.parse(fresh.recoveryCodes) as string[];
     if (!codes.includes(key)) return false;
     orm
@@ -159,52 +159,62 @@ export function administratorSetupStatus(): { setupRequired: boolean } {
   return { setupRequired: initialAdminState(getDatabase()) === "required" };
 }
 
-export function setupAdministrator(
+export async function setupAdministrator(
   username: string,
   password: string,
-): { user: SessionUser; token: string } {
+): Promise<{ user: SessionUser; token: string }> {
   const db = getDatabase();
   assertInitialAdminSetupAvailable(db);
   // A separate subject bounds setup attempts without calling login after creating the user.
   limitLogin(hashToken("initial-admin-setup"));
-  const result = createInitialAdminSession(db, username, password, SESSION_SECONDS);
+  const result = await createInitialAdminSession(db, username, password, SESSION_SECONDS);
   if (!clearInitialAdminPassword(db.name))
     console.warn("Initial administrator password file cleanup failed.");
   return result;
 }
 
-export function login(
+export async function login(
   username: string,
   password: string,
   code?: string,
-): { user: SessionUser; token: string } {
+): Promise<{ user: SessionUser; token: string }> {
   const subject = hashToken(username.toLowerCase());
   limitLogin(subject);
   const db = getDatabase(),
-    orm = getOrm(),
+    orm = ormFor(db),
     row = orm.select().from(users).where(eq(users.username, username)).get();
-  if (!verifyPassword(password, row?.passwordHash ?? dummyPassword) || !row)
+  if (!(await verifyPassword(password, row?.passwordHash ?? dummyPassword)) || !row)
     throw new AppError("账号或密码不正确", 401, "INVALID_CREDENTIALS");
-  if (row.mfaSecret && !code) throw new AppError("请输入动态验证码或恢复码", 401, "MFA_REQUIRED");
-  if (row.mfaSecret && !verifyFactor(row, code!))
-    throw new AppError("验证码无效或已使用", 401, "INVALID_MFA");
-  const token = randomBytes(32).toString("base64url"),
-    now = new Date();
-  db.transaction(() => {
-    orm.delete(loginAttempts).where(eq(loginAttempts.subject, subject)).run();
-    orm.delete(sessions).where(lte(sessions.expiresAt, now.toISOString())).run();
-    orm
-      .insert(sessions)
-      .values({
-        tokenHash: hashToken(token),
-        userId: row.id,
-        expiresAt: new Date(now.getTime() + SESSION_SECONDS * 1000).toISOString(),
-        createdAt: now.toISOString(),
-      })
-      .run();
-  })();
-  audit(row.username, "auth.login", "session", "登录成功");
-  return { token, user: { id: row.id, username: row.username, mfaEnabled: !!row.mfaSecret } };
+  const result = db
+    .transaction(() => {
+      const current = orm.select().from(users).where(eq(users.id, row.id)).get();
+      if (!current || current.username !== username || current.passwordHash !== row.passwordHash)
+        throw new AppError("账号或密码不正确", 401, "INVALID_CREDENTIALS");
+      if (current.mfaSecret && !code)
+        throw new AppError("请输入动态验证码或恢复码", 401, "MFA_REQUIRED");
+      if (current.mfaSecret && !verifyFactor(current, code!, db))
+        throw new AppError("验证码无效或已使用", 401, "INVALID_MFA");
+      const token = randomBytes(32).toString("base64url"),
+        now = new Date();
+      orm.delete(loginAttempts).where(eq(loginAttempts.subject, subject)).run();
+      orm.delete(sessions).where(lte(sessions.expiresAt, now.toISOString())).run();
+      orm
+        .insert(sessions)
+        .values({
+          tokenHash: hashToken(token),
+          userId: current.id,
+          expiresAt: new Date(now.getTime() + SESSION_SECONDS * 1000).toISOString(),
+          createdAt: now.toISOString(),
+        })
+        .run();
+      return {
+        token,
+        user: { id: current.id, username: current.username, mfaEnabled: !!current.mfaSecret },
+      };
+    })
+    .immediate();
+  audit(result.user.username, "auth.login", "session", "登录成功");
+  return result;
 }
 export function logout(request: Request): void {
   const token = cookieToken(request);
@@ -214,37 +224,57 @@ export function logout(request: Request): void {
       .where(eq(sessions.tokenHash, hashToken(token)))
       .run();
 }
-export function changePassword(user: SessionUser, current: string, replacement: string): void {
-  const row = userRow(user.id);
-  if (!verifyPassword(current, row.passwordHash)) throw new AppError("当前密码不正确", 403);
+export async function changePassword(
+  user: SessionUser,
+  current: string,
+  replacement: string,
+): Promise<void> {
+  const db = getDatabase(),
+    orm = ormFor(db),
+    row = userRow(user.id, db);
+  if (!(await verifyPassword(current, row.passwordHash))) throw new AppError("当前密码不正确", 403);
   if (replacement.length < 12 || replacement.length > 256)
     throw new AppError("新密码需为 12–256 个字符");
-  const hashed = hashPassword(replacement),
-    db = getDatabase(),
-    orm = getOrm();
+  const hashed = await hashPassword(replacement);
   db.transaction(() => {
+    const fresh = userRow(user.id, db);
+    if (fresh.passwordHash !== row.passwordHash || fresh.mfaSecret !== row.mfaSecret)
+      throw new AppError("账号凭据已变更，请重试", 409, "CREDENTIALS_CHANGED");
     orm.update(users).set({ passwordHash: hashed }).where(eq(users.id, user.id)).run();
     orm.delete(sessions).where(eq(sessions.userId, user.id)).run();
-  })();
+  }).immediate();
   if (!clearInitialAdminPassword(db.name))
     console.warn("Initial administrator password file cleanup failed.");
   audit(user.username, "auth.password-change", "account", "密码已更新，全部会话已退出");
 }
 export async function beginMfa(user: SessionUser, password: string) {
-  const row = userRow(user.id);
-  if (!verifyPassword(password, row.passwordHash)) throw new AppError("密码不正确", 403);
+  const db = getDatabase(),
+    orm = ormFor(db),
+    row = userRow(user.id, db);
+  if (!(await verifyPassword(password, row.passwordHash))) throw new AppError("密码不正确", 403);
   if (row.mfaSecret) throw new AppError("MFA 已启用", 409);
   const secret = new OTPAuth.Secret({ size: 20 }).base32,
-    uri = totp(secret, user.username).toString();
-  getOrm()
-    .update(users)
-    .set({
-      mfaPending: encryptSecret(secret),
-      mfaPendingExpires: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    })
-    .where(eq(users.id, user.id))
-    .run();
-  return { secret, uri, qrDataUrl: await QRCode.toDataURL(uri, { width: 240, margin: 2 }) };
+    uri = totp(secret, user.username).toString(),
+    qrDataUrl = await QRCode.toDataURL(uri, { width: 240, margin: 2 });
+  db.transaction(() => {
+    const fresh = userRow(user.id, db);
+    if (
+      fresh.passwordHash !== row.passwordHash ||
+      fresh.mfaSecret !== row.mfaSecret ||
+      fresh.mfaPending !== row.mfaPending ||
+      fresh.mfaPendingExpires !== row.mfaPendingExpires
+    )
+      throw new AppError("账号凭据已变更，请重试", 409, "CREDENTIALS_CHANGED");
+    orm
+      .update(users)
+      .set({
+        mfaPending: encryptSecret(secret),
+        mfaPendingExpires: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      })
+      .where(eq(users.id, user.id))
+      .run();
+  }).immediate();
+  return { secret, uri, qrDataUrl };
 }
 export function confirmMfa(user: SessionUser, code: string, keepSessionHash?: string): string[] {
   const row = userRow(user.id);
@@ -280,19 +310,24 @@ export function confirmMfa(user: SessionUser, code: string, keepSessionHash?: st
   audit(user.username, "auth.mfa-enable", "account", "MFA 绑定已验证并启用");
   return recoveryCodes;
 }
-export function disableMfa(
+export async function disableMfa(
   user: SessionUser,
   password: string,
   code: string,
   keepSessionHash?: string,
-): void {
+): Promise<void> {
   const db = getDatabase(),
-    orm = getOrm(),
-    row = userRow(user.id);
-  if (!verifyPassword(password, row.passwordHash)) throw new AppError("密码或验证码不正确", 403);
+    orm = ormFor(db),
+    row = userRow(user.id, db);
+  if (!(await verifyPassword(password, row.passwordHash)))
+    throw new AppError("密码或验证码不正确", 403);
   db.transaction(() => {
-    const current = userRow(user.id);
-    if (current.passwordHash !== row.passwordHash || !verifyFactor(current, code))
+    const current = userRow(user.id, db);
+    if (
+      current.passwordHash !== row.passwordHash ||
+      current.mfaSecret !== row.mfaSecret ||
+      !verifyFactor(current, code, db)
+    )
       throw new AppError("密码或验证码无效或已使用", 403);
     orm
       .update(users)

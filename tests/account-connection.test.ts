@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { InstanceSummary } from "@/lib/contracts";
-import { closeDatabase, getDatabase } from "@/server/db";
+import { closeDatabase, getDatabase, initializeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import {
   createAccount,
@@ -61,7 +61,7 @@ beforeAll(() => {
   firstKey = makeKey();
   replacementKey = makeKey();
 });
-beforeEach(() => {
+beforeEach(async () => {
   closeDatabase();
   const base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
@@ -76,7 +76,8 @@ beforeEach(() => {
     mock.mockReset();
     mock.mockRejectedValue(new Error("OCI must not run in account save requests"));
   }
-  token = login(USERNAME, PASSWORD).token;
+  await initializeDatabase();
+  token = (await login(USERNAME, PASSWORD)).token;
 });
 afterEach(() => {
   try {

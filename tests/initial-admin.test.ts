@@ -41,8 +41,8 @@ function open(): Database.Database {
 const user = () => db.prepare("SELECT * FROM users").get() as User | undefined;
 const marker = () =>
   db.prepare("SELECT value FROM settings WHERE key=?").get(INITIAL_ADMIN_SETUP_KEY);
-const register = (name = "owner", password = PASSWORD) =>
-  createInitialAdminSession(db, name, password, 43_200);
+const register = async (name = "owner", password = PASSWORD) =>
+  await createInitialAdminSession(db, name, password, 43_200);
 beforeEach(() => {
   mkdirSync(base, { recursive: true });
   directory = mkdtempSync(join(base, "initial-admin-test-"));
@@ -70,21 +70,21 @@ afterEach(() => {
 describe("administrator setup state", () => {
   it.each([undefined, ""])(
     "leaves a new database awaiting setup without an environment password (%s)",
-    (value) => {
+    async (value) => {
       vi.stubEnv("ADMIN_PASSWORD", value);
-      ensureInitialAdmin(db);
+      await ensureInitialAdmin(db);
       expect(initialAdminState(db)).toBe("required");
       expect(user()).toBeUndefined();
       expect(marker()).toBeUndefined();
       expect(existsSync(passwordFile)).toBe(false);
     },
   );
-  it("keeps explicit environment initialization compatible and normalizes its username", () => {
+  it("keeps explicit environment initialization compatible and normalizes its username", async () => {
     vi.stubEnv("ADMIN_USERNAME", "  configured-admin  ");
     vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(user()?.username).toBe("configured-admin");
-    expect(verifyPassword(PASSWORD, user()!.password_hash)).toBe(true);
+    expect(await verifyPassword(PASSWORD, user()!.password_hash)).toBe(true);
     expect(marker()).toBeTruthy();
     expect(initialAdminState(db)).toBe("completed");
     expect(db.prepare("SELECT count(*) FROM sessions").pluck().get()).toBe(0);
@@ -92,74 +92,74 @@ describe("administrator setup state", () => {
   });
   it.each(["short", "x".repeat(257)])(
     "rejects invalid configured passwords without partially initializing (%s)",
-    (value) => {
+    async (value) => {
       vi.stubEnv("ADMIN_PASSWORD", value);
-      expect(() => ensureInitialAdmin(db)).toThrowError(
+      await expect(ensureInitialAdmin(db)).rejects.toThrowError(
         expect.objectContaining({ code: "VALIDATION_ERROR" }),
       );
       expect(user()).toBeUndefined();
       expect(marker()).toBeUndefined();
     },
   );
-  it("backfills the marker for old users without resetting credentials or applying invalid environment values", () => {
+  it("backfills the marker for old users without resetting credentials or applying invalid environment values", async () => {
     db.prepare("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,?,?)").run(
       "existing",
       "old-owner",
-      hashPassword(PASSWORD),
+      await hashPassword(PASSWORD),
       "2026-01-01",
     );
     const before = user();
     vi.stubEnv("ADMIN_PASSWORD", "short");
     vi.stubEnv("ADMIN_USERNAME", "new-name");
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(user()).toEqual(before);
     expect(marker()).toBeTruthy();
-    expect(() => register()).toThrowError(
+    await expect(register()).rejects.toThrowError(
       expect.objectContaining({ code: "SETUP_ALREADY_COMPLETED", status: 409 }),
     );
   });
-  it("does not reopen setup or apply an environment password after the users table is emptied", () => {
-    register();
+  it("does not reopen setup or apply an environment password after the users table is emptied", async () => {
+    await register();
     db.prepare("DELETE FROM users").run();
     db.close();
     db = open();
     vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(user()).toBeUndefined();
     expect(initialAdminState(db)).toBe("completed");
-    expect(() => register()).toThrowError(
+    await expect(register()).rejects.toThrowError(
       expect.objectContaining({ code: "SETUP_ALREADY_COMPLETED" }),
     );
   });
-  it("refuses to claim an old database containing cloud accounts but no administrator", () => {
+  it("refuses to claim an old database containing cloud accounts but no administrator", async () => {
     db.prepare(
       "INSERT INTO accounts(id,name,tenancy_id,user_id,fingerprint,home_region,regions,credential,created_at) VALUES(?,'Fixture','tenancy','user','fingerprint','region','[]','fixture-only','2026-01-01')",
     ).run("synthetic-existing-account");
     vi.stubEnv("ADMIN_PASSWORD", PASSWORD);
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(initialAdminState(db)).toBe("unavailable");
     expect(user()).toBeUndefined();
-    expect(() => register()).toThrowError(
+    await expect(register()).rejects.toThrowError(
       expect.objectContaining({ code: "SETUP_UNAVAILABLE", status: 409 }),
     );
   });
-  it("treats any existing completion-marker value as closed rather than repairing it into an open setup", () => {
+  it("treats any existing completion-marker value as closed rather than repairing it into an open setup", async () => {
     db.prepare("INSERT INTO settings VALUES(?,?)").run(
       INITIAL_ADMIN_SETUP_KEY,
       "invalid-old-marker",
     );
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(initialAdminState(db)).toBe("completed");
     expect(user()).toBeUndefined();
   });
 });
 
 describe("atomic administrator registration", () => {
-  it("commits the normalized user, hashed session and marker together without logging or persisting plaintext", () => {
+  it("commits the normalized user, hashed session and marker together without logging or persisting plaintext", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const result = register("  owner  ");
+    const result = await register("  owner  ");
     expect(result.user).toEqual({ id: user()!.id, username: "owner", mfaEnabled: false });
-    expect(verifyPassword(PASSWORD, user()!.password_hash)).toBe(true);
+    expect(await verifyPassword(PASSWORD, user()!.password_hash)).toBe(true);
     const session = db.prepare("SELECT * FROM sessions").get() as {
       token_hash: string;
       user_id: string;
@@ -176,21 +176,21 @@ describe("atomic administrator registration", () => {
     const before = user();
     db.close();
     db = open();
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(user()).toEqual(before);
     expect(initialAdminState(db)).toBe("completed");
   });
-  it.each([12, 256])("accepts passwords at the %i-character boundary", (length) => {
-    register("owner", "x".repeat(length));
-    expect(verifyPassword("x".repeat(length), user()!.password_hash)).toBe(true);
+  it.each([12, 256])("accepts passwords at the %i-character boundary", async (length) => {
+    await register("owner", "x".repeat(length));
+    expect(await verifyPassword("x".repeat(length), user()!.password_hash)).toBe(true);
   });
   it.each([
     ["   ", PASSWORD],
     ["x".repeat(81), PASSWORD],
     ["owner", "short"],
     ["owner", "x".repeat(257)],
-  ])("rejects invalid setup input without writing state", (name, password) => {
-    expect(() => register(name, password)).toThrowError(
+  ])("rejects invalid setup input without writing state", async (name, password) => {
+    await expect(register(name, password)).rejects.toThrowError(
       expect.objectContaining({ code: "VALIDATION_ERROR" }),
     );
     expect(user()).toBeUndefined();
@@ -198,17 +198,17 @@ describe("atomic administrator registration", () => {
   });
   it.each(["sessions", "settings", "audit_events"])(
     "rolls back user, session and marker if %s insertion fails",
-    (table) => {
+    async (table) => {
       db.exec(
         `CREATE TRIGGER fail_setup BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT,'simulated setup failure'); END;`,
       );
-      expect(() => register()).toThrow(/simulated setup failure/);
+      await expect(register()).rejects.toThrow(/simulated setup failure/);
       expect(user()).toBeUndefined();
       expect(marker()).toBeUndefined();
       expect(db.prepare("SELECT count(*) FROM sessions").pluck().get()).toBe(0);
       expect(initialAdminState(db)).toBe("required");
       db.exec("DROP TRIGGER fail_setup");
-      register();
+      await register();
       expect(initialAdminState(db)).toBe("completed");
     },
   );
@@ -244,12 +244,12 @@ describe("atomic administrator registration", () => {
 });
 
 describe("legacy initial-password cleanup", () => {
-  it("ignores a legacy password file during initialization and removes it explicitly without changing credentials", () => {
+  it("ignores a legacy password file during initialization and removes it explicitly without changing credentials", async () => {
     writeFileSync(passwordFile, "old-unused-password\n");
-    ensureInitialAdmin(db);
+    await ensureInitialAdmin(db);
     expect(initialAdminState(db)).toBe("required");
     expect(readFileSync(passwordFile, "utf8")).toBe("old-unused-password\n");
-    register();
+    await register();
     const before = user();
     expect(clearInitialAdminPassword(path)).toBe(true);
     expect(clearInitialAdminPassword(path)).toBe(true);

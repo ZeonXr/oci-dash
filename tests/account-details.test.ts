@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { AccountSummary, InstanceSummary } from "@/lib/contracts";
 import { createAccountDetailsService } from "@/server/account-details";
 import { createAccount, getAccount, updateAccount } from "@/server/accounts";
-import { closeDatabase, getDatabase } from "@/server/db";
+import { closeDatabase, getDatabase, initializeDatabase } from "@/server/db";
 import { login, SESSION_COOKIE } from "@/server/auth";
 import { saveInventory } from "@/server/inventory";
 import { handleApi } from "@/server/router";
@@ -135,7 +135,7 @@ beforeAll(() => {
   privateKey = pair.privateKey;
   fingerprint = createHash("md5").update(pair.publicKey).digest("hex").match(/.{2}/g)!.join(":");
 });
-beforeEach(() => {
+beforeEach(async () => {
   closeDatabase();
   base = resolve(process.env.OCI_DASH_TEST_TMP || join(process.cwd(), ".test-tmp"));
   mkdirSync(base, { recursive: true });
@@ -145,7 +145,8 @@ beforeEach(() => {
   vi.stubEnv("ADMIN_USERNAME", "details-test");
   vi.stubEnv("ADMIN_PASSWORD", "details-test-password");
   vi.stubEnv("APP_ORIGIN", origin);
-  token = login("details-test", "details-test-password").token;
+  await initializeDatabase();
+  token = (await login("details-test", "details-test-password")).token;
   account = createAccount(
     {
       name: "Fixture account",

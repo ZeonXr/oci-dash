@@ -1,6 +1,6 @@
 # OCI Dash
 
-用于管理多个 Oracle Cloud Infrastructure 账号的自托管面板，面向单管理员使用。基于 Next.js、TypeScript、Drizzle ORM、SQLite 和官方 OCI SDK，一个 Docker 容器运行 Web、后台任务和控制台网关。
+用于管理多个 Oracle Cloud Infrastructure 账号的自托管面板，面向单管理员使用。基于 Next.js、TypeScript、Drizzle ORM、SQLite 和官方 OCI SDK，在一个 Docker 容器的单个 Node.js 应用进程中运行 Web、后台任务和浏览器控制台。
 
 ## 功能
 

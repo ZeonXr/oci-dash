@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
+import { getEventListeners } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AccountSummary, InventoryResult, OperationRequest } from "@/lib/contracts";
@@ -881,5 +882,230 @@ describe("single-process bounded worker scheduling", () => {
     expect(f.adapter.inventory).toHaveBeenCalledOnce();
     expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "succeeded")).toHaveLength(1);
     expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "queued")).toHaveLength(1);
+  });
+});
+
+describe("worker lifecycle notifications", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("reports readiness after the first heartbeat and before claiming any queued work", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const job = f.store.enqueueOperation(op, "admin");
+    const shutdown = new AbortController();
+    const claimNext = vi.fn(f.store.claimNext);
+    const onFatal = vi.fn();
+    const onReady = vi.fn(() => {
+      expect(f.store.getWorkerStatus().online).toBe(true);
+      expect(claimNext).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    await runWorker({
+      signal: shutdown.signal,
+      dependencies: { ...f.dependencies, store: { ...f.store, claimNext } },
+      once: true,
+      onReady,
+      onFatal,
+    });
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(claimNext).toHaveBeenCalledOnce();
+    expect(f.store.getJob(job.id)?.state).toBe("succeeded");
+    expect(f.store.getWorkerStatus().online).toBe(false);
+    expect(getEventListeners(shutdown.signal, "abort")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("notifies a scheduler failure once before aborting and draining every active task", async () => {
+    vi.useFakeTimers();
+    const f = schedulerFixture();
+    const reading = gate();
+    const signals: AbortSignal[] = [];
+    f.adapter.inventory.mockImplementation(async (_credentials, _account, _regions, context) => {
+      signals.push(context!.signal);
+      await reading.promise;
+      return emptyInventory;
+    });
+    const jobs = [f.sync("a"), f.sync("b"), f.sync("c")];
+    const failure = new Error("Scheduler storage unavailable");
+    const laterFailure = new Error("Heartbeat storage unavailable");
+    const claimNext = vi.fn(f.store.claimNext);
+    const heartbeat = vi
+      .fn(f.store.heartbeat)
+      .mockImplementationOnce(f.store.heartbeat)
+      .mockImplementationOnce(() => {
+        throw failure;
+      })
+      .mockImplementation(() => {
+        throw laterFailure;
+      });
+    const stopWorker = vi.fn(f.store.stopWorker);
+    const onReady = vi.fn();
+    const signalsAtFatal: boolean[][] = [];
+    const onFatal = vi.fn(() => {
+      signalsAtFatal.push(signals.map((signal) => signal.aborted));
+    });
+    const shutdown = new AbortController();
+    let settled = false;
+    const worker = runWorker({
+      signal: shutdown.signal,
+      dependencies: {
+        ...f.dependencies,
+        store: { ...f.store, claimNext, heartbeat, stopWorker },
+      },
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 10,
+      onReady,
+      onFatal,
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      expect(onReady).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(signals).toHaveLength(2);
+      expect(onFatal).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onFatal).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(signalsAtFatal).toEqual([[false, false]]);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(settled).toBe(false);
+      expect(stopWorker).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(heartbeat.mock.calls.length).toBeGreaterThan(1);
+      expect(onFatal).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(settled).toBe(false);
+      reading.resolve();
+      expect(await worker).toBe(failure);
+      expect(stopWorker).toHaveBeenCalledOnce();
+      expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "interrupted")).toHaveLength(2);
+      expect(jobs.filter((job) => f.store.getJob(job.id)?.state === "queued")).toHaveLength(1);
+      expect(f.dependencies.saveInventory).not.toHaveBeenCalled();
+      expect(getEventListeners(shutdown.signal, "abort")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      shutdown.abort();
+      reading.resolve();
+      await worker;
+    }
+  });
+
+  it.each(["dependencies", "first heartbeat"])(
+    "reports %s startup failure without readiness or leaked resources",
+    async (stage) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      const job = f.store.enqueueOperation(op, "admin");
+      const failure = new Error("Initialization unavailable");
+      const shutdown = new AbortController();
+      const claimNext = vi.fn(f.store.claimNext);
+      const stopWorker = vi.fn(f.store.stopWorker);
+      const dependencies: WorkerDependencies = {
+        ...f.dependencies,
+        store: {
+          ...f.store,
+          claimNext,
+          stopWorker,
+          heartbeat(...args) {
+            f.store.heartbeat(...args);
+            throw failure;
+          },
+        },
+      };
+      if (stage === "dependencies")
+        Object.defineProperty(dependencies, "store", {
+          get() {
+            throw failure;
+          },
+        });
+      const onReady = vi.fn();
+      const onFatal = vi.fn();
+      await expect(
+        runWorker({ signal: shutdown.signal, dependencies, onReady, onFatal }),
+      ).rejects.toBe(failure);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(onFatal).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(claimNext).not.toHaveBeenCalled();
+      expect(f.adapter.execute).not.toHaveBeenCalled();
+      expect(f.store.getJob(job.id)?.state).toBe("queued");
+      expect(f.store.getWorkerStatus().online).toBe(false);
+      expect(stopWorker).toHaveBeenCalledTimes(stage === "dependencies" ? 0 : 1);
+      expect(getEventListeners(shutdown.signal, "abort")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("preserves the original failure and cleanup when the fatal observer throws", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const failure = new Error("Claim unavailable");
+    const shutdown = new AbortController();
+    const onFatal = vi.fn(() => {
+      throw new Error("Observer unavailable");
+    });
+    await expect(
+      runWorker({
+        signal: shutdown.signal,
+        dependencies: {
+          ...f.dependencies,
+          store: {
+            ...f.store,
+            claimNext() {
+              throw failure;
+            },
+          },
+        },
+        onFatal,
+      }),
+    ).rejects.toBe(failure);
+    expect(onFatal).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(f.store.getWorkerStatus().online).toBe(false);
+    expect(getEventListeners(shutdown.signal, "abort")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps an ordinary OCI failure within its job without notifying a scheduler failure", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const job = f.store.enqueueOperation(op, "admin");
+    f.adapter.execute.mockRejectedValueOnce(new CloudError("Permission denied", "DENIED"));
+    const onReady = vi.fn();
+    const onFatal = vi.fn();
+    await runWorker({
+      signal: new AbortController().signal,
+      dependencies: f.dependencies,
+      once: true,
+      onReady,
+      onFatal,
+    });
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(f.store.getJob(job.id)?.state).toBe("failed");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not initialize or report readiness for an already-stopped worker", async () => {
+    vi.useFakeTimers();
+    const shutdown = new AbortController();
+    shutdown.abort();
+    const dependencies = Object.defineProperty({} as WorkerDependencies, "store", {
+      get() {
+        throw new Error("Stopped workers must not access a store");
+      },
+    });
+    const onReady = vi.fn();
+    const onFatal = vi.fn();
+    await runWorker({ signal: shutdown.signal, dependencies, onReady, onFatal });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(getEventListeners(shutdown.signal, "abort")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

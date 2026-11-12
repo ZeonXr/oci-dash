@@ -1,26 +1,26 @@
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createWebSocketStream, WebSocket, WebSocketServer } from "ws";
 import { z } from "zod";
 import { currentSessionHash, requireUser } from "../auth";
 import { audit } from "../db";
 import { AppError } from "../errors";
-import { errorResponse, json } from "../http";
+import { errorResponse, json, readJson } from "../http";
 import { assertRequestOrigin, configuredOrigin, gatewayRequestUrl } from "../request-origin";
 import type { ConsoleManager } from "./manager";
 import type { ConsoleActor } from "./types";
 
 interface GatewayOptions {
   manager: ConsoleManager;
-  upstreamPort: number;
   origin?: string;
   authenticate?: (request: Request) => ConsoleActor;
   recordEvent?: (actor: ConsoleActor, action: string, resource: string, result: string) => void;
+}
+
+export interface ConsoleGateway {
+  handleRequest(request: Request): Promise<Response>;
+  upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>;
+  close(): Promise<void>;
 }
 
 const identifier = "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})";
@@ -45,33 +45,8 @@ function headersFrom(request: IncomingMessage): Headers {
   return headers;
 }
 
-async function bodyFrom(request: IncomingMessage): Promise<unknown> {
-  if (!(request.headers["content-type"] ?? "").includes("application/json"))
-    throw new AppError("请求应使用 JSON", 415);
-  if (Number(request.headers["content-length"] ?? 0) > 16_384) throw new AppError("请求过大", 413);
-  const parts: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.length;
-    if (size > 16_384) throw new AppError("请求过大", 413);
-    parts.push(bytes);
-  }
-  try {
-    return JSON.parse(Buffer.concat(parts).toString("utf8"));
-  } catch {
-    throw new AppError("JSON 格式不正确");
-  }
-}
-
-async function respond(response: ServerResponse, result: Response): Promise<void> {
-  if (response.destroyed || response.headersSent) return;
-  response.writeHead(result.status, Object.fromEntries(result.headers.entries()));
-  response.end(Buffer.from(await result.arrayBuffer()));
-}
-
-/** A single public HTTP/WSS entry; the generated Next server remains a loopback upstream. */
-export function createConsoleGateway(options: GatewayOptions) {
+/** Console HTTP and WebSocket handling; the application owns the listening server. */
+export function createConsoleGateway(options: GatewayOptions): ConsoleGateway {
   const expectedOrigin = configuredOrigin(options.origin ?? process.env.APP_ORIGIN);
   const authenticate = options.authenticate ?? actorFor;
   const recordEvent =
@@ -81,9 +56,7 @@ export function createConsoleGateway(options: GatewayOptions) {
   const manager = options.manager;
   let stopping = false;
   let closing: Promise<void> | undefined;
-  const proxyRequests = new Set<ReturnType<typeof httpRequest>>();
   const pendingUpgrades = new Set<Duplex>();
-  const sockets = new Set<Duplex>();
   const liveSockets = new WeakMap<WebSocket, boolean>();
   const revalidateSockets = new WeakMap<WebSocket, () => void>();
   const websocket = new WebSocketServer({
@@ -108,117 +81,44 @@ export function createConsoleGateway(options: GatewayOptions) {
     assertRequestOrigin(request, expectedOrigin);
   }
 
-  async function consoleApi(request: IncomingMessage, response: ServerResponse, path: string) {
+  async function handleRequest(request: Request): Promise<Response> {
     try {
-      const normalized = toRequest(request);
-      const actor = authenticate(normalized);
-      const method = request.method ?? "GET";
+      if (stopping) throw new AppError("控制台服务正在停止", 503, "CONSOLE_UNAVAILABLE");
+      const path = new URL(request.url).pathname;
+      const actor = authenticate(request);
+      const method = request.method;
       if (!["GET", "HEAD"].includes(method)) {
-        assertOrigin(normalized);
+        assertOrigin(request);
       }
       if (method === "GET" && path === "/api/console/session") {
-        return respond(response, json({ session: manager.current(actor) }));
+        return json({ session: manager.current(actor) });
       }
       if (method === "POST" && path === "/api/console/sessions") {
-        const { instanceId } = startSchema.parse(await bodyFrom(request));
+        const { instanceId } = startSchema.parse(await readJson(request));
         const session = await manager.create(instanceId, actor);
         recordEvent(actor, "console.create", instanceId, "正在准备 VNC 控制台");
-        return respond(response, json({ session }, 202));
+        return json({ session }, 202);
       }
       const match = sessionRoute.exec(path);
       if (!match) throw new AppError("控制台接口不存在", 404, "NOT_FOUND");
       const [, id, action] = match;
-      if (method === "GET" && !action)
-        return respond(response, json({ session: manager.get(id!, actor) }));
-      if (method === "POST" && action === "ticket")
-        return respond(response, json(manager.issueTicket(id!, actor)));
+      if (method === "GET" && !action) return json({ session: manager.get(id!, actor) });
+      if (method === "POST" && action === "ticket") return json(manager.issueTicket(id!, actor));
       if (method === "POST" && action === "touch") {
         manager.touch(id!, actor);
-        return respond(response, json({ ok: true }));
+        return json({ ok: true });
       }
       if ((method === "DELETE" && !action) || (method === "POST" && action === "close")) {
         await manager.close(id!, actor);
         const session = manager.get(id!, actor);
         recordEvent(actor, "console.close", session.instanceId, "已请求关闭 VNC 控制台");
-        return respond(response, json({ session }));
+        return json({ session });
       }
       throw new AppError("请求方法不支持", 405, "METHOD_NOT_ALLOWED");
     } catch (error) {
-      await respond(response, errorResponse(error));
-    } finally {
-      if (!request.complete) request.resume();
+      return errorResponse(error);
     }
   }
-
-  const server = createServer({ maxHeaderSize: 16_384 }, (request, response) => {
-    if (stopping) {
-      response.writeHead(503, { Connection: "close" });
-      response.end();
-      return;
-    }
-    let url: URL;
-    try {
-      const normalized = toRequest(request);
-      url = new URL(normalized.url);
-      if (!["GET", "HEAD"].includes(request.method ?? "GET")) assertOrigin(normalized);
-    } catch (error) {
-      response.writeHead(error instanceof AppError ? error.status : 400).end();
-      return;
-    }
-    if (url.pathname === "/api/console" || url.pathname.startsWith("/api/console/")) {
-      void consoleApi(request, response, url.pathname).catch(() => response.destroy());
-      return;
-    }
-    const headers = { ...request.headers };
-    delete headers.connection;
-    delete headers.upgrade;
-    delete headers["proxy-authorization"];
-    delete headers["proxy-connection"];
-    // Preserve Host, but do not let caller-supplied forwarding headers replace
-    // it in Next's request URL construction. HTTPS is determined by checked Origin.
-    delete headers["x-forwarded-host"];
-    delete headers["x-forwarded-proto"];
-    const upstream = httpRequest(
-      {
-        hostname: "127.0.0.1",
-        port: options.upstreamPort,
-        path: url.pathname + url.search,
-        method: request.method,
-        headers,
-      },
-      (incoming) => {
-        response.writeHead(incoming.statusCode ?? 502, incoming.headers);
-        incoming.pipe(response);
-        incoming.on("error", () => response.destroy());
-      },
-    );
-    proxyRequests.add(upstream);
-    upstream.once("close", () => proxyRequests.delete(upstream));
-    upstream.setTimeout(90_000, () => upstream.destroy());
-    upstream.on("error", () => {
-      if (response.headersSent) response.destroy();
-      else {
-        response.writeHead(503, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        });
-        response.end(
-          JSON.stringify({ error: "应用正在启动或暂时不可用", code: "APP_UNAVAILABLE" }),
-        );
-      }
-    });
-    request.on("aborted", () => upstream.destroy());
-    response.on("close", () => {
-      if (!response.writableFinished) upstream.destroy();
-    });
-    request.pipe(upstream);
-  });
-  server.headersTimeout = 15_000;
-  server.requestTimeout = 60_000;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
 
   async function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
     let stream: Duplex | undefined;
@@ -299,9 +199,6 @@ export function createConsoleGateway(options: GatewayOptions) {
       pendingUpgrades.delete(socket);
     }
   }
-  server.on("upgrade", (request, socket, head) => {
-    void upgrade(request, socket, head).catch(() => socket.destroy());
-  });
   const heartbeat = setInterval(() => {
     for (const client of websocket.clients) {
       try {
@@ -320,17 +217,8 @@ export function createConsoleGateway(options: GatewayOptions) {
   heartbeat.unref();
 
   return {
-    server,
-    async listen(port: number, host = "0.0.0.0"): Promise<void> {
-      await new Promise<void>((resolve, reject) => {
-        const failure = (error: Error) => reject(error);
-        server.once("error", failure);
-        server.listen(port, host, () => {
-          server.removeListener("error", failure);
-          resolve();
-        });
-      });
-    },
+    handleRequest,
+    upgrade,
     close(): Promise<void> {
       if (closing) return closing;
       stopping = true;
@@ -338,21 +226,10 @@ export function createConsoleGateway(options: GatewayOptions) {
       for (const socket of pendingUpgrades) socket.destroy();
       for (const client of websocket.clients) client.terminate();
       closing = (async () => {
-        const httpClosed = new Promise<void>((resolve) => {
-          if (!server.listening) return resolve();
-          server.close(() => resolve());
-          server.closeIdleConnections();
+        const socketsClosed = new Promise<void>((resolve, reject) => {
+          websocket.close((error) => (error ? reject(error) : resolve()));
         });
-        const deadline = setTimeout(() => {
-          for (const request of proxyRequests) request.destroy();
-          for (const socket of sockets) socket.destroy();
-        }, 10_000);
-        try {
-          await Promise.all([httpClosed, manager.shutdown()]);
-        } finally {
-          clearTimeout(deadline);
-          websocket.close();
-        }
+        await Promise.all([socketsClosed, manager.shutdown()]);
       })();
       return closing;
     },

@@ -8,7 +8,7 @@ const db = new Database(path);
 db.pragma("busy_timeout=10000");
 db.pragma("foreign_keys=ON");
 try {
-  createInitialAdminSession(db, username, "first-setup-test-password", 43_200);
+  await createInitialAdminSession(db, username, "first-setup-test-password", 43_200);
   process.stdout.write(JSON.stringify({ created: true }));
 } catch (error) {
   if (error instanceof Error && "code" in error && error.code === "SETUP_ALREADY_COMPLETED")

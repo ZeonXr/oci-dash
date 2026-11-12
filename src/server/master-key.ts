@@ -99,6 +99,35 @@ function verifyEncryptedData(values: Iterable<unknown>, key: Buffer): void {
     }
   }
 }
+function encryptedSecrets(db: Database.Database) {
+  const orm = ormFor(db);
+  return unionAll(
+    orm.select({ value: users.mfaSecret }).from(users).where(isNotNull(users.mfaSecret)),
+    orm.select({ value: accounts.credential }).from(accounts),
+    orm.select({ value: users.mfaPending }).from(users).where(isNotNull(users.mfaPending)),
+  ).all();
+}
+
+/** Authenticate a restored key and every secret without initializing or changing files. */
+export function verifyStoredMasterKey(db: Database.Database, databasePath: string): number {
+  const path = keyPath(databasePath);
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.size !== 32)
+    throw new Error("Restore the original 32-byte .master-key file");
+  const key = readFileSync(path);
+  if (key.length !== 32) throw new Error("Restore the original 32-byte .master-key file");
+  const binding = ormFor(db)
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, bindingName))
+    .get()?.value;
+  if (!binding || !/^sha256:[a-f0-9]{64}$/.test(binding))
+    throw new Error("Restore a database with a valid encryption key binding");
+  assertKeyIdentity(key, environmentKey(), binding);
+  const secrets = encryptedSecrets(db);
+  verifyEncryptedData(secrets, key);
+  return secrets.length;
+}
 function syncDirectory(path: string): void {
   if (process.platform === "win32") return;
   const descriptor = openSync(path, "r");
@@ -153,11 +182,7 @@ export function initializeMasterKey(db: Database.Database, databasePath: string)
     const binding = row?.value;
     if (binding !== undefined && !/^sha256:[a-f0-9]{64}$/.test(binding))
       throw new Error("Invalid database encryption key binding; restore a consistent backup");
-    const secrets = unionAll(
-      orm.select({ value: users.mfaSecret }).from(users).where(isNotNull(users.mfaSecret)),
-      orm.select({ value: accounts.credential }).from(accounts),
-      orm.select({ value: users.mfaPending }).from(users).where(isNotNull(users.mfaPending)),
-    ).all();
+    const secrets = encryptedSecrets(db);
     const hasSecrets = secrets.length > 0;
     if (!stored && !configured && (hasSecrets || binding !== undefined))
       throw new Error(

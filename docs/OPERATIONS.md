@@ -63,7 +63,8 @@ docker compose up -d --wait
 | `ADMIN_PASSWORD`          | 显式指定 12–256 字符密码时初始化空数据库并跳过网页设置；默认留空，已有管理员不覆盖。     |
 | `MASTER_KEY`              | 可选的 Base64 编码 32 字节密钥；验证成功后也持久化到 `.master-key`，必须与已有数据匹配。 |
 | `APP_ORIGIN`              | 可选固定访问源，如 `https://oci.example.com`；默认按请求的 Host 和 Origin 校验。         |
-| `PORT`                    | 容器应用监听端口，默认 3000；默认 Compose 不注入该变量。日常只修改宿主端口映射。         |
+| `PORT`                    | 源码运行默认 6240；镜像设置为 3000，默认 Compose 不注入该变量。日常只修改宿主端口映射。  |
+| `HOSTNAME`                | 源码生产入口与镜像默认监听 `0.0.0.0`；开发入口默认 `127.0.0.1`，可用 `--hostname` 调整。 |
 | `DATABASE_PATH`           | 本地默认 `data/oci-dash.db`；Compose 固定为 `/data/oci-dash.db`。                        |
 | `NEXT_TELEMETRY_DISABLED` | 镜像已设置为 `1`，关闭 Next.js 遥测。                                                    |
 
@@ -82,7 +83,7 @@ services:
 docker compose up -d --force-recreate app
 ```
 
-Web、网关和 Worker 使用同一数据库和密钥文件。本地运行默认将这些文件保存在 `data/`。
+Web、业务 API、控制台和任务执行器在同一 Node.js 应用进程中运行，使用同一数据库连接和密钥文件。本地运行默认将这些文件保存在 `data/`。
 
 新数据库完成网页初始化后是普通空面板，不生成默认账号、示例资源或初始密码文件。暂停执行任务或控制台恢复时应停止应用进程。
 
@@ -121,16 +122,16 @@ docker compose logs --tail 100 app
 docker compose exec app node dist/health.mjs
 ```
 
-镜像使用 Tini 作为进程入口，处理信号转发与子进程回收；`node dist/runtime.mjs` 管理独立的 Web 和 Worker 进程，并提供 HTTP/WebSocket 网关。业务进程意外退出时，运行入口停止另一个进程并非零退出，交由 Compose 中的 `restart: unless-stopped` 重启容器。
+镜像使用 Tini 作为进程入口，处理信号转发与子进程回收。`node dist/runtime.mjs` 在一个常驻 Node.js 应用进程中运行 Next.js、业务 API、后台任务执行器和控制台 WebSocket。必要组件发生致命故障时应用统一收尾并非零退出，交由 Compose 中的 `restart: unless-stopped` 重启容器；普通 OCI 查询或任务错误不重启应用。
 
-整体健康检查同时验证 Web、SQLite 和当前 Worker 心跳；`GET /api/health` 只检查 Web 与 SQLite。Docker 的 `unhealthy` 标记本身不会触发 Compose 重启策略。
+`GET /api/health` 同时检查应用就绪状态、SQLite 和当前执行器心跳；初始化、停止、执行器失效或数据库不可用时返回 503。`dist/health.mjs` 只请求本机该接口，超时为 2 秒，不直接打开数据库、创建文件或续写心跳。Docker 的 `unhealthy` 标记本身不会触发 Compose 重启策略；事件循环完全卡死时由探针报告异常。
 
 ```sh
 docker compose stop app
 docker compose up -d app
 ```
 
-优先等待活动任务和控制台会话结束后停止。Worker、运行入口和 Compose 的停止期限分别为 25、30、35 秒。停止进程不会撤销 OCI 已受理的操作；手动停止后的容器不会自行重启。
+优先等待活动任务和控制台会话结束后停止。应用收到停止信号后立即拒绝新工作，并行收尾 HTTP、任务和控制台，最后关闭数据库；应用期限为 25 秒，Compose 外层期限为 35 秒。停止进程不会撤销 OCI 已受理的操作；手动停止后的容器不会自行重启。
 
 数据卷或宿主目录应位于支持本地文件锁的文件系统。本部署不支持多主机通过 NFS 共享 SQLite。普通 `docker compose down` 保留命名卷；`down -v` 会删除声明的命名卷，不用于日常重启。
 
@@ -166,7 +167,7 @@ docker compose up -d app
 
 全站同时一个会话，15 分钟无操作或达到 1 小时上限后断开。关闭页面、登出或服务重启会触发清理。应用仅删除与记录中的账号、实例和会话标签匹配的连接，已有外部控制台不会被删除。
 
-SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道记录本次主机密钥。镜像设置 `TMPDIR=/dev/shm`，使用 Docker 默认私有 tmpfs（默认 64 MiB）保存 SSH 临时文件和运行状态；正常断开删除临时密钥，停止容器后内存文件系统不保留。无需额外挂载 `/tmp`。
+SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道记录本次主机密钥。镜像设置 `TMPDIR=/dev/shm`，使用 Docker 默认私有 tmpfs（默认 64 MiB）保存 SSH 临时文件；正常断开删除临时密钥，停止容器后内存文件系统不保留。无需额外挂载 `/tmp`。
 
 清理失败时保留全局会话占用和账号锁，并定时重试。404 仍需通过所属实例的连接列表确认消失；权限不足或创建结果不明时不能释放占用。先恢复 OCI 权限，再使用“重试断开”；不要通过删除数据库行绕过清理。
 
@@ -212,16 +213,17 @@ node /opt/oci-dash-source/scripts/backup.ts /opt/backups/oci-dash-data.tar.gz
 1. 准备与备份匹配的镜像，以及包含原 `.master-key` 的完整归档。恢复的是该版本的数据，不进行数据库格式转换。
 2. 把 Compose 放入独立恢复目录，使用新的项目名、该目录内空的 `data` 和不同宿主机端口；如配置了 `APP_ORIGIN`，同步调整。核对解析后的挂载实际指向恢复目录；只更改项目名不会隔离宿主目录，不能沿用生产路径。
 3. 将归档完整恢复到该项目的 `/data` 挂载，保留所有者和权限，确保挂载可读写。保留生产数据不动。
-4. 在启动 Worker 前核对数据库完整性、管理员登录、账号和非终态任务。
+4. 在启动应用前离线核对数据库完整性、原主密钥配对及账号/MFA 凭据解密，查看管理员、账号和待核对任务数量。
 
-默认入口会启动 Worker，可能继续恢复的任务。只检查 Web 时，可在隔离项目中临时覆盖命令，并选择一个未使用的 loopback 端口（示例为 3001）：
+保持恢复项目的应用为停止状态，在恢复目录执行：
 
 ```sh
-docker compose -p oci-dash-restore run --publish 127.0.0.1:3001:3000 \
-  --rm --no-deps app node server.js
+docker compose -p oci-dash-restore run --rm --no-deps app node dist/check-data.mjs
 ```
 
-该命令不启动 Worker 或 VNC 网关，但 Web API 仍能接收操作请求，并非只读模式。缺少 Worker 心跳时整体健康检查失败是预期现象；可用 HTTP `/api/health` 检查 Web/SQLite。结束检查后停止该临时容器。
+该命令只读打开已有数据库，验证 SQLite 完整性、`.master-key` 与数据库指纹绑定，以及全部账号凭据和 MFA 密文能否解密；不会初始化数据库、修改主密钥、启动执行器或访问 OCI。输出仅含状态与计数，不展示密钥、凭据或管理员身份信息；失败时返回非零退出码。它不检查管理员密码是否记得，也不证明 OCI API 密钥仍然有效。
+
+核验通过后，先核对待处理任务、控制台记录与 OCI 实际状态，再启动完整应用并验证管理员登录。默认入口会恢复任务和控制台清理，不提供单独的 Web 检查模式。
 
 备份可能早于云操作实际完成时间。核对 OCI 状态、任务检查点和请求标识后，才在对应隔离项目启动完整应用。恢复本地数据不是云资源回滚。完整异机恢复演练的验证状态见[验证指南](VERIFICATION.md)。
 

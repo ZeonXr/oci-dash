@@ -1,139 +1,82 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Database from "better-sqlite3";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { join, resolve, sep } from "node:path";
-import { createJobStore } from "@/server/jobs/store";
 import { checkRuntimeHealth } from "@/server/runtime/health";
-import type { RuntimeState } from "@/server/runtime/state";
-import { initializeTestDatabase } from "./fixtures/database";
 
-const base = resolve(process.env.OCI_DASH_TEST_TMP || ".test-tmp");
-let directory: string;
-let database: Database.Database;
-let store: ReturnType<typeof createJobStore>;
 let server: Server;
-let state: RuntimeState;
-let options: { statePath: string; databasePath: string; port: number };
-let response: { status: number; body: string; hang?: boolean };
+let port: number;
+let response: { status: number; body: string; hang?: boolean; location?: string };
+let requests: { method: string; path: string }[];
 
 beforeEach(async () => {
-  mkdirSync(base, { recursive: true });
-  directory = mkdtempSync(join(base, "runtime-health-"));
-  const databasePath = join(directory, "test.db");
-  vi.stubEnv("DATABASE_PATH", databasePath);
-  database = new Database(databasePath);
-  database.pragma("journal_mode = WAL");
-  initializeTestDatabase(database);
-  store = createJobStore({ db: database, getAccount: () => null });
-  state = {
-    supervisorPid: process.pid,
-    webPid: process.pid,
-    workerPid: process.pid,
-    workerId: "current-test-runtime",
-    startedAt: new Date(Date.now() - 1000).toISOString(),
-  };
-  const statePath = join(directory, "runtime.json");
-  writeFileSync(statePath, JSON.stringify(state));
-  store.heartbeat(state.workerId, 30_000);
-  response = { status: 200, body: JSON.stringify({ ok: true }) };
-  server = createServer((_request, res) => {
+  requests = [];
+  response = { status: 200, body: JSON.stringify({ ok: true, version: "health-fixture" }) };
+  server = createServer((request, res) => {
+    requests.push({ method: request.method ?? "", path: request.url ?? "" });
     if (response.hang) return;
-    res.writeHead(response.status, { "Content-Type": "application/json" });
+    res.writeHead(response.status, {
+      "Content-Type": "application/json",
+      ...(response.location ? { Location: response.location } : {}),
+    });
     res.end(response.body);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Expected a local test port.");
-  options = { statePath, databasePath, port: address.port };
+  port = address.port;
 });
 
 afterEach(async () => {
   server?.closeAllConnections();
   if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
-  database?.close();
   vi.unstubAllEnvs();
-  if (directory && resolve(directory).startsWith(base + sep)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  vi.restoreAllMocks();
 });
 
-describe("combined application health", () => {
-  it("reads only the heartbeat table without initializing or migrating the probe database", async () => {
-    const path = join(directory, "probe-only.db");
-    const probe = new Database(path);
-    try {
-      probe.exec(
-        "CREATE TABLE job_workers (id TEXT PRIMARY KEY,last_heartbeat_at TEXT,lease_seconds INTEGER,stopped_at TEXT)",
-      );
-      probe
-        .prepare("INSERT INTO job_workers VALUES(?,?,?,NULL)")
-        .run(state.workerId, new Date().toISOString(), 30_000);
-      vi.stubEnv("DATABASE_PATH", path);
-      expect(await checkRuntimeHealth({ ...options, databasePath: path })).toBe(true);
-      expect(probe.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([
-        { name: "job_workers" },
-      ]);
-      expect(existsSync(join(directory, ".master-key"))).toBe(false);
-    } finally {
-      probe.close();
-    }
+describe("HTTP application health probe", () => {
+  it("reads only the local readiness endpoint", async () => {
+    expect(await checkRuntimeHealth({ port })).toBe(true);
+    expect(requests).toEqual([{ method: "GET", path: "/api/health" }]);
   });
 
-  it("requires the Web response and this runtime's heartbeat without writing to SQLite", async () => {
-    const before = database.prepare("SELECT * FROM job_workers").all();
-    expect(await checkRuntimeHealth(options)).toBe(true);
-    expect(database.prepare("SELECT * FROM job_workers").all()).toEqual(before);
+  it("uses the configured application port", async () => {
+    vi.stubEnv("PORT", String(port));
+    expect(await checkRuntimeHealth()).toBe(true);
   });
 
-  it("does not accept a recent heartbeat belonging to a previous runtime", async () => {
-    database.prepare("DELETE FROM job_workers WHERE id = ?").run(state.workerId);
-    store.heartbeat("previous-test-runtime", 30_000);
-    expect(await checkRuntimeHealth(options)).toBe(false);
+  it.each([
+    { status: 503, body: JSON.stringify({ ok: false }) },
+    { status: 401, body: JSON.stringify({ ok: true }) },
+    { status: 200, body: JSON.stringify({ ok: false }) },
+    { status: 200, body: JSON.stringify({ version: "health-fixture" }) },
+    { status: 200, body: "not-json" },
+    { status: 200, body: "null" },
+  ])("rejects an unavailable or invalid health response: $status $body", async (result) => {
+    response = result;
+    expect(await checkRuntimeHealth({ port })).toBe(false);
   });
 
-  it("rejects an expired or stopped current worker", async () => {
-    database
-      .prepare("UPDATE job_workers SET last_heartbeat_at = ? WHERE id = ?")
-      .run(new Date(Date.now() - 60_000).toISOString(), state.workerId);
-    expect(await checkRuntimeHealth(options)).toBe(false);
-    store.heartbeat(state.workerId, 30_000);
-    store.stopWorker(state.workerId);
-    expect(await checkRuntimeHealth(options)).toBe(false);
+  it("does not follow a redirect instead of a readiness response", async () => {
+    response = { status: 302, body: "", location: `http://127.0.0.1:${port}/elsewhere` };
+    expect(await checkRuntimeHealth({ port })).toBe(false);
+    expect(requests).toHaveLength(1);
   });
 
-  it("rejects a missing child process even while its heartbeat is fresh", async () => {
-    writeFileSync(options.statePath, JSON.stringify({ ...state, workerPid: 2_147_483_647 }));
-    expect(await checkRuntimeHealth(options)).toBe(false);
+  it("rejects invalid ports without making a request", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    for (const invalid of [0, -1, 65536, 1.5, NaN])
+      expect(await checkRuntimeHealth({ port: invalid })).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("fails closed for missing or invalid runtime identity", async () => {
-    rmSync(options.statePath);
-    expect(await checkRuntimeHealth(options)).toBe(false);
-    writeFileSync(options.statePath, "invalid-json");
-    expect(await checkRuntimeHealth(options)).toBe(false);
-    expect(readFileSync(options.statePath, "utf8")).toBe("invalid-json");
+  it("reports an unavailable listener", async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    expect(await checkRuntimeHealth({ port })).toBe(false);
   });
 
-  it("does not create a missing database during a probe", async () => {
-    const missing = join(directory, "missing.db");
-    expect(await checkRuntimeHealth({ ...options, databasePath: missing })).toBe(false);
-    expect(existsSync(missing)).toBe(false);
-  });
-
-  it("rejects an unavailable or invalid Web health response", async () => {
-    response.status = 503;
-    expect(await checkRuntimeHealth(options)).toBe(false);
-    response = { status: 200, body: "not-json" };
-    expect(await checkRuntimeHealth(options)).toBe(false);
-    response.body = JSON.stringify({ ok: false });
-    expect(await checkRuntimeHealth(options)).toBe(false);
-  });
-
-  it("bounds a stalled Web probe so container health checks can finish", async () => {
+  it("bounds a stalled HTTP probe to two seconds", async () => {
     response.hang = true;
     const startedAt = Date.now();
-    expect(await checkRuntimeHealth(options)).toBe(false);
+    expect(await checkRuntimeHealth({ port })).toBe(false);
     expect(Date.now() - startedAt).toBeLessThan(4500);
   });
 });

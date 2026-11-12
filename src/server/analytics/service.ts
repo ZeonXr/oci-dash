@@ -257,9 +257,9 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
     timer.unref();
     const promise = (async () => {
       const value = await read(controller.signal);
-      assertCurrent(selected);
       // An abandoned manual refresh must not evict a still-valid earlier snapshot.
       if (controller.signal.reason?.code === "ANALYTICS_CANCELLED") return value;
+      assertCurrent(selected);
       const expires = now() + (value.status === "partial" ? Math.min(ttl, 30_000) : ttl);
       value.cacheExpiresAt = new Date(expires).toISOString();
       remember(key, value);
@@ -564,6 +564,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions = {}) {
               });
             }
           });
+          if (budget.reason?.code === "ANALYTICS_CANCELLED") throw cancelled();
           const labels = new Map(
             instances().flatMap((instance) => [
               [instance.id, instance.displayName] as const,

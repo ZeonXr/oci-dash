@@ -18,7 +18,8 @@ OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-
 | `src/server/analytics/`                        | 流量、费用、CPU、查询期限与有界缓存。              |
 | `src/server/instance-metrics.ts`               | 单实例监控的共享请求、取消、期限与缓存。           |
 | `src/server/console/`                          | VNC 会话、OCI 控制台、SSH 和 WebSocket。           |
-| `src/runtime.ts`、`src/health.ts`              | 容器进程管理、统一网关和整体健康检查。             |
+| `src/runtime.ts`、`src/server/runtime/`        | 单进程启动、请求分发、就绪状态和统一关闭。         |
+| `src/health.ts`                                | 有超时的本机 HTTP 健康探针。                       |
 | `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。                 |
 
 主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
@@ -29,17 +30,25 @@ OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-
 
 ## 运行与存储
 
-默认 Compose 只有一个 `app` 容器。入口 `node dist/runtime.mjs` 启动独立的 Web 和 Worker 进程；Next standalone 监听私有 loopback 端口，入口提供对外 HTTP/WebSocket 网关。业务进程意外退出时停止整个应用，由 Docker 重启。
+默认 Compose 只有一个 `app` 容器和一个常驻 Node.js 应用进程。入口 `node dist/runtime.mjs` 在同一进程中运行 Next.js custom server、业务 API、控制台 WebSocket 和任务执行器，不再使用回环 HTTP 代理。Tini、短时健康探针和按需启动的 SSH 工具不属于独立 Web 或 Worker 服务。
+
+统一 HTTP 入口优先分发控制台与 `/api/*` 请求，页面、RSC 和静态资源交给 Next。后端 API、任务执行器和控制台属于同一个模块图，共享数据库连接、查询缓存和限流器；页面模块不导入后端运行模块。业务 API 继续使用标准 `Request/Response`，入口统一保留请求体上限、取消信号、Cookie、同源检查及安全响应头。
+
+启动先绑定端口并报告未就绪，随后初始化数据库、准备 Next 和控制台管理器，再等待执行器首次心跳成功。必要组件就绪后才处理业务请求。停止时立即失去就绪状态，并行停止 HTTP、任务和控制台，最后关闭数据库；统一收尾期限为 25 秒。必要组件致命失败会非零退出，由 Docker 重启，普通 OCI 请求或任务失败不终止应用。
+
+开发命令 `npm run dev` 也使用同一入口，包含后台任务和控制台网关。Next 负责页面 HMR，后端修改后重启命令。生产使用标准 `next build` 与运行入口构建，镜像复制正常 `.next` 产物和生产依赖，不使用 standalone 输出。
+
+Next 在首次页面请求时注册 HMR 升级处理，因此开发入口启动后会预热一次 favicon 请求，让已打开的页面能在后端重启后重连。控制台与 HMR 使用各自的升级处理，不重复升级同一 socket；应用停止时主动断开所有升级连接，避免 HMR 阻止 HTTP 服务关闭。
 
 仓库的 `compose.yaml` 默认使用 `ghcr.io/zeonxr/oci-dash:latest`，没有构建或文件继承依赖，也没有环境变量插值。发布工具生成附件时，将该引用替换为当前固定版本，保持附件可独立部署与回退。源码构建通过开发专用 `compose.build.yaml` 覆盖为本地镜像。各方式保留相同的项目名与服务名，直接将 Compose 所在目录的 `./data` 挂载到 `/data`；宿主端口默认映射为 `127.0.0.1:6240:3000`，自定义时直接编辑映射。
 
-镜像使用默认 root 用户，Tini 作为 PID 1；Compose 保留 35 秒停止期限和 `local` 日志驱动，使用 Docker 默认权限配置。Docker 自动创建缺失的宿主数据目录，应用直接创建数据库及主密钥，不增加目录初始化或降权入口，也不递归修改旧数据属主。Docker Desktop 仍使用宿主 ACL 控制目录访问。`TMPDIR=/dev/shm` 让运行状态与 SSH 临时文件使用 Docker 默认私有内存文件系统；健康检查与业务进程通过同一临时目录定位运行状态。
+镜像使用默认 root 用户，Tini 作为 PID 1；Compose 保留 35 秒停止期限和 `local` 日志驱动，使用 Docker 默认权限配置。Docker 自动创建缺失的宿主数据目录，应用直接创建数据库及主密钥，不增加目录初始化或降权入口，也不递归修改旧数据属主。Docker Desktop 仍使用宿主 ACL 控制目录访问。`TMPDIR=/dev/shm` 让 SSH 临时文件使用 Docker 默认私有内存文件系统。健康探针只查询本机 HTTP，不依赖 PID 文件或临时运行状态文件。
 
 SQLite 使用 WAL。数据库保存账号、库存、任务、事件、会话及有界统计缓存；OCI API 私钥与 MFA 秘密在应用层加密。资源 JSON 的归属以 SQL 的账号、区域和资源 ID 为准，不能通过 JSON 覆盖其他账号的资源。
 
 表结构集中在 `src/server/database/schema.ts`。业务查询、任务状态和初始化读写统一使用 Drizzle ORM；`getOrm()` 与 `ormFor(db)` 复用现有 `better-sqlite3` 连接，ORM 查询参与该连接上的同步事务。任务领取、租约、控制台占用和管理员初始化保留原有条件写入及事务边界。复杂筛选、窗口函数、JSON 字段和约束使用局部 SQL 表达式，任务资源锁仍在创建任务的同一事务内写入。
 
-`drizzle-kit` 根据 TypeScript schema 生成 `drizzle/` 内的 SQL 和元数据。应用启动通过 Drizzle 官方 migrator 初始化空数据库，并根据 `__drizzle_migrations` 跳过已经应用的迁移；镜像包含迁移文件，部署不需要额外命令或服务。独立 Web、Worker 并发初始化时，迁移失败会在回滚后重新读取记录并重试一次，持续错误仍中止启动。当前基线不包含接入 Drizzle 之前的数据库转换、分散的字段补丁或历史资源锁回填。使用独立空数据目录部署，已有旧数据库另行保留。开发命令与审核要求见[数据库开发](../CONTRIBUTING.md#数据库开发)。
+`drizzle-kit` 根据 TypeScript schema 生成 `drizzle/` 内的 SQL 和元数据。应用启动通过 Drizzle 官方 migrator 初始化空数据库，并根据 `__drizzle_migrations` 跳过已经应用的迁移；镜像包含迁移文件，部署不需要额外命令或服务。数据库和主密钥初始化完成后才启动任务执行器，持续初始化错误中止启动。当前基线不包含接入 Drizzle 之前的数据库转换、分散的字段补丁或历史资源锁回填。使用独立空数据目录部署，已有旧数据库另行保留。开发命令与审核要求见[数据库开发](../CONTRIBUTING.md#数据库开发)。
 
 空数据库默认没有管理员，等待浏览器首次初始化，不生成账号、实例或指标样例。测试样例仅保留在 `tests/`，通过模拟 OCI 读取或浏览器请求拦截提供。
 
@@ -83,7 +92,7 @@ IP 展示复用 `IpAddressButton` 和 `IpDetailsDialog`，列表与实例详情�
 
 | 方法与路径                                              | 请求或响应要点                                                                                                                                   |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/health`                                       | Web 与 SQLite 可用性；不代替 Worker 健康检查。                                                                                                   |
+| `GET /api/health`                                       | 应用、SQLite 和当前执行器心跳均正常时返回 200；初始化、停止或失效时返回 503。                                                                    |
 | `GET /api/auth/status`                                  | `{setupRequired}`；只返回是否需要首次初始化，不返回账号或凭据。                                                                                  |
 | `POST /api/auth/setup`                                  | `{username,password}`；用户名 1–80 字符、密码 12–256 字符；成功返回 `{user}`、HTTP 201 并设置会话 Cookie。已初始化时拒绝，确认密码由页面校验。   |
 | `POST /api/auth/login`                                  | `{username,password,code?}`；返回 `{user}` 并设置会话 Cookie。                                                                                   |
