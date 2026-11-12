@@ -451,6 +451,84 @@ describe("job history queries", () => {
 });
 
 describe("pending completion recovery", () => {
+  it("keeps resource locks during transport retries and their shutdown or lease recovery", () => {
+    const f = fixture();
+    const peer = f.open().store;
+    const first = f.store.enqueueOperation(operation(), "admin");
+    f.store.claimNext("initial");
+    f.store.retryLater(first.id, "initial", "Temporary transport failure", 5000);
+    f.advance(1);
+    const blocked = f.store.enqueueOperation(operation(), "admin");
+    f.advance(1);
+    const unrelated = f.store.enqueueOperation(operation("instance-2"), "admin");
+    expect(peer.claimNext("unrelated")?.summary.id).toBe(unrelated.id);
+    peer.finish(unrelated.id, "unrelated", "succeeded");
+    expect(peer.claimNext("backoff")).toBeNull();
+    f.advance(5000);
+    expect(peer.claimNext("retry")?.summary).toMatchObject({ id: first.id, attempt: 2 });
+    peer.interrupt(first.id, "retry", "Worker shutdown");
+    expect(f.store.claimNext("restarted", 100)?.summary).toMatchObject({
+      id: first.id,
+      attempt: 3,
+    });
+    f.advance(101);
+    expect(peer.claimNext("replacement")?.summary).toMatchObject({ id: first.id, attempt: 4 });
+    peer.finish(first.id, "replacement", "succeeded");
+    expect(f.store.claimNext("following")?.summary.id).toBe(blocked.id);
+  });
+
+  it.each(["waiting", "interrupted", "expired lease"])(
+    "retains shared-resource locks through %s without blocking unrelated work or its own recovery",
+    (stage) => {
+      const f = fixture();
+      const peer = f.open().store;
+      const update = (resourceId: string) => ({
+        ...operation(resourceId, { bootVolumeId: "shared-volume" }),
+        kind: "boot-volume-update" as const,
+      });
+      const accepted = f.store.enqueueOperation(update("instance-1"), "admin");
+      f.store.claimNext("initial");
+      f.store.waitForCompletion(accepted.id, "initial", "OCI processing");
+      f.advance(1);
+      const sameInstance = f.store.enqueueOperation(operation("instance-1"), "admin");
+      f.advance(1);
+      const sameVolume = f.store.enqueueOperation(update("instance-2"), "admin");
+      f.advance(1);
+      const unrelated = f.store.enqueueOperation(operation("instance-3"), "admin");
+      expect(peer.claimNext("unrelated")?.summary.id).toBe(unrelated.id);
+      peer.finish(unrelated.id, "unrelated", "succeeded");
+      expect(peer.claimNext("too-early")).toBeNull();
+      f.advance(5000);
+      if (stage !== "waiting") {
+        expect(f.store.claimNext("recovering", 100)?.summary.id).toBe(accepted.id);
+        if (stage === "interrupted")
+          f.store.interrupt(accepted.id, "recovering", "Worker shutdown");
+        else f.advance(101);
+      }
+      expect(peer.claimNext("replacement")?.summary).toMatchObject({
+        id: accepted.id,
+        attempt: 1,
+        waitingForCompletion: true,
+      });
+      expect(peer.claimNext("still-blocked")).toBeNull();
+      peer.finish(accepted.id, "replacement", "succeeded");
+      expect(peer.claimNext("same-instance")?.summary.id).toBe(sameInstance.id);
+      peer.finish(sameInstance.id, "same-instance", "succeeded");
+      expect(peer.claimNext("same-volume")?.summary.id).toBe(sameVolume.id);
+    },
+  );
+
+  it("releases a pending completion lock when the task is cancelled", () => {
+    const f = fixture();
+    const accepted = f.store.enqueueOperation(operation(), "admin");
+    f.store.claimNext("initial");
+    f.store.waitForCompletion(accepted.id, "initial", "OCI processing");
+    const following = f.store.enqueueOperation(operation(), "admin");
+    expect(f.store.claimNext("blocked")).toBeNull();
+    f.store.cancelJob(accepted.id);
+    expect(f.store.claimNext("following")?.summary.id).toBe(following.id);
+  });
+
   it("resumes an accepted last-budget attempt and persists its deadline through lease recovery", () => {
     const f = fixture();
     const job = f.store.enqueueOperation(operation(), "admin");

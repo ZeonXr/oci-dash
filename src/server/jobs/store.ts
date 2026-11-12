@@ -749,7 +749,10 @@ export function createJobStore({
           .where(
             and(
               eq(candidate.jobId, jobTable.id),
-              inArray(active.state, ["running", "cancel_requested"]),
+              ne(active.id, jobTable.id),
+              // Claimed work owns its resources through backoff and automatic recovery.
+              ne(active.state, "queued"),
+              pendingCondition(active),
             ),
           );
         const accountConflict = orm

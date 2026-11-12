@@ -54,6 +54,111 @@ function clients(handlers: Record<string, (request: CloudDocument) => CloudDocum
 }
 
 describe("OCI accepted-operation polling", () => {
+  it.each(["lagging reads", "first status read fails", "later status read fails"])(
+    "defers a second volume update until acceptance is reconciled when %s",
+    async (scenario) => {
+      let time = Date.parse("2026-01-01T00:00:00Z");
+      const volume = { id: id("bootvolume"), sizeInGBs: 50, vpusPerGB: 10 };
+      const updates: number[] = [];
+      let failNextStatusRead = false;
+      const cloud = clients({
+        listCompartments: () => ({ items: [] }),
+        getInstance: () => ({
+          instance: {
+            id: id("instance"),
+            compartmentId: id("tenancy"),
+            availabilityDomain: "TEST:AD-1",
+          },
+          etag: "instance-etag",
+        }),
+        listBootVolumeAttachments: () => ({
+          items: [{ bootVolumeId: volume.id, lifecycleState: "ATTACHED" }],
+        }),
+        getBootVolume: () => {
+          if (failNextStatusRead) {
+            failNextStatusRead = false;
+            throw { statusCode: 429, serviceCode: "TooManyRequests", message: "Try again" };
+          }
+          return {
+            bootVolume: structuredClone(volume),
+            etag: `volume-${updates.length}`,
+          };
+        },
+        updateBootVolume: (request) => {
+          const target = request.updateBootVolumeDetails.vpusPerGB;
+          updates.push(target);
+          // The first write is accepted while reads lag; later writes are immediately visible.
+          if (updates.length > 1) volume.vpusPerGB = target;
+          else if (scenario === "first status read fails") failNextStatusRead = true;
+          return {};
+        },
+      });
+      const db = new Database(":memory:");
+      handles.push(db);
+      initializeTestDatabase(db);
+      const store = createJobStore({ db, getAccount: () => account, now: () => new Date(time) });
+      const adapter = createOciAdapter({ clientFactory: () => cloud.value, now: () => time });
+      const dependencies = {
+        store,
+        adapter: {
+          ...adapter,
+          inventory: async () => ({ instances: [], warnings: [], regions: account.regions }),
+        },
+        getCredentials: () => credentials,
+        saveInventory: vi.fn(),
+        setAccountName: vi.fn(),
+        setAccountError: vi.fn(),
+        retryDelayMs: () => 5000,
+      };
+      const update = (vpusPerGb: number): OperationRequest => ({
+        kind: "boot-volume-update",
+        accountId: account.id,
+        region: account.homeRegion,
+        resourceId: id("instance"),
+        payload: { bootVolumeId: volume.id, vpusPerGb },
+      });
+      const once = () =>
+        runWorker({ signal: new AbortController().signal, once: true, dependencies });
+      const first = store.enqueueOperation(update(100), "test-admin");
+      await once();
+      expect(store.getJob(first.id)).toMatchObject({
+        state: "retrying",
+        waitingForCompletion: scenario !== "first status read fails",
+      });
+      const deadline = store.getJob(first.id)!.completionDeadlineAt;
+      const second = store.enqueueOperation(update(10), "test-admin");
+      if (scenario === "later status read fails") {
+        failNextStatusRead = true;
+        time += 5000;
+        await once();
+        expect(store.getJob(first.id)).toMatchObject({
+          state: "retrying",
+          attempt: 1,
+          waitingForCompletion: false,
+          completionDeadlineAt: deadline,
+        });
+      }
+      await once();
+      expect(store.getJob(second.id)).toMatchObject({ state: "queued", attempt: 0 });
+      expect(updates).toEqual([100]);
+      volume.vpusPerGB = 100;
+      time += 5000;
+      await once();
+      expect(store.getJob(first.id)).toMatchObject({
+        state: "succeeded",
+        attempt: scenario === "lagging reads" ? 1 : 2,
+        completionDeadlineAt: deadline,
+      });
+      await once();
+      expect(store.getJob(second.id)).toMatchObject({
+        state: "succeeded",
+        result: { details: { vpusPerGb: 10 } },
+      });
+      expect(updates).toEqual([100, 10]);
+      expect(volume.vpusPerGB).toBe(10);
+    },
+  );
+
   it("completes a three-minute instance launch with one cloud write and the default polling interval", async () => {
     vi.useFakeTimers();
     const start = Date.parse("2026-01-01T00:00:00Z");

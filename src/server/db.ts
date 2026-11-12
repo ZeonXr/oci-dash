@@ -20,9 +20,19 @@ export function getDatabase(): Database.Database {
   const db = new Database(path);
   try {
     db.pragma("busy_timeout = 10000");
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    migrate(ormFor(db), { migrationsFolder: resolve(process.cwd(), "drizzle") });
+    const prepareSchema = () => {
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      migrate(ormFor(db), { migrationsFolder: resolve(process.cwd(), "drizzle") });
+    };
+    try {
+      prepareSchema();
+    } catch (error) {
+      if (db.inTransaction) throw error;
+      // Another process may have enabled WAL or committed after history was read.
+      // Retry once with fresh state; persistent schema errors still fail startup.
+      prepareSchema();
+    }
     initializeMasterKey(db, path);
     ensureInitialAdmin(db);
   } catch (error) {
