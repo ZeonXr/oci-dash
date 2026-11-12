@@ -34,6 +34,15 @@ import {
   Select,
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import { Button as LinkButton } from "@/components/ui/button";
 import { instanceHref, shortId } from "@/components/format";
 import { RegionTag } from "@/components/region-label";
 
@@ -163,15 +172,15 @@ function CostsContent() {
           刷新数据
         </RefreshButton>
       </PageHeader>
-      <div className="analytics-controls">
-        <div className="filters analytics-filters">
+      <div className="analytics-controls mb-6 flex flex-wrap items-center gap-3">
+        <div className="analytics-filters contents *:data-[slot=select-trigger]:w-45 *:data-[slot=select-trigger]:max-w-full max-sm:*:data-[slot=select-trigger]:flex-1">
           <Select
             aria-label="成本账号"
             value={account}
             disabled={!accountsReady}
-            onChange={(event) => {
-              setAccount(event.target.value);
-              setFilters({ account: event.target.value, region: "", service: "" });
+            onValueChange={(value) => {
+              setAccount(value);
+              setFilters({ account: value, region: "", service: "" });
             }}
           >
             <option value="">全部账号</option>
@@ -184,7 +193,7 @@ function CostsContent() {
           <Select
             aria-label="成本区域"
             value={region}
-            onChange={(event) => changeFilters({ region: event.target.value })}
+            onValueChange={(value) => changeFilters({ region: value })}
           >
             <option value="">全部区域</option>
             {regions.map((item) => (
@@ -196,7 +205,7 @@ function CostsContent() {
           <Select
             aria-label="成本服务"
             value={service}
-            onChange={(event) => changeFilters({ service: event.target.value })}
+            onValueChange={(value) => changeFilters({ service: value })}
           >
             <option value="">全部服务</option>
             {services.map((item) => (
@@ -216,7 +225,7 @@ function CostsContent() {
             </Button>
           )}
         </div>
-        <div className="analytics-period">
+        <div className="analytics-period contents *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-28">
           <AnalyticsRange
             value={range}
             onChange={setRange}
@@ -226,10 +235,10 @@ function CostsContent() {
           <Select
             aria-label="成本统计粒度"
             value={granularity}
-            onChange={(event) => {
-              const value = event.target.value as "daily" | "monthly";
-              setGranularity(value);
-              setRange(analyticsRange(value === "monthly" ? "last12Months" : "month"));
+            onValueChange={(value) => {
+              const next = value as "daily" | "monthly";
+              setGranularity(next);
+              setRange(analyticsRange(next === "monthly" ? "last12Months" : "month"));
             }}
           >
             <option value="daily">按日</option>
@@ -249,16 +258,16 @@ function CostsContent() {
             title="先添加 OCI 账号"
             description="连接账号后，可读取该租户的已报告成本。"
             action={
-              <Link className="button" href="/settings/accounts">
-                管理账号
-              </Link>
+              <LinkButton asChild>
+                <Link href="/settings/accounts">管理账号</Link>
+              </LinkButton>
             }
           />
         </Card>
       ) : data ? (
-        <div className="stack analytics-content" aria-busy={report.refreshing}>
+        <div className="stack analytics-content flex flex-col gap-5" aria-busy={report.refreshing}>
           {totals.length > 0 ? (
-            <div className="analytics-metrics">
+            <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 max-sm:grid-cols-1">
               {totals.map((total) => (
                 <MetricCard
                   key={total.currency || "unknown"}
@@ -324,9 +333,9 @@ function CostsContent() {
               </Card>
             );
           })}
-          <div className="section-heading">
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
             <h2>服务分类</h2>
-            <span className="muted small">按币种分别汇总</span>
+            <span className="muted small text-xs text-muted-foreground">按币种分别汇总</span>
           </div>
           <TablePanel
             label="服务成本分类"
@@ -343,30 +352,30 @@ function CostsContent() {
               />
             }
           >
-            <table className="analytics-table analytics-service-table">
-              <thead>
-                <tr>
-                  <th scope="col">服务</th>
-                  <th scope="col">币种</th>
-                  <th scope="col">已获取小计</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="analytics-table analytics-service-table min-w-105">
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">服务</TableHead>
+                  <TableHead scope="col">币种</TableHead>
+                  <TableHead scope="col">已获取小计</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {serviceRows
                   .slice((safeServicePage - 1) * servicePageSize, safeServicePage * servicePageSize)
                   .map((row) => (
-                    <tr key={row.key}>
-                      <td>{row.service || "未提供服务"}</td>
-                      <td>{row.currency || "未提供"}</td>
-                      <td className="tabular" title={row.amount || undefined}>
+                    <TableRow key={row.key}>
+                      <TableCell>{row.service || "未提供服务"}</TableCell>
+                      <TableCell>{row.currency || "未提供"}</TableCell>
+                      <TableCell className="tabular tabular-nums" title={row.amount || undefined}>
                         {displayCost(row.amount)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TablePanel>
-          <div className="section-heading">
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
             <h2>资源明细</h2>
           </div>
           <TablePanel
@@ -384,37 +393,46 @@ function CostsContent() {
               />
             }
           >
-            <table className="analytics-table analytics-cost-table">
-              <thead>
-                <tr>
-                  <th scope="col">资源</th>
-                  <th scope="col">账号 / 区域</th>
-                  <th scope="col">服务</th>
-                  <th scope="col">币种</th>
+            <Table className="analytics-table analytics-cost-table min-w-225">
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">资源</TableHead>
+                  <TableHead scope="col">账号 / 区域</TableHead>
+                  <TableHead scope="col">服务</TableHead>
+                  <TableHead scope="col">币种</TableHead>
                   <SortableHeader
                     label="已获取小计"
                     direction={sort}
                     onSort={() => setSort(sort === "ascending" ? "descending" : "ascending")}
                   />
-                </tr>
-              </thead>
-              <tbody>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {resourceRows.slice((safePage - 1) * pageSize, safePage * pageSize).map((row) => {
                   const known = row.resourceId ? knownResources.get(row.resourceId) : undefined;
                   return (
-                    <tr key={row.key}>
-                      <td>
+                    <TableRow key={row.key}>
+                      <TableCell>
                         {known ? (
-                          <Link className="name-link" href={instanceHref(known.instance.id)}>
+                          <Link
+                            className="font-medium text-foreground hover:text-primary"
+                            href={instanceHref(known.instance.id)}
+                          >
                             {row.resourceName || known.name}
                           </Link>
                         ) : (
-                          <span className="name-link" title={row.resourceId || undefined}>
+                          <span
+                            className="font-medium text-foreground hover:text-primary"
+                            title={row.resourceId || undefined}
+                          >
                             {row.resourceName ||
                               (row.resourceId ? shortId(row.resourceId) : "未归属资源")}
                           </span>
                         )}
-                        <span className="cell-secondary" title={row.resourceId || undefined}>
+                        <span
+                          className="mt-1 block text-xs text-muted-foreground"
+                          title={row.resourceId || undefined}
+                        >
                           {known
                             ? known.associated
                               ? `关联实例 ${known.instance.displayName}`
@@ -427,23 +445,23 @@ function CostsContent() {
                                   : "不在当前资源库存中"
                               : "OCI 未提供资源标识"}
                         </span>
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         {row.accountName}
-                        <span className="cell-secondary">
+                        <span className="mt-1 block text-xs text-muted-foreground">
                           {row.region ? <RegionTag region={row.region} /> : "未提供区域"}
                         </span>
-                      </td>
-                      <td>{row.service || "未提供服务"}</td>
-                      <td>{row.currency || "未提供"}</td>
-                      <td className="tabular" title={row.amount || undefined}>
+                      </TableCell>
+                      <TableCell>{row.service || "未提供服务"}</TableCell>
+                      <TableCell>{row.currency || "未提供"}</TableCell>
+                      <TableCell className="tabular tabular-nums" title={row.amount || undefined}>
                         {displayCost(row.amount)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TablePanel>
         </div>
       ) : null}

@@ -9,20 +9,21 @@ import { taskHref } from "./format";
 import { getIpDetails, type IpDetailsTarget } from "./ip-address";
 import { RegionTag } from "./region-label";
 import { Alert, Badge, Button, CopyButton, ErrorState, Modal } from "./ui";
-import styles from "./ip-details-dialog.module.css";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
       <span>{label}</span>
-      <strong className={styles.value}>{children}</strong>
+      <strong className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-right max-[420px]:max-w-[72%]">
+        {children}
+      </strong>
     </div>
   );
 }
 
 function Identifier({ value, label }: { value: string; label: string }) {
   return (
-    <span className={styles.identifier}>
+    <span className="flex min-w-0 items-center gap-1.5 *:first:min-w-0 *:last:shrink-0">
       <CodeTag>{value}</CodeTag>
       <CopyButton value={value} label={`复制${label}`} />
     </span>
@@ -97,8 +98,8 @@ export function IpDetailsDialog({
         </>
       }
     >
-      <div className="stack">
-        <div className={`confirm-summary ${styles.summary}`}>
+      <div className="flex flex-col gap-5">
+        <div className="confirm-summary flex flex-col gap-2 rounded-lg bg-muted/50 px-4 py-3 [&>div]:flex [&>div]:items-center [&>div]:justify-between [&>div]:gap-3 [&>div]:text-xs [&>div>span]:shrink-0 [&>div>span]:text-muted-foreground [&_strong]:font-medium [&_strong]:wrap-anywhere max-[420px]:[&>div]:items-start">
           <Row label="IP 地址">
             <Identifier value={target.address} label="IP 地址" />
           </Row>
@@ -145,7 +146,7 @@ export function IpDetailsDialog({
           <Alert>更换将释放此私网地址绑定的临时公网 IP，旧地址释放后无法保证找回。</Alert>
         )}
         {action.error && <ErrorState message={action.error} />}
-        <details className={styles.identifiers}>
+        <details className="border-t pt-3 [&>summary]:cursor-pointer [&>summary]:text-xs [&>summary]:text-muted-foreground [&_dl]:mt-3 [&_dl]:grid [&_dl]:gap-2 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:mb-1.5 [&_dd]:min-w-0">
           <summary>资源标识</summary>
           <dl>
             {identifiers.map(([label, value]) => (

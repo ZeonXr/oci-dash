@@ -70,6 +70,6 @@ volumes:
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。第三方依赖和素材保留各自的许可证与版权声明，包括 [MPL-2.0 的 noVNC](https://github.com/novnc/noVNC/blob/v1.7.0/LICENSE.txt) 和[旗帜素材](public/flags/README.md)。
+本项目采用 [MIT License](LICENSE)。第三方组件、依赖和素材保留各自的许可证与版权声明，见[第三方声明](THIRD_PARTY_NOTICES.md)，包括 shadcn/ui、[MPL-2.0 的 noVNC](https://github.com/novnc/noVNC/blob/v1.7.0/LICENSE.txt) 和[旗帜素材](public/flags/README.md)。
 
 应用标识使用 Oracle 椭圆环，来源与归属见[素材说明](public/README.md)。Oracle 名称与标识归 Oracle 所有；OCI Dash 是独立项目，与 Oracle 无隶属或背书关系。

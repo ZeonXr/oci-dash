@@ -385,26 +385,30 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </>
         }
       >
-        <Link href={`/instances/${encodeURIComponent(instanceId)}`} className="button">
-          返回实例
-        </Link>
+        <Button asChild>
+          <Link href={`/instances/${encodeURIComponent(instanceId)}`}>返回实例</Link>
+        </Button>
       </PageHeader>
-      <div className="console-notices">
-        {terminated && <p className="console-notice">实例已终止或正在终止，无法连接控制台。</p>}
+      <div className="console-notices mb-4 flex flex-col gap-2 empty:hidden">
+        {terminated && (
+          <p className="console-notice rounded-lg border bg-primary/5 px-4 py-3 text-sm">
+            实例已终止或正在终止，无法连接控制台。
+          </p>
+        )}
         {!terminated && instance.state !== "RUNNING" && (
-          <p className="console-notice">
+          <p className="console-notice rounded-lg border bg-primary/5 px-4 py-3 text-sm">
             实例当前未运行，控制台可能暂无画面。可在实例页启动后查看开机过程。
           </p>
         )}
         {occupied && (
-          <p className="console-notice">
+          <p className="console-notice rounded-lg border bg-primary/5 px-4 py-3 text-sm">
             全站同时只能使用一个 VNC 会话。当前会话：
             <strong>{session?.instanceName}</strong>
             。请先断开现有会话，再连接此实例。
           </p>
         )}
         {session?.cleanupPending && (
-          <p className="console-notice">
+          <p className="console-notice rounded-lg border bg-primary/5 px-4 py-3 text-sm">
             上一次会话尚未完成清理，暂时无法新建连接。可点击“重试断开”。
           </p>
         )}
@@ -414,9 +418,17 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           <ErrorState message={session.lastError} />
         )}
       </div>
-      <section className="console-panel" ref={panel} aria-label="VNC 控制台">
-        <div className="console-toolbar">
-          <div className="console-status" aria-live="polite" role="status">
+      <section
+        className="flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm [&:fullscreen]:h-dvh [&:fullscreen]:w-full [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen_.console-viewport]:h-auto [&:fullscreen_.console-viewport]:flex-1"
+        ref={panel}
+        aria-label="VNC 控制台"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 max-[620px]:px-3 max-[620px]:py-2.5">
+          <div
+            className="flex flex-wrap items-center gap-2 text-muted-foreground"
+            aria-live="polite"
+            role="status"
+          >
             <Monitor size={17} />
             <Badge
               tone={
@@ -430,7 +442,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               {stateText}
             </Badge>
           </div>
-          <div className="console-actions">
+          <div className="flex flex-wrap items-center gap-2 [&_button]:h-8 [&_button]:px-3 [&_button]:text-xs **:aria-pressed:border-primary **:aria-pressed:bg-primary/10 **:aria-pressed:text-primary max-[620px]:w-full max-[620px]:gap-1.5">
             <Button
               icon={<Keyboard size={16} />}
               disabled={!connected}
@@ -488,15 +500,19 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </div>
         </div>
         <div
-          className="console-viewport"
+          className="console-viewport relative isolate h-[clamp(360px,calc(100dvh-310px),1000px)] min-h-0 bg-[#0c111b] max-[620px]:h-[max(330px,calc(100dvh-350px))]"
           onPointerDown={touch}
           onPointerMove={touch}
           onKeyDownCapture={touch}
           onWheel={touch}
         >
-          <div className="console-screen" ref={screen} aria-label="远程控制台画面" />
+          <div
+            className="console-screen size-full overflow-auto [&_canvas]:outline-none"
+            ref={screen}
+            aria-label="远程控制台画面"
+          />
           {!connected && (
-            <div className="console-placeholder">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0c111b] p-7 text-center text-[#98a8bf] [&_h2]:mt-1 [&_h2]:text-base [&_h2]:font-medium [&_h2]:text-[#d9e3f2] [&_p]:text-xs">
               <Monitor size={34} />
               <h2>{placeholder}</h2>
               <p>
@@ -507,7 +523,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             </div>
           )}
         </div>
-        <div className="console-footer">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground max-[620px]:gap-1 max-[620px]:px-3 max-[620px]:py-2.5">
           <span>全站限一个会话 · 长时间无操作将自动断开</span>
           <span>
             {active && session

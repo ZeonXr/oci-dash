@@ -396,7 +396,7 @@ const test = base.extend<{ rotationApi: RotationFixture }>({
 test.use({ trace: "off", video: "off", screenshot: "off", serviceWorkers: "block" });
 
 const card = (page: Page, name = "Rotation primary") =>
-  page.locator("article.instance-card").filter({
+  page.locator("[role=article].instance-card").filter({
     has: page.getByRole("link", { name, exact: true }),
   });
 const addressButton = (container: Locator | Page, address: string) =>
@@ -433,7 +433,7 @@ async function openCards(page: Page, hasRotationAction = true) {
     "aria-pressed",
     "true",
   );
-  await expect(page.locator("article.instance-card")).toHaveCount(3);
+  await expect(page.locator("[role=article].instance-card")).toHaveCount(3);
   if (hasRotationAction) await expect(addressButton(card(page), addresses.target)).toBeVisible();
 }
 async function advanceJobPoll(page: Page, fixture: RotationFixture) {
@@ -726,7 +726,14 @@ test("提交失败保留确认弹窗和原 IP，再试使用同一个幂等键",
   expect(rotationApi.jobs).toEqual([]);
   const first = rotationApi.submissions[0];
   expectTarget(first);
-  await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
+  await expect(dialog(page).getByText(addresses.target, { exact: true })).toBeVisible();
+  // Radix excludes the background from the accessibility tree while this dialog is open.
+  const unchangedCard = page.getByRole("article", {
+    name: "Rotation primary",
+    exact: true,
+    includeHidden: true,
+  });
+  await expect(unchangedCard.getByText(addresses.target, { exact: true })).toBeVisible();
   await confirm(page).click();
   await expect(dialog(page)).not.toBeVisible();
   expect(rotationApi.submissions).toHaveLength(2);
@@ -862,7 +869,7 @@ test("轮换成功后继续等待隐藏的库存同步，取得新快照后才�
   await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
   await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
   await expect(
-    page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true }),
+    page.locator("[data-slot=page-heading]").getByRole("button", { name: "刷新", exact: true }),
   ).toBeEnabled();
 
   let release!: () => void;
@@ -926,7 +933,9 @@ test("轮换完成但地址同步不完整时保持保护，手动刷新确认�
   await expectReplacement(page, card(page), addresses.target, false);
   await expect(card(page).getByText(addresses.target, { exact: true })).toBeVisible();
   await expectReplacement(page, card(page, "Rotation stopped"), addresses.stopped, true);
-  const refresh = page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true });
+  const refresh = page
+    .locator("[data-slot=page-heading]")
+    .getByRole("button", { name: "刷新", exact: true });
   await expect(refresh).toBeEnabled();
   const reads = rotationApi.count("/api/instances");
   const refreshes = rotationApi.count("/api/inventory/refresh", "POST");

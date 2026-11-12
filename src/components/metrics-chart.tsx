@@ -50,29 +50,29 @@ export function MetricsChart({
   return (
     <div>
       {error && <ErrorState message={error} />}
-      <div className="chart-legend">
+      <div className="chart-legend mb-2 flex gap-[18px] text-[11px] text-muted-foreground [&>span]:flex [&>span]:items-center [&>span]:gap-[5px]">
         {mode === "cpu" ? (
           <span>
-            <i className="legend-dot" />
+            <i className="legend-dot size-1.5 rounded-full bg-primary" />
             CPU 使用率
           </span>
         ) : (
           <>
             <span>
-              <i className="legend-dot" />
+              <i className="legend-dot size-1.5 rounded-full bg-primary" />
               发送
             </span>
             <span>
-              <i className="legend-dot green" />
+              <i className="legend-dot green size-1.5 rounded-full bg-[#58baa7]" />
               接收
             </span>
           </>
         )}
-        <span className="grow" />
+        <span className="grow min-w-0 flex-1" />
         <span>{mode === "cpu" ? "%" : "MiB / 采样区间"}</span>
       </div>
       <div
-        className="chart-wrap"
+        className="chart-wrap h-[250px] min-w-0 max-[620px]:h-[220px] [&_.recharts-cartesian-axis-tick-value]:fill-muted-foreground [&_.recharts-cartesian-axis-tick-value]:text-[10px] [&_.recharts-cartesian-grid_line]:stroke-border"
         role="img"
         aria-label={mode === "cpu" ? "CPU 使用率时间趋势" : "网络发送与接收时间趋势"}
       >
@@ -137,7 +137,9 @@ export function MetricsChart({
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <p className="chart-note">{data.note || "数据来源：OCI 原生监控"}</p>
+      <p className="chart-note mt-2.5 text-[11px] text-muted-foreground">
+        {data.note || "数据来源：OCI 原生监控"}
+      </p>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { SettingsNavigation } from "@/components/settings-navigation";
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="settings-layout">
+    <div className="min-w-0">
       <PageHeader title="设置" />
       <SettingsNavigation />
       {children}

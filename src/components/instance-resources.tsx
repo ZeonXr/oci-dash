@@ -1,4 +1,14 @@
 "use client";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { useState, type SubmitEvent } from "react";
 import { HardDrive, Lock, Network, Plus, ShieldCheck } from "lucide-react";
 import type {
@@ -39,7 +49,7 @@ export function NetworkPanel({
 }) {
   const [operation, setOperation] = useState<Omit<OperationDialogProps, "onClose"> | null>(null);
   return (
-    <div className="stack">
+    <div className="flex flex-col gap-5">
       {!instance.vnics.length ? (
         <Card>
           <EmptyState title="没有网卡信息" description="可在账号页刷新资源，重新读取网络信息。" />
@@ -55,9 +65,9 @@ export function NetworkPanel({
               </Badge>
             }
           >
-            <div className="row row-wrap small muted" style={{ marginBottom: 18 }}>
+            <div className="row flex items-center gap-2.5 flex-wrap text-xs text-muted-foreground mb-4">
               <Network size={15} />
-              <span className="mono" title={vnic.id}>
+              <span className="font-mono tabular-nums" title={vnic.id}>
                 {shortId(vnic.id)}
               </span>
               <CopyButton value={vnic.id} />
@@ -70,29 +80,29 @@ export function NetworkPanel({
               hasRows={vnic.privateIps.length > 0}
               empty={<EmptyState title="此网卡没有 IPv4 地址信息" />}
             >
-              <table className="network-table">
-                <thead>
-                  <tr>
-                    <th scope="col">私网 IPv4</th>
-                    <th scope="col">公网 IPv4</th>
-                    <th scope="col">分配方式</th>
-                    <th scope="col">保护状态</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="min-w-[730px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead scope="col">私网 IPv4</TableHead>
+                    <TableHead scope="col">公网 IPv4</TableHead>
+                    <TableHead scope="col">分配方式</TableHead>
+                    <TableHead scope="col">保护状态</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {vnic.privateIps.map((binding) => (
-                    <tr key={binding.privateIpId}>
-                      <td>
+                    <TableRow key={binding.privateIpId}>
+                      <TableCell>
                         <IpAddressButton
                           target={targetForBinding(vnic, binding, "private")}
                           onClick={onAddress}
                         />
-                        <span className="cell-secondary">
+                        <span className="mt-1 block text-xs text-muted-foreground">
                           {binding.isPrimary ? "主要私网地址" : "次要私网地址"}
                         </span>
-                      </td>
-                      <td>
-                        <span className="table-address mono">
+                      </TableCell>
+                      <TableCell>
+                        <span className="flex items-center gap-1 whitespace-nowrap font-mono tabular-nums">
                           {binding.publicIp ? (
                             <IpAddressButton
                               target={targetForBinding(vnic, binding)}
@@ -103,35 +113,40 @@ export function NetworkPanel({
                           )}
                           {binding.publicIp && <CopyButton value={binding.publicIp} />}
                         </span>
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         {binding.lifetime === "RESERVED"
                           ? "保留公网 IP"
                           : binding.lifetime === "EPHEMERAL"
                             ? "临时公网 IP"
                             : "—"}
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         {binding.protected || binding.lifetime === "RESERVED" ? (
                           <Badge>
                             <Lock size={11} />
                             受保护
                           </Badge>
                         ) : (
-                          <span className="muted">{binding.publicIp ? "未保护" : "—"}</span>
+                          <span className="text-muted-foreground">
+                            {binding.publicIp ? "未保护" : "—"}
+                          </span>
                         )}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </TablePanel>
-            <div className="row between row-wrap" style={{ marginTop: 20 }}>
+            <div className="row flex items-center gap-2.5 justify-between flex-wrap mt-5">
               <div>
-                <p className="subsection-title">IPv6 地址</p>
+                <p className="mb-3 text-sm font-medium text-foreground">IPv6 地址</p>
                 {vnic.ipv6.length ? (
                   vnic.ipv6.map((ip) => (
-                    <div key={ip} className="row mono break-all">
+                    <div
+                      key={ip}
+                      className="row flex items-center gap-2.5 font-mono tabular-nums wrap-anywhere"
+                    >
                       <IpAddressButton
                         target={{ kind: "ipv6", address: ip, vnicId: vnic.id }}
                         onClick={onAddress}
@@ -140,11 +155,11 @@ export function NetworkPanel({
                     </div>
                   ))
                 ) : (
-                  <p className="muted small">此网卡尚未分配 IPv6。</p>
+                  <p className="text-muted-foreground text-xs">此网卡尚未分配 IPv6。</p>
                 )}
               </div>
               <Button
-                className="button-sm"
+                size="sm"
                 onClick={() =>
                   setOperation({
                     title: "分配 IPv6",
@@ -232,13 +247,13 @@ function VolumeDialog({
         </>
       }
     >
-      <form id="volume-form" className="stack" onSubmit={submit}>
+      <form id="volume-form" className="flex flex-col gap-5" onSubmit={submit}>
         <Field
           label="容量 (GiB)"
           hint={`当前 ${volume.sizeGb} GiB。OCI 在线扩容不支持缩小磁盘。`}
           required
         >
-          <input
+          <Input
             type="number"
             required
             min={volume.sizeGb}
@@ -248,7 +263,7 @@ function VolumeDialog({
           />
         </Field>
         <Field label="性能 (VPU / GB)" required>
-          <Select value={vpu} onChange={(e) => setVpu(Number(e.target.value))}>
+          <Select value={vpu} onValueChange={(value) => setVpu(Number(value))}>
             {Array.from(
               new Set([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, volume.vpusPerGb]),
             )
@@ -261,8 +276,8 @@ function VolumeDialog({
           </Select>
         </Field>
         <Alert>容量和性能调整可能影响费用；扩容后可能还需要在操作系统内扩展分区。</Alert>
-        <label className="checkbox-field">
-          <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+        <label className="flex items-center gap-2 text-sm">
+          <Checkbox checked={ack} onCheckedChange={(checked) => setAck(checked === true)} />
           确认按上述容量与性能更新
         </label>
         {action.error && <ErrorState message={action.error} />}
@@ -274,27 +289,27 @@ export function StoragePanel({ instance }: { instance: InstanceSummary }) {
   const [editing, setEditing] = useState<BootVolumeSummary | null>(null);
   return (
     <>
-      <div className="stack">
+      <div className="flex flex-col gap-5">
         {instance.bootVolumes.length ? (
           instance.bootVolumes.map((volume) => (
             <Card
               key={volume.id}
-              className="volume-card"
+
               title={volume.name}
               action={<Status value={volume.state} />}
             >
-              <div className="row">
-                <span className="resource-icon">
+              <div className="row flex items-center gap-2.5">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <HardDrive size={20} />
                 </span>
-                <div className="resource-label">
+                <div className="flex min-w-0 flex-col [&>strong]:font-medium [&>span]:text-xs [&>span]:text-muted-foreground">
                   <strong>启动卷</strong>
-                  <span className="mono">
+                  <span className="font-mono tabular-nums">
                     {shortId(volume.id)} <CopyButton value={volume.id} />
                   </span>
                 </div>
               </div>
-              <dl className="details-list">
+              <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-3 max-[620px]:text-xs">
                 <dt>容量</dt>
                 <dd>{number(volume.sizeGb)} GiB</dd>
                 <dt>配置性能</dt>
@@ -408,16 +423,16 @@ function RuleDialog({
         </>
       }
     >
-      <form id="security-rule-form" onSubmit={submit} className="stack">
+      <form id="security-rule-form" onSubmit={submit} className="flex flex-col gap-5">
         <Alert tone="info">
           规则会作用于此{group.kind === "nsg" ? "网络安全组" : "安全列表"}关联的所有资源。
         </Alert>
-        <div className="form-grid">
+        <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
           <Field label="方向">
             <Select
               value={form.direction}
-              onChange={(e) =>
-                setForm({ ...form, direction: e.target.value as "INGRESS" | "EGRESS" })
+              onValueChange={(value) =>
+                setForm({ ...form, direction: value as "INGRESS" | "EGRESS" })
               }
             >
               <option value="INGRESS">入站</option>
@@ -427,7 +442,7 @@ function RuleDialog({
           <Field label="协议">
             <Select
               value={form.protocol}
-              onChange={(e) => setForm({ ...form, protocol: e.target.value })}
+              onValueChange={(value) => setForm({ ...form, protocol: value })}
             >
               <option value="6">TCP</option>
               <option value="17">UDP</option>
@@ -436,10 +451,10 @@ function RuleDialog({
               <option value="all">所有协议</option>
             </Select>
           </Field>
-          <Field label="地址类型" className="span-2">
+          <Field label="地址类型" className="col-span-2 max-[620px]:col-span-1">
             <Select
               value={form.peerType}
-              onChange={(e) => setForm({ ...form, peerType: e.target.value })}
+              onValueChange={(value) => setForm({ ...form, peerType: value })}
             >
               <option value="CIDR_BLOCK">CIDR 地址段</option>
               {group.kind === "nsg" && (
@@ -450,8 +465,12 @@ function RuleDialog({
               )}
             </Select>
           </Field>
-          <Field label={form.direction === "INGRESS" ? "来源" : "目标"} required className="span-2">
-            <input
+          <Field
+            label={form.direction === "INGRESS" ? "来源" : "目标"}
+            required
+            className="col-span-2 max-[620px]:col-span-1"
+          >
+            <Input
               required
               value={form.peer}
               onChange={(e) => setForm({ ...form, peer: e.target.value })}
@@ -463,7 +482,7 @@ function RuleDialog({
           {["6", "17"].includes(form.protocol) && (
             <>
               <Field label="目标起始端口" hint="留空表示所有端口。">
-                <input
+                <Input
                   type="number"
                   min={1}
                   max={65535}
@@ -473,7 +492,7 @@ function RuleDialog({
                 />
               </Field>
               <Field label="目标结束端口" hint="留空表示与起始端口相同。">
-                <input
+                <Input
                   type="number"
                   min={Number(form.portMin) || 1}
                   max={65535}
@@ -487,7 +506,7 @@ function RuleDialog({
           {["1", "58"].includes(form.protocol) && (
             <>
               <Field label="ICMP 类型">
-                <input
+                <Input
                   type="number"
                   min={0}
                   max={255}
@@ -496,7 +515,7 @@ function RuleDialog({
                 />
               </Field>
               <Field label="ICMP 代码">
-                <input
+                <Input
                   type="number"
                   min={0}
                   max={255}
@@ -507,8 +526,8 @@ function RuleDialog({
               </Field>
             </>
           )}
-          <Field label="说明" className="span-2">
-            <input
+          <Field label="说明" className="col-span-2 max-[620px]:col-span-1">
+            <Input
               value={form.description}
               maxLength={255}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -516,11 +535,10 @@ function RuleDialog({
             />
           </Field>
         </div>
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
+        <label className="flex items-center gap-2 text-sm">
+          <Checkbox
             checked={form.stateless}
-            onChange={(e) => setForm({ ...form, stateless: e.target.checked })}
+            onCheckedChange={(checked) => setForm({ ...form, stateless: checked === true })}
           />
           使用无状态规则
         </label>
@@ -546,9 +564,11 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
   );
   if (resource.loading) return <LoadingState label="正在读取安全规则…" />;
   return (
-    <div className="stack">
-      <div className="row between">
-        <p className="muted small">同时显示网卡关联的网络安全组与子网安全列表。</p>
+    <div className="flex flex-col gap-5">
+      <div className="row flex items-center gap-2.5 justify-between">
+        <p className="text-muted-foreground text-xs">
+          同时显示网卡关联的网络安全组与子网安全列表。
+        </p>
         <RefreshButton onClick={resource.reload} loading={resource.refreshing}>
           刷新规则
         </RefreshButton>
@@ -561,13 +581,13 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
               title={group.name}
               description={group.kind === "nsg" ? "网络安全组 (NSG)" : "子网安全列表"}
               action={
-                <Button className="button-sm" onClick={() => setAdding(group)}>
+                <Button size="sm" onClick={() => setAdding(group)}>
                   <Plus size={14} />
                   添加规则
                 </Button>
               }
             >
-              <p className="mono small muted break-all" style={{ marginBottom: 14 }}>
+              <p className="font-mono tabular-nums text-xs text-muted-foreground wrap-anywhere mb-3.5">
                 {group.id} <CopyButton value={group.id} />
               </p>
               <TablePanel
@@ -577,51 +597,54 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
                 hasRows={group.rules.length > 0}
                 empty={<EmptyState title="此资源中没有安全规则" icon={<ShieldCheck size={25} />} />}
               >
-                <table className="network-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">方向</th>
-                      <th scope="col">协议</th>
-                      <th scope="col">来源 / 目标</th>
-                      <th scope="col">目标端口</th>
-                      <th scope="col">说明</th>
-                      <th scope="col">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="min-w-[730px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead scope="col">方向</TableHead>
+                      <TableHead scope="col">协议</TableHead>
+                      <TableHead scope="col">来源 / 目标</TableHead>
+                      <TableHead scope="col">目标端口</TableHead>
+                      <TableHead scope="col">说明</TableHead>
+                      <TableHead scope="col">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {group.rules.map((rule) => (
-                      <tr key={rule.id}>
-                        <td>
+                      <TableRow key={rule.id}>
+                        <TableCell>
                           <Badge tone={rule.direction === "INGRESS" ? "info" : "neutral"}>
                             {rule.direction === "INGRESS" ? "入站" : "出站"}
                           </Badge>
-                        </td>
-                        <td>
+                        </TableCell>
+                        <TableCell>
                           {protocolLabels[rule.protocol] || rule.protocol}
-                          {rule.stateless && <span className="cell-secondary">无状态</span>}
-                        </td>
-                        <td className="mono">{rule.peer}</td>
-                        <td>
+                          {rule.stateless && (
+                            <span className="mt-1 block text-xs text-muted-foreground">无状态</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono tabular-nums">{rule.peer}</TableCell>
+                        <TableCell>
                           {rule.portMin != null
                             ? `${rule.portMin}${rule.portMax != null && rule.portMax !== rule.portMin ? `–${rule.portMax}` : ""}`
                             : rule.icmpType != null
                               ? `类型 ${rule.icmpType}${rule.icmpCode != null ? ` / ${rule.icmpCode}` : ""}`
                               : "所有"}
-                        </td>
-                        <td>{rule.description || "—"}</td>
-                        <td>
+                        </TableCell>
+                        <TableCell>{rule.description || "—"}</TableCell>
+                        <TableCell>
                           <Button
                             variant="ghost"
-                            className="button-sm danger-text"
+                            size="sm"
+                            className="text-destructive"
                             onClick={() => setDeleting({ group, rule })}
                           >
                             删除
                           </Button>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </TablePanel>
             </Card>
           ))

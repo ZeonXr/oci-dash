@@ -1,4 +1,13 @@
 "use client";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -11,6 +20,7 @@ import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
 import {
   Button,
+  Card,
   RefreshButton,
   CopyButton,
   EmptyState,
@@ -125,9 +135,9 @@ function InstancesContent() {
           : "添加账号后会自动读取实例，也可以创建一个新实例。"
       }
       action={
-        <Link href="/settings/accounts" className="button">
-          管理账号
-        </Link>
+        <Button asChild>
+          <Link href="/settings/accounts">管理账号</Link>
+        </Button>
       }
     />
   );
@@ -171,22 +181,22 @@ function InstancesContent() {
         <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
       )}
       {(resource.error || sync.error) && (
-        <div style={{ marginBottom: 18 }}>
+        <div className="mb-4">
           <ErrorState message={sync.error || resource.error!} retry={sync.refresh} />
         </div>
       )}
       {instanceJobs.error && (
-        <div style={{ marginBottom: 18 }}>
+        <div className="mb-4">
           <ErrorState
             message={`任务状态读取失败：${instanceJobs.error}`}
             retry={instanceJobs.reload}
           />
         </div>
       )}
-      <div className="filters instance-filters">
-        <div className="search-field">
+      <div className="mb-5 flex flex-wrap items-center gap-2.5 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 *:data-[slot=select-trigger]:max-w-56 max-[620px]:gap-2 max-[620px]:*:data-[slot=select-trigger]:min-w-24 max-[620px]:*:data-[slot=select-trigger]:max-w-none max-[620px]:*:data-[slot=select-trigger]:flex-1 instance-filters">
+        <div className="flex min-w-52 max-w-sm flex-1 items-center gap-2 rounded-lg border bg-card px-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15 [&>svg]:text-muted-foreground [&_input]:border-0 [&_input]:bg-transparent [&_input]:pl-0 [&_input]:shadow-none [&_input]:focus-visible:ring-0 max-[620px]:w-full max-[620px]:max-w-none max-[620px]:basis-full">
           <Search size={16} />
-          <input
+          <Input
             aria-label="搜索实例名称、地址或 OCID"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -197,7 +207,7 @@ function InstancesContent() {
           aria-label="筛选账号"
           value={account}
           disabled={!accountsReady}
-          onChange={(e) => setAccount(e.target.value)}
+          onValueChange={(value) => setAccount(value)}
         >
           <option value="">全部账号</option>
           {accounts.map((a) => (
@@ -206,7 +216,7 @@ function InstancesContent() {
             </option>
           ))}
         </Select>
-        <Select aria-label="筛选区域" value={region} onChange={(e) => setRegion(e.target.value)}>
+        <Select aria-label="筛选区域" value={region} onValueChange={(value) => setRegion(value)}>
           <option value="">全部区域</option>
           {Array.from(new Set(instances.map((i) => i.region)))
             .sort()
@@ -216,7 +226,7 @@ function InstancesContent() {
               </option>
             ))}
         </Select>
-        <Select aria-label="筛选状态" value={state} onChange={(e) => setState(e.target.value)}>
+        <Select aria-label="筛选状态" value={state} onValueChange={(value) => setState(value)}>
           <option value="">全部状态</option>
           <option value="RUNNING">运行中</option>
           <option value="STOPPED">已停止</option>
@@ -237,7 +247,7 @@ function InstancesContent() {
             重置筛选
           </Button>
         )}
-        <div className="instance-view-actions">
+        <div className="ml-auto flex items-center gap-2">
           {view === "cards" && (
             <Button
               variant="ghost"
@@ -248,25 +258,31 @@ function InstancesContent() {
               名称{sort === "ascending" ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
             </Button>
           )}
-          <div className="view-switch" role="group" aria-label="实例展示方式">
-            <button
-              type="button"
+          <div
+            className="inline-flex gap-1 rounded-md border p-1"
+            role="group"
+            aria-label="实例展示方式"
+          >
+            <Button
+              variant={view === "table" ? "secondary" : "ghost"}
+              size="icon"
               aria-label="表格视图"
               title="表格视图"
               aria-pressed={view === "table"}
               onClick={() => changeView("table")}
             >
               <List size={17} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant={view === "cards" ? "secondary" : "ghost"}
+              size="icon"
               aria-label="卡片视图"
               title="卡片视图"
               aria-pressed={view === "cards"}
               onClick={() => changeView("cards")}
             >
               <LayoutGrid size={17} aria-hidden="true" />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -274,7 +290,7 @@ function InstancesContent() {
         <section aria-label="实例卡片列表" aria-busy={resource.loading || refreshing}>
           {filtered.length ? (
             <>
-              <div className="instance-cards">
+              <div className="instance-cards grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-4">
                 {visible.map((instance) => {
                   const context = ipRotationContext(instance, instanceJobs, resource.error);
                   return (
@@ -289,10 +305,10 @@ function InstancesContent() {
                   );
                 })}
               </div>
-              <div className="instance-cards-pagination">{pagination}</div>
+              <div className="mt-4 [&>nav]:border-t-0 [&>nav]:px-0">{pagination}</div>
             </>
           ) : (
-            <div className="card">{resource.loading ? <LoadingState /> : empty}</div>
+            <Card>{resource.loading ? <LoadingState /> : empty}</Card>
           )}
         </section>
       ) : (
@@ -304,55 +320,60 @@ function InstancesContent() {
           empty={empty}
           footer={pagination}
         >
-          <table className="resource-table">
-            <thead>
-              <tr>
+          <Table className="resource-table min-w-205">
+            <TableHeader>
+              <TableRow>
                 <SortableHeader label="实例名称" direction={sort} onSort={toggleSort} />
-                <th scope="col">账号 / 区域</th>
-                <th scope="col">状态</th>
-                <th scope="col">规格</th>
-                <th scope="col">主要地址</th>
-                <th scope="col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
+                <TableHead scope="col">账号 / 区域</TableHead>
+                <TableHead scope="col">状态</TableHead>
+                <TableHead scope="col">规格</TableHead>
+                <TableHead scope="col">主要地址</TableHead>
+                <TableHead scope="col">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {visible.map((i) => {
                 const target = primaryIpTarget(i);
                 return (
-                  <tr key={i.id}>
-                    <td>
-                      <div className="table-identity">
-                        <span className="table-resource-icon">
+                  <TableRow key={i.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                           <Server size={17} />
                         </span>
                         <div>
-                          <Link href={instanceHref(i.id)} className="name-link">
+                          <Link
+                            href={instanceHref(i.id)}
+                            className="name-link inline-flex items-center gap-2 font-medium text-foreground hover:text-primary"
+                          >
                             {i.displayName}
                           </Link>
-                          <span className="cell-secondary">{formatDate(i.createdAt)} 创建</span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {formatDate(i.createdAt)} 创建
+                          </span>
                         </div>
                       </div>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       {i.accountName}
-                      <span className="cell-secondary">
+                      <span className="mt-1 block text-xs text-muted-foreground">
                         <RegionTag region={i.region} />
                       </span>
-                    </td>
-                    <td>
-                      <div className="row row-wrap">
+                    </TableCell>
+                    <TableCell>
+                      <div className="row flex items-center gap-2.5 flex-wrap">
                         <Status value={i.state} />
                         <InventoryFreshness instance={i} />
                       </div>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <CodeTag title={i.shape}>{i.shape.replace("VM.Standard.", "")}</CodeTag>
-                      <span className="cell-secondary">
+                      <span className="mt-1 block text-xs text-muted-foreground">
                         {number(i.ocpus, 1)} OCPU / {number(i.memoryGb, 1)} GB
                       </span>
-                    </td>
-                    <td>
-                      <div className="table-address mono">
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1 whitespace-nowrap font-mono tabular-nums">
                         {target ? (
                           <IpAddressButton
                             target={target}
@@ -365,17 +386,20 @@ function InstancesContent() {
                           <CopyButton value={target.address} label={`复制 ${i.displayName} 地址`} />
                         )}
                       </div>
-                    </td>
-                    <td>
-                      <Link href={instanceHref(i.id)} className="text-link">
+                    </TableCell>
+                    <TableCell>
+                      <Link
+                        href={instanceHref(i.id)}
+                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline underline-offset-4"
+                      >
                         查看详情
                       </Link>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </TablePanel>
       )}
       {creating && <CreateInstanceDialog onClose={() => setCreating(false)} />}

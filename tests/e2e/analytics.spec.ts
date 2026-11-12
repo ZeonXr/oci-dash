@@ -1,3 +1,4 @@
+import { selectOption } from "./helpers/ui";
 import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 import type { AccountSummary, InstanceSummary } from "../../src/lib/contracts";
 import type {
@@ -346,9 +347,9 @@ test.beforeEach(async ({ page }) => {
 
 const metric = (page: Page, label: string) =>
   page
-    .locator(".metric-card")
+    .locator("[data-slot=metric-card]")
     .filter({ has: page.getByText(label, { exact: true }) })
-    .locator(".metric-value");
+    .locator("[data-slot=metric-value]");
 
 for (const target of [
   { path: "/traffic", accountLabel: "流量账号", regionLabel: "流量区域" },
@@ -365,7 +366,7 @@ for (const target of [
     await page.clock.setFixedTime(new Date("2026-11-08T12:30:00Z"));
     await refresh.click();
     await expect.poll(() => analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-08");
-    await page.getByLabel("时间范围", { exact: true }).selectOption("last7");
+    await selectOption(page.getByLabel("时间范围", { exact: true }), "last7");
     await expect
       .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
       .toBe("2026-11-02");
@@ -388,7 +389,7 @@ for (const target of [
       .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
       .toBe("2026-11-03");
     await expect.poll(() => analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-09");
-    await page.getByLabel("时间范围", { exact: true }).selectOption("custom");
+    await selectOption(page.getByLabel("时间范围", { exact: true }), "custom");
     await page.getByLabel("开始日期（UTC）", { exact: true }).fill("2026-11-01");
     await page.getByLabel("结束日期（UTC）", { exact: true }).fill("2026-11-03");
     await page.getByRole("button", { name: "应用日期", exact: true }).click();
@@ -400,14 +401,17 @@ for (const target of [
     await expect.poll(() => analyticsApi.count(apiPath, "POST")).toBe(1);
     expect(analyticsApi.latest(apiPath)?.query.get("startDate")).toBe("2026-11-01");
     expect(analyticsApi.latest(apiPath)?.query.get("endDate")).toBe("2026-11-03");
-    await expect(page.getByLabel("时间范围", { exact: true })).toHaveValue("custom");
+    await expect(page.getByLabel("时间范围", { exact: true })).toHaveAttribute(
+      "data-value",
+      "custom",
+    );
   });
 
   test(`${target.path} 常驻页面跨UTC日界时自动更新今天`, async ({ page, analyticsApi }) => {
     const apiPath = `/api/analytics${target.path}`;
     await page.clock.install({ time: new Date("2026-11-30T23:59:58Z") });
     await page.goto(target.path);
-    await page.getByLabel("时间范围", { exact: true }).selectOption("today");
+    await selectOption(page.getByLabel("时间范围", { exact: true }), "today");
     await expect
       .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
       .toBe("2026-11-30");
@@ -426,7 +430,9 @@ for (const target of [
   }) => {
     analyticsApi.failAccounts = true;
     await page.goto(`${target.path}?accountId=${accounts[0].id}`);
-    await expect(page.locator("#main-content .alert-error")).toContainText("账号读取失败");
+    await expect(page.locator("#main-content [data-slot=alert][data-tone=error]")).toContainText(
+      "账号读取失败",
+    );
     await expect(page.getByRole("heading", { name: "先添加 OCI 账号", exact: true })).toHaveCount(
       0,
     );
@@ -434,9 +440,15 @@ for (const target of [
     await expect(page.getByLabel(target.accountLabel, { exact: true })).toBeDisabled();
     expect(analyticsApi.count(`/api/analytics${target.path}`)).toBe(0);
     analyticsApi.failAccounts = false;
-    await page.locator("#main-content .alert-error").getByRole("button", { name: "重试" }).click();
-    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveValue(accounts[0].id);
-    await expect(page.locator("#main-content .alert-error")).toHaveCount(0);
+    await page
+      .locator("#main-content [data-slot=alert][data-tone=error]")
+      .getByRole("button", { name: "重试" })
+      .click();
+    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveAttribute(
+      "data-value",
+      accounts[0].id,
+    );
+    await expect(page.locator("#main-content [data-slot=alert][data-tone=error]")).toHaveCount(0);
     await expect
       .poll(() => analyticsApi.latest(`/api/analytics${target.path}`)?.query.get("accountId"))
       .toBe(accounts[0].id);
@@ -459,7 +471,7 @@ for (const target of [
       analyticsApi.accountsGate = undefined;
       release();
       const selector = page.getByLabel(target.accountLabel, { exact: true });
-      await expect(selector).toHaveValue(accounts[0].id);
+      await expect(selector).toHaveAttribute("data-value", accounts[0].id);
       await expect
         .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
         .toBe(accounts[0].id);
@@ -469,27 +481,31 @@ for (const target of [
           .every((call) => call.query.get("accountId") === accounts[0].id),
       ).toBe(true);
 
-      await selector.selectOption(accounts[1].id);
+      await selectOption(selector, accounts[1].id);
       await expect
         .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
         .toBe(accounts[1].id);
       await expect(page).toHaveURL(
         new RegExp(`${target.path}\\?accountId=${accounts[1].id}&keep=1#scope$`),
       );
-      await page
-        .getByLabel(target.regionLabel, { exact: true })
-        .selectOption(accounts[1].homeRegion);
+      await selectOption(
+        page.getByLabel(target.regionLabel, { exact: true }),
+        accounts[1].homeRegion,
+      );
       if (target.path === "/traffic") {
-        await page.getByLabel("流量实例", { exact: true }).selectOption(instances[1].id);
-        await page.getByLabel("流量网卡", { exact: true }).selectOption("analytics-vnic-3");
+        await selectOption(page.getByLabel("流量实例", { exact: true }), instances[1].id);
+        await selectOption(page.getByLabel("流量网卡", { exact: true }), "analytics-vnic-3");
         await expect
           .poll(() => analyticsApi.latest(apiPath)?.query.get("vnicId"))
           .toBe("analytics-vnic-3");
       }
       const beforeBack = analyticsApi.calls.length;
       await page.goBack();
-      await expect(selector).toHaveValue(accounts[0].id);
-      await expect(page.getByLabel(target.regionLabel, { exact: true })).toHaveValue("");
+      await expect(selector).toHaveAttribute("data-value", accounts[0].id);
+      await expect(page.getByLabel(target.regionLabel, { exact: true })).toHaveAttribute(
+        "data-value",
+        "",
+      );
       await expect
         .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
         .toBe(accounts[0].id);
@@ -506,12 +522,12 @@ for (const target of [
           ),
       ).toBe(true);
       await page.goForward();
-      await expect(selector).toHaveValue(accounts[1].id);
+      await expect(selector).toHaveAttribute("data-value", accounts[1].id);
       await expect
         .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
         .toBe(accounts[1].id);
       await page.reload();
-      await expect(selector).toHaveValue(accounts[1].id);
+      await expect(selector).toHaveAttribute("data-value", accounts[1].id);
       await expect
         .poll(() => analyticsApi.latest(apiPath)?.query.get("accountId"))
         .toBe(accounts[1].id);
@@ -524,7 +540,10 @@ for (const target of [
   test(`${target.path} 失效账号链接回到有效的全部账号范围`, async ({ page, analyticsApi }) => {
     const apiPath = `/api/analytics${target.path}`;
     await page.goto(`${target.path}?accountId=removed-account&keep=1#scope`);
-    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveValue("");
+    await expect(page.getByLabel(target.accountLabel, { exact: true })).toHaveAttribute(
+      "data-value",
+      "",
+    );
     await expect(page).toHaveURL(new RegExp(`${target.path}\\?keep=1#scope$`));
     await expect.poll(() => analyticsApi.count(apiPath)).toBeGreaterThan(0);
     expect(
@@ -548,20 +567,20 @@ test("流量按账号、区域、实例、网卡筛选并使用UTC日期范围",
   await page.goto("/traffic");
   await expect(page.locator(".analytics-table tbody tr")).toHaveCount(3);
   await page
-    .locator(".heading-actions")
+    .locator("[data-slot=heading-actions]")
     .getByRole("button", { name: "统计说明", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toContainText("不含已分离或删除的网卡");
   await page.getByRole("dialog").getByRole("button", { name: "关闭对话框", exact: true }).click();
   expect(analyticsApi.latest("/api/analytics/traffic")?.query.get("startDate")).toBe("2026-11-01");
-  await page.getByLabel("流量账号", { exact: true }).selectOption(accounts[0].id);
-  await page.getByLabel("流量区域", { exact: true }).selectOption(accounts[0].homeRegion);
-  await page.getByLabel("流量实例", { exact: true }).selectOption(instances[0].id);
-  await page.getByLabel("流量网卡", { exact: true }).selectOption("analytics-vnic-2");
+  await selectOption(page.getByLabel("流量账号", { exact: true }), accounts[0].id);
+  await selectOption(page.getByLabel("流量区域", { exact: true }), accounts[0].homeRegion);
+  await selectOption(page.getByLabel("流量实例", { exact: true }), instances[0].id);
+  await selectOption(page.getByLabel("流量网卡", { exact: true }), "analytics-vnic-2");
   await expect(page.locator(".analytics-table tbody tr")).toHaveCount(1);
   await expect(metric(page, "接收流量")).toHaveText("2 GiB");
-  await page.getByLabel("时间范围", { exact: true }).selectOption("last7");
-  await page.getByLabel("流量统计粒度", { exact: true }).selectOption("hourly");
+  await selectOption(page.getByLabel("时间范围", { exact: true }), "last7");
+  await selectOption(page.getByLabel("流量统计粒度", { exact: true }), "hourly");
   await expect
     .poll(() => analyticsApi.latest("/api/analytics/traffic")?.query.get("granularity"))
     .toBe("hourly");
@@ -586,9 +605,11 @@ test("部分流量区间显示已观测小计，图表和提示仍可见", async
   await expect(page.locator(".analytics-legend")).toContainText("接收（已获取）");
   await expect(page.locator(".analytics-legend")).toContainText("发送（已获取）");
   await expect(
-    page.locator(".heading-actions").getByRole("button", { name: "部分数据", exact: true }),
+    page
+      .locator("[data-slot=heading-actions]")
+      .getByRole("button", { name: "部分数据", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".metric-note").first()).toHaveText("已获取小计");
+  await expect(page.locator("[data-slot=metric-note]").first()).toHaveText("已获取小计");
   await expect(page.getByText("所选范围暂无流量数据", { exact: true })).toHaveCount(0);
   await chart.locator(".recharts-line-dot").first().hover();
   await expect(page.locator(".recharts-tooltip-label")).toContainText("部分数据（已观测小计）");
@@ -618,11 +639,11 @@ test("旧筛选的慢响应不覆盖新筛选数据", async ({ page, analyticsAp
       release = resolve;
     }),
   };
-  await page.getByLabel("流量账号", { exact: true }).selectOption(accounts[0].id);
+  await selectOption(page.getByLabel("流量账号", { exact: true }), accounts[0].id);
   await expect
     .poll(() => analyticsApi.latest("/api/analytics/traffic")?.query.get("accountId"))
     .toBe(accounts[0].id);
-  await page.getByLabel("流量账号", { exact: true }).selectOption(accounts[1].id);
+  await selectOption(page.getByLabel("流量账号", { exact: true }), accounts[1].id);
   await expect(metric(page, "接收流量")).toHaveText("4 GiB");
   release();
   await expect.poll(() => analyticsApi.completedDelayed).toBe(1);
@@ -654,8 +675,8 @@ test("成本按币种分开并在客户端筛选区域服务，保留库存外�
     );
   }
   const before = analyticsApi.count("/api/analytics/costs");
-  await page.getByLabel("成本区域", { exact: true }).selectOption("ap-tokyo-1");
-  await page.getByLabel("成本服务", { exact: true }).selectOption("Compute");
+  await selectOption(page.getByLabel("成本区域", { exact: true }), "ap-tokyo-1");
+  await selectOption(page.getByLabel("成本服务", { exact: true }), "Compute");
   await expect(metric(page, "USD · 已获取小计")).toHaveText("0.30");
   await expect(page.locator(".analytics-cost-table tbody tr")).toHaveCount(1);
   await expect(page.locator(".analytics-cost-table a")).toHaveAttribute(
@@ -678,7 +699,7 @@ test("零成本、缺失金额、部分返回与空记录保持不同状态", as
   await page.getByRole("button", { name: "刷新数据", exact: true }).click();
   await expect(metric(page, "USD · 已获取小计")).toHaveText("—");
   await page
-    .locator(".heading-actions")
+    .locator("[data-slot=heading-actions]")
     .getByRole("button", { name: "部分数据", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toContainText("模拟成本数据未完整返回");
@@ -687,13 +708,13 @@ test("零成本、缺失金额、部分返回与空记录保持不同状态", as
   analyticsApi.costMode = "empty";
   await page.getByRole("button", { name: "刷新数据", exact: true }).click();
   await expect(page.getByText("暂无已报告成本", { exact: true })).toBeVisible();
-  await expect(page.locator(".analytics-metrics .metric-card")).toHaveCount(0);
+  await expect(page.locator(".analytics-metrics [data-slot=metric-card]")).toHaveCount(0);
 });
 
 test("月成本默认过去12完整月，自定义拒绝非完整月", async ({ page, analyticsApi }) => {
   await page.goto("/costs");
   await expect(metric(page, "USD · 已报告成本")).toBeVisible();
-  await page.getByLabel("成本统计粒度", { exact: true }).selectOption("monthly");
+  await selectOption(page.getByLabel("成本统计粒度", { exact: true }), "monthly");
   await expect
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("granularity"))
     .toBe("monthly");
@@ -701,7 +722,7 @@ test("月成本默认过去12完整月，自定义拒绝非完整月", async ({ 
     startDate: "2025-11-01",
     endDate: "2026-10-31",
   });
-  await page.getByLabel("时间范围", { exact: true }).selectOption("custom");
+  await selectOption(page.getByLabel("时间范围", { exact: true }), "custom");
   await page.getByLabel("结束日期（UTC）", { exact: true }).fill("2026-09-30");
   await page.getByLabel("开始日期（UTC）", { exact: true }).fill("2026-09-02");
   await expect(page.getByRole("button", { name: "应用日期", exact: true })).toBeDisabled();
@@ -716,7 +737,7 @@ test("月成本默认过去12完整月，自定义拒绝非完整月", async ({ 
 test("月成本常驻跨月后滚动过去12个完整月", async ({ page, analyticsApi }) => {
   await page.clock.install({ time: new Date("2026-11-30T23:59:58Z") });
   await page.goto("/costs");
-  await page.getByLabel("成本统计粒度", { exact: true }).selectOption("monthly");
+  await selectOption(page.getByLabel("成本统计粒度", { exact: true }), "monthly");
   await expect
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
     .toBe("2025-11-01");
@@ -727,7 +748,10 @@ test("月成本常驻跨月后滚动过去12个完整月", async ({ page, analyt
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
     .toBe("2025-12-01");
   expect(analyticsApi.latest("/api/analytics/costs")?.query.get("endDate")).toBe("2026-11-30");
-  await expect(page.getByLabel("时间范围", { exact: true })).toHaveValue("last12Months");
+  await expect(page.getByLabel("时间范围", { exact: true })).toHaveAttribute(
+    "data-value",
+    "last12Months",
+  );
 });
 
 for (const pageName of ["traffic", "costs"] as const) {
@@ -739,16 +763,18 @@ for (const pageName of ["traffic", "costs"] as const) {
     await page.goto(`/${pageName}`);
     await expect(page.locator(".analytics-table tbody tr").first()).toBeVisible();
     await expect(page.locator(".analytics-chart").first()).toBeVisible();
-    await expect(page.locator(".heading-actions .updated-at time")).toHaveAttribute(
+    await expect(page.locator('[data-slot="heading-actions"] time.updated-at')).toHaveAttribute(
       "datetime",
       now,
     );
     await expect(page.getByRole("search")).toHaveCount(0);
     for (const width of [1440, 2191]) {
       await page.setViewportSize({ width, height: 1039 });
-      const positions = await page
-        .locator(".analytics-controls select")
-        .evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().top));
+      const controls = page.locator(".analytics-controls").getByRole("combobox");
+      await expect(controls).toHaveCount(pageName === "traffic" ? 6 : 5);
+      const positions = await controls.evaluateAll((elements) =>
+        elements.map((element) => element.getBoundingClientRect().top),
+      );
       expect(Math.max(...positions) - Math.min(...positions)).toBeLessThan(2);
     }
     await expect(page.locator(".topbar")).toHaveCount(0);
@@ -772,36 +798,48 @@ for (const pageName of ["traffic", "costs"] as const) {
     expect(scroll.content).toBeGreaterThan(scroll.visible);
     await capture(page, info, `${pageName}-mobile`);
     const menu = page.getByRole("button", { name: "展开导航", exact: true });
-    const sidebar = page.locator(".sidebar");
-    await expect(sidebar).toHaveAttribute("inert", "");
+    const sheet = page.getByRole("dialog", { name: "主导航", exact: true });
+    const desktopNavigation = page.locator("#primary-navigation");
+    await expect(desktopNavigation).toBeHidden();
+    await expect(sheet).not.toBeVisible();
     await menu.click();
-    await expect(menu).toHaveAttribute("aria-expanded", "true");
-    await expect(sidebar).toHaveAttribute("aria-modal", "true");
-    await expect(page.locator(".app-main")).toHaveAttribute("inert", "");
-    await expect(page.locator(".toast-stack")).toHaveAttribute("inert", "");
-    await expect(page.getByRole("button", { name: "关闭导航", exact: true })).toBeFocused();
-    const logout = sidebar.getByRole("button", { name: "退出登录", exact: true });
+    await expect(sheet).toBeVisible();
+    await expect(page.locator('button[aria-label="展开导航"]')).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    const close = sheet.getByRole("button", { name: "关闭导航", exact: true });
+    await expect(close).toBeFocused();
+    const logout = sheet.getByRole("button", { name: "退出登录", exact: true });
     await logout.focus();
     await page.keyboard.press("Tab");
-    await expect(sidebar.getByRole("link", { name: "OCI Dash", exact: true })).toBeFocused();
+    await expect(close).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(logout).toBeFocused();
+    await page.locator('#main-content [role="combobox"]').first().focus();
+    await expect
+      .poll(() => sheet.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
+    // Move off icon tooltips before exercising the containing dialog's Escape handler.
+    await sheet.getByRole("button", { name: "关闭导航", exact: true }).focus();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
     await page.keyboard.press("Escape");
-    await expect(sidebar).toHaveAttribute("inert", "");
+    await expect(sheet).not.toBeVisible();
     await expect(menu).toBeFocused();
-    await expect(page.locator(".app-main")).not.toHaveAttribute("inert", "");
-    await expect(page.locator(".toast-stack")).not.toHaveAttribute("inert", "");
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
     await menu.click();
-    await page.locator(".sidebar-backdrop").click({ position: { x: 300, y: 100 } });
-    await expect(sidebar).toHaveAttribute("inert", "");
+    await expect(sheet).toBeVisible();
+    await page.locator('[data-slot="sheet-overlay"]').click({ position: { x: 385, y: 420 } });
+    await expect(sheet).not.toBeVisible();
     await expect(menu).toBeFocused();
     await menu.click();
-    await sidebar.locator('a[aria-current="page"]').click();
-    await expect(sidebar).toHaveAttribute("inert", "");
+    await sheet.locator('a[aria-current="page"]').click();
+    await expect(sheet).not.toBeVisible();
     await menu.click();
     await page.setViewportSize({ width: 1440, height: 1080 });
-    await expect(sidebar).not.toHaveAttribute("inert", "");
-    await expect(sidebar).not.toHaveAttribute("aria-modal", "true");
-    await expect(sidebar.locator('a[aria-current="page"]')).toBeFocused();
+    await expect(sheet).not.toBeVisible();
+    await expect(desktopNavigation).toBeVisible();
+    await expect(menu).toBeHidden();
+    await expect(desktopNavigation.locator('a[aria-current="page"]')).toBeFocused();
   });
 }

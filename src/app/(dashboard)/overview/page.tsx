@@ -27,7 +27,7 @@ import {
   PageHeader,
   Select,
 } from "@/components/ui";
-import "./overview.css";
+import { Button as LinkButton } from "@/components/ui/button";
 
 type Period = "7d" | "30d" | "month";
 function dateRange(period: Period, now = new Date()) {
@@ -60,11 +60,21 @@ function PanelContent({
   if (query.loading) return <LoadingState label="正在读取统计…" />;
   if (!query.data && query.error) return <ErrorState message={query.error} retry={query.retry} />;
   return (
-    <div className="overview-panel-content" aria-busy={query.refreshing}>
+    <div
+      className="overview-panel-content flex min-w-0 flex-col gap-3"
+      aria-busy={query.refreshing}
+    >
       {query.error && (
-        <button className="overview-retry" type="button" onClick={query.retry} title={query.error}>
+        <LinkButton
+          variant="outline"
+          size="sm"
+          className="overview-retry self-start"
+          type="button"
+          onClick={query.retry}
+          title={query.error}
+        >
           更新失败 · 重试
-        </button>
+        </LinkButton>
       )}
       {children}
     </div>
@@ -136,7 +146,7 @@ export default function OverviewPage() {
     trafficData?.summary.coverage === "partial" ? periodNote + " · 已获取小计" : periodNote;
   const detailQuery = accountId ? "?accountId=" + encodeURIComponent(accountId) : "";
   return (
-    <div className="data-overview">
+    <div className="data-overview flex flex-col gap-6 *:data-[slot=page-heading]:mb-0 [--overview-teal:#39a99c] [--overview-cpu-1:#d1e2fc] [--overview-cpu-2:#92b7f0] [--overview-cpu-4:#1e57a4] dark:[--overview-teal:#70d1c3] dark:[--overview-cpu-1:#3a567b] dark:[--overview-cpu-2:#6997d6] dark:[--overview-cpu-4:#a1c3fa]">
       <PageHeader
         title="数据总览"
         description={
@@ -149,7 +159,7 @@ export default function OverviewPage() {
         <Select
           aria-label="总览账号"
           value={accountId}
-          onChange={(event) => setAccount(event.target.value)}
+          onValueChange={setAccount}
           disabled={!accountsReady}
         >
           <option value="">全部账号</option>
@@ -165,8 +175,8 @@ export default function OverviewPage() {
           title={
             period === "month" ? "本月包含今天，按完整小时累计" : "统计完整 UTC 日期，不含今天"
           }
-          onChange={(event) => {
-            const value = event.target.value as Period;
+          onValueChange={(next) => {
+            const value = next as Period;
             setPeriod(value);
             setRange(dateRange(value));
           }}
@@ -204,15 +214,15 @@ export default function OverviewPage() {
             title="添加账号后查看用量"
             description="连接 OCI 账号，即可读取流量、CPU 和费用记录。"
             action={
-              <Link href="/settings/accounts" className="button button-primary">
-                添加账号
-              </Link>
+              <LinkButton asChild>
+                <Link href="/settings/accounts">添加账号</Link>
+              </LinkButton>
             }
           />
         </Card>
       ) : (
         <>
-          <div className="overview-summaries">
+          <div className="overview-summaries grid grid-cols-3 gap-4 max-md:grid-cols-1">
             <OverviewSummary
               label="发送流量"
               value={trafficData?.summary.sentGiB}
@@ -242,12 +252,12 @@ export default function OverviewPage() {
               loading={cpu.loading}
             />
           </div>
-          <div className="overview-chart-grid">
+          <div className="overview-chart-grid grid grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] items-stretch gap-6 max-xl:grid-cols-[minmax(0,1.65fr)_minmax(250px,1fr)] max-xl:gap-4 max-md:grid-cols-1">
             <Card
-              className="overview-panel overview-flow"
+              className="overview-panel overview-flow min-w-0"
               title="收发流量趋势"
               action={
-                <div className="overview-panel-actions">
+                <div className="overview-panel-actions flex items-center gap-2 max-md:gap-1">
                   {traffic.data && <AnalyticsStatusNote report={traffic.data} />}
                   <OverviewLink href={"/traffic" + detailQuery}>流量明细</OverviewLink>
                 </div>
@@ -257,16 +267,16 @@ export default function OverviewPage() {
                 {trafficData && <TrafficTrend data={trafficData} />}
               </PanelContent>
             </Card>
-            <Card className="overview-panel overview-rank" title="实例流量排行">
+            <Card className="overview-panel overview-rank min-w-0" title="实例流量排行">
               <PanelContent query={traffic}>
                 {trafficData && <TrafficRanking data={trafficData} />}
               </PanelContent>
             </Card>
             <Card
-              className="overview-panel overview-load"
+              className="overview-panel overview-load min-w-0"
               title="实例负载"
               action={
-                <div className="overview-panel-actions">
+                <div className="overview-panel-actions flex items-center gap-2 max-md:gap-1">
                   {cpu.data && <AnalyticsStatusNote report={cpu.data} />}
                   <OverviewLink href={"/instances" + detailQuery}>实例监控</OverviewLink>
                 </div>
@@ -277,10 +287,10 @@ export default function OverviewPage() {
               </PanelContent>
             </Card>
             <Card
-              className="overview-panel overview-cost"
+              className="overview-panel overview-cost min-w-0"
               title="费用走势"
               action={
-                <div className="overview-panel-actions">
+                <div className="overview-panel-actions flex items-center gap-2 max-md:gap-1">
                   {costs.data && <AnalyticsStatusNote report={costs.data} />}
                   <OverviewLink href={"/costs" + detailQuery}>费用明细</OverviewLink>
                 </div>
@@ -289,7 +299,7 @@ export default function OverviewPage() {
               <PanelContent query={costs}>
                 {costs.data && (
                   <>
-                    <div className="overview-cost-summary">
+                    <div className="overview-cost-summary flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground [&>strong]:text-2xl [&>strong]:font-semibold [&>strong]:text-foreground [&>strong]:tabular-nums [&>strong]:wrap-anywhere *:data-[slot=select-trigger]:w-auto">
                       <strong title={costData?.summary.amount ?? undefined}>
                         {displayCost(costData?.summary.amount)}
                       </strong>
@@ -297,7 +307,7 @@ export default function OverviewPage() {
                         <Select
                           aria-label="总览费用币种"
                           value={selectedCurrency}
-                          onChange={(event) => setCurrency(event.target.value)}
+                          onValueChange={setCurrency}
                         >
                           {currencies.map((code) => (
                             <option key={code} value={code}>
@@ -311,7 +321,9 @@ export default function OverviewPage() {
                       <span>· {periodNote}</span>
                     </div>
                     {costData?.partial && (
-                      <p className="overview-panel-note">已报告费用 · 明细不完整</p>
+                      <p className="overview-panel-note text-xs text-muted-foreground">
+                        已报告费用 · 明细不完整
+                      </p>
                     )}
                     {costData ? (
                       <CostTrend data={costData} generatedAt={costs.data.generatedAt} />

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button, Select } from "./ui";
+import { Input } from "./ui/input";
 
 export type AnalyticsPreset = "today" | "last7" | "month" | "lastMonth" | "last12Months" | "custom";
 export interface AnalyticsDateRange {
@@ -92,13 +93,13 @@ export function AnalyticsRange({
     (!fullMonths || (start.endsWith("-01") && monthEnd?.getUTCDate() === 1)),
   );
   return (
-    <div className="analytics-range">
+    <div className="analytics-range flex min-w-0 flex-wrap items-center gap-3 max-sm:flex-1 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 max-sm:*:data-[slot=select-trigger]:flex-1">
       <Select
         aria-label="时间范围"
         title={`${value.startDate} 至 ${value.endDate}（UTC，包含首尾日期）`}
         value={editing ? "custom" : value.preset}
-        onChange={(event) => {
-          const preset = event.target.value as AnalyticsPreset;
+        onValueChange={(next) => {
+          const preset = next as AnalyticsPreset;
           if (preset === "custom") setEditing(true);
           else {
             setEditing(false);
@@ -115,15 +116,17 @@ export function AnalyticsRange({
       </Select>
       {editing && (
         <>
-          <input
+          <Input
+            className="w-40 min-w-0 scheme-light dark:scheme-dark max-sm:w-36"
             type="date"
             aria-label="开始日期（UTC）"
             value={start}
             max={end || latestDate}
             onChange={(event) => setStart(event.target.value)}
           />
-          <span className="muted small">至</span>
-          <input
+          <span className="muted small text-xs text-muted-foreground">至</span>
+          <Input
+            className="w-40 min-w-0 scheme-light dark:scheme-dark max-sm:w-36"
             type="date"
             aria-label="结束日期（UTC）"
             value={end}
@@ -137,7 +140,11 @@ export function AnalyticsRange({
           >
             应用日期
           </Button>
-          {fullMonths && <span className="muted small">请选择完整日历月，不含本月。</span>}
+          {fullMonths && (
+            <span className="muted small text-xs text-muted-foreground">
+              请选择完整日历月，不含本月。
+            </span>
+          )}
         </>
       )}
     </div>

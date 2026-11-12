@@ -66,17 +66,24 @@ export function AnalyticsChart({
   };
   return (
     <>
-      <div className="chart-legend analytics-legend">
+      <div className="chart-legend analytics-legend mb-2 flex flex-wrap gap-[18px] text-[11px] text-muted-foreground [&>span]:flex [&>span]:items-center [&>span]:gap-[5px]">
         {series.map((item) => (
           <span key={item.key}>
-            <i className="legend-dot" style={{ background: item.color }} />
+            <i
+              className="legend-dot size-1.5 rounded-full bg-primary"
+              style={{ background: item.color }}
+            />
             {item.label}
           </span>
         ))}
-        <span className="grow" />
+        <span className="grow min-w-0 flex-1" />
         <span>{unit} · UTC</span>
       </div>
-      <div className="chart-wrap analytics-chart" role="img" aria-label={label}>
+      <div
+        className="chart-wrap analytics-chart h-[280px] min-w-0 max-[620px]:h-[230px] [&_.recharts-cartesian-axis-tick-value]:fill-muted-foreground [&_.recharts-cartesian-axis-tick-value]:text-[10px] [&_.recharts-cartesian-grid_line]:stroke-border"
+        role="img"
+        aria-label={label}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={points} margin={{ top: 12, right: 18, left: 0, bottom: 8 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />

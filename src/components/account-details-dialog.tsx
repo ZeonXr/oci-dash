@@ -19,7 +19,26 @@ import {
   RefreshButton,
   Status,
 } from "./ui";
-import styles from "./account-details-dialog.module.css";
+const styles = {
+  content: "flex min-w-0 flex-col gap-6",
+  section:
+    "flex min-w-0 flex-col gap-4 [&+section]:border-t [&+section]:border-border [&+section]:pt-6 [&_h3]:text-sm [&_h3]:font-semibold",
+  sectionHeading: "flex flex-wrap items-center justify-between gap-3",
+  sectionNote: "flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground",
+  details:
+    "m-0 grid grid-cols-2 gap-6 max-sm:grid-cols-1 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:min-w-0 [&_dd]:text-sm [&_dd]:wrap-anywhere",
+  detail: "flex min-w-0 flex-col gap-2",
+  wideDetail: "col-span-full flex min-w-0 flex-col gap-2",
+  identifier:
+    "flex min-w-0 items-center gap-2 *:first:min-w-0 *:first:whitespace-normal *:first:wrap-anywhere *:last:shrink-0",
+  tags: "flex min-w-0 flex-wrap items-center gap-2",
+  stats:
+    "grid grid-cols-5 gap-4 max-sm:grid-cols-2 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-col [&>div]:gap-2 [&_span]:text-xs [&_span]:text-muted-foreground [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground [&_strong]:flex [&_strong]:flex-wrap [&_strong]:items-baseline [&_strong]:gap-1 [&_strong]:text-2xl [&_strong]:font-semibold [&_strong]:leading-tight max-sm:[&>div:first-child]:col-span-full",
+  regionList: "flex flex-col gap-3",
+  regionRow: "flex flex-wrap items-center justify-between gap-3",
+  footerMeta: "min-w-0 flex-1 max-sm:basis-full",
+  empty: "text-xs text-muted-foreground",
+};
 
 function Detail({
   label,

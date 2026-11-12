@@ -6,7 +6,46 @@ import Link from "next/link";
 import type { CpuHour, CpuReport } from "../lib/cpu-contracts";
 import { instanceHref, number } from "./format";
 import { Button, EmptyState } from "./ui";
-import styles from "./cpu-heatmap.module.css";
+
+// Keep chart geometry and intensity next to the chart markup.
+const styles = {
+  root: "w-full min-w-0 [--heat-0:#edf4ff] [--heat-1:#d1e2fc] [--heat-2:#92b7f0] [--heat-3:#4a86dc] [--heat-4:#1e57a4] [--heat-missing:#edf0f4] dark:[--heat-0:#1f2c40] dark:[--heat-1:#24436b] dark:[--heat-2:#2d5c92] dark:[--heat-3:#4b85ca] dark:[--heat-4:#79adf1] dark:[--heat-missing:#303640]",
+  description:
+    "mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] leading-normal text-muted-foreground",
+  scroll:
+    "relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain pt-[3px] pb-[5px] scrollbar-thin [scrollbar-color:var(--border)_transparent] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+  grid: "grid min-w-[717px] gap-2",
+  row: "grid min-w-0 grid-cols-[156px_minmax(477px,1fr)_60px] items-center gap-x-3",
+  axis: "mb-0.5 min-h-[15px] text-[10px] leading-[15px] text-muted-foreground",
+  hours: "grid min-w-0 grid-cols-[repeat(24,minmax(17px,1fr))] gap-[3px]",
+  hourLabel:
+    "min-w-0 text-center whitespace-nowrap tabular-nums first:text-left last:flex last:justify-end",
+  instance:
+    "min-w-0 text-[11px] leading-[1.4] [&>a]:block [&>a]:w-fit [&>a]:max-w-full [&>a]:truncate [&>a]:text-foreground [&>a:hover]:text-primary [&>a:hover]:underline [&>a:hover]:underline-offset-[3px]",
+  state: "block text-[9px] leading-3 text-muted-foreground",
+  cellWrap: "h-[27px] min-w-0",
+  cell: "block m-0 h-[27px] w-full cursor-pointer touch-manipulation appearance-none rounded-[3px] border-0 p-0 hover:ring-1 hover:ring-foreground/35 hover:ring-inset data-selected:ring-1 data-selected:ring-foreground/35 data-selected:ring-inset focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring data-[level=0]:bg-(--heat-0) data-[level=1]:bg-(--heat-1) data-[level=2]:bg-(--heat-2) data-[level=3]:bg-(--heat-3) data-[level=4]:bg-(--heat-4) data-[level=5]:bg-(--heat-missing)",
+  average: "text-right text-[10px] whitespace-nowrap text-muted-foreground tabular-nums",
+  footer:
+    "mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 text-[10px] leading-[1.4] text-muted-foreground",
+  legend:
+    "flex flex-wrap items-center gap-x-3 gap-y-[7px] [&>span]:inline-flex [&>span]:items-center [&>span]:gap-1 [&>span]:whitespace-nowrap",
+  swatch:
+    "inline-block h-[9px] w-[13px] shrink-0 rounded-[2px] data-[level=0]:bg-(--heat-0) data-[level=1]:bg-(--heat-1) data-[level=2]:bg-(--heat-2) data-[level=3]:bg-(--heat-3) data-[level=4]:bg-(--heat-4) data-[level=5]:bg-(--heat-missing)",
+  peak: "ml-auto whitespace-nowrap [&>strong]:font-medium [&>strong]:text-foreground [&>strong]:tabular-nums",
+  expand: "mt-2.5 flex justify-center",
+  expandButton: "text-xs",
+  tooltip:
+    "fixed z-100 flex w-[278px] max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] flex-col gap-[5px] overflow-auto rounded-lg border border-border bg-popover px-3.5 py-3 text-xs leading-normal text-popover-foreground shadow-md wrap-anywhere",
+  tooltipName: "text-xs font-semibold text-foreground",
+  tooltipContext: "text-[10px] text-muted-foreground",
+  tooltipTime: "mt-[3px] text-[10px] text-muted-foreground tabular-nums",
+  tooltipValues:
+    "mt-[5px] grid gap-1 border-t border-border pt-2 text-[11px] [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-2 [&_dt]:shrink-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:text-right [&_dd]:font-semibold [&_dd]:tabular-nums",
+  tooltipNote: "mt-1 text-[11px] text-warning",
+  tooltipHint: "mt-[3px] text-[10px] text-muted-foreground",
+  srOnly: "sr-only",
+} as const;
 
 const HOUR = 60 * 60 * 1000;
 const VISIBLE_ROWS = 6;

@@ -12,12 +12,15 @@ const sections = [
 export function SettingsNavigation() {
   const pathname = usePathname();
   return (
-    <nav className="tabs settings-tabs" aria-label="设置分区">
+    <nav
+      className="-mt-1 mb-6 flex gap-6 overflow-x-auto border-b border-border"
+      aria-label="设置分区"
+    >
       {sections.map(({ href, label }) => (
         <Link
           key={href}
           href={href}
-          className={pathname === href ? "active" : undefined}
+          className="shrink-0 rounded-sm border-b-2 border-transparent bg-transparent py-3 text-sm whitespace-nowrap text-muted-foreground focus-visible:outline-offset-[-3px] aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-primary"
           aria-current={pathname === href ? "page" : undefined}
         >
           {label}

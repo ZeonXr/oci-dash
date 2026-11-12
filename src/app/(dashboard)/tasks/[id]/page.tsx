@@ -111,17 +111,17 @@ export default function TaskDetailPage() {
           </Button>
         )}
       </PageHeader>
-      <div className="stack">
+      <div className="flex flex-col gap-5">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
         {job.lastError && <Alert tone="error">{job.lastError}</Alert>}
         {job.waitingForCompletion && isJobPending(job) && (
           <Alert tone="info">OCI 仍在处理操作，系统会继续核对结果。</Alert>
         )}
         <Card>
-          <div className="task-progress">
+          <div className="mb-5 flex flex-wrap items-center gap-2.5">
             {stages.map((label, index) => (
               <div
-                className={`task-step ${index < stage ? "done" : index === stage ? "current" : ""}`}
+                className={`task-step flex items-center gap-2 text-xs ${index < stage ? "done text-success" : index === stage ? "current text-primary" : "text-muted-foreground"}`}
                 key={label}
               >
                 {index < stage ? <CheckCircle2 size={18} /> : <Clock3 size={18} />}
@@ -130,16 +130,19 @@ export default function TaskDetailPage() {
               </div>
             ))}
           </div>
-          <dl className="details-list">
+          <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-3 max-[620px]:text-xs">
             <dt>任务 ID</dt>
-            <dd className="mono">
+            <dd className="font-mono tabular-nums">
               {job.id}
               <CopyButton value={job.id} />
             </dd>
             <dt>关联资源</dt>
             <dd>
               {job.resourceId ? (
-                <Link href={instanceHref(job.resourceId)} className="text-link mono">
+                <Link
+                  href={instanceHref(job.resourceId)}
+                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline underline-offset-4 font-mono tabular-nums"
+                >
                   {shortId(job.resourceId)}
                 </Link>
               ) : (
@@ -170,7 +173,9 @@ export default function TaskDetailPage() {
         </Card>
         {job.result && (
           <Card title="执行结果">
-            <pre className="task-result">{JSON.stringify(job.result, null, 2)}</pre>
+            <pre className="max-w-full overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/50 p-3 text-xs wrap-anywhere">
+              {JSON.stringify(job.result, null, 2)}
+            </pre>
           </Card>
         )}
         <Card
@@ -184,11 +189,14 @@ export default function TaskDetailPage() {
           }
         >
           {resource.data?.events.length ? (
-            <div className="timeline">
+            <div className="timeline flex flex-col">
               {resource.data.events.map((event) => (
-                <div className="timeline-item" key={event.id}>
+                <div
+                  className="timeline-item group grid grid-cols-[24px_minmax(0,1fr)] gap-3 pb-5"
+                  key={event.id}
+                >
                   <div
-                    className={`timeline-marker ${event.level === "error" ? "danger-text" : ""}`}
+                    className={`timeline-marker relative flex justify-center pt-1 group-not-last:after:absolute group-not-last:after:top-6 group-not-last:after:-bottom-5 group-not-last:after:w-px group-not-last:after:bg-border ${event.level === "error" ? "danger-text text-destructive" : "text-muted-foreground"}`}
                   >
                     {event.level === "error" ? (
                       <AlertCircle size={17} />
@@ -199,12 +207,12 @@ export default function TaskDetailPage() {
                     )}
                   </div>
                   <div>
-                    <div className="timeline-message">
+                    <div className="mb-1 flex items-baseline justify-between gap-3 [&_p]:text-sm [&_time]:whitespace-nowrap [&_time]:text-xs [&_time]:text-muted-foreground max-[620px]:flex-col max-[620px]:gap-1">
                       <p>{event.message}</p>
                       <time>{formatDate(event.createdAt, true)}</time>
                     </div>
                     {event.detail && (
-                      <details className="event-detail">
+                      <details className="mt-2 rounded-md bg-muted/50 px-3 py-2 [&_summary]:cursor-pointer [&_summary]:text-xs [&_summary]:text-muted-foreground [&_pre]:mt-2 [&_pre]:max-w-full [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:text-xs [&_pre]:wrap-anywhere">
                         <summary>查看事件详情</summary>
                         <pre>{JSON.stringify(event.detail, null, 2)}</pre>
                       </details>
@@ -243,7 +251,7 @@ export default function TaskDetailPage() {
             </>
           }
         >
-          <div className="stack-sm">
+          <div className="flex flex-col gap-3">
             <p>
               {operationLabels[job.kind]} · {job.accountName}
             </p>

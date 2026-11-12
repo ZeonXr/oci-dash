@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { useState, type RefObject } from "react";
 import type { JobSummary, OperationRequest } from "@/lib/contracts";
 import { useApp } from "./app-provider";
 import { send, useAction } from "./api";
@@ -14,6 +15,7 @@ export interface OperationDialogProps {
   requireName?: string;
   onClose: () => void;
   onSuccess?: (job: JobSummary) => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 export function OperationDialog({
   title,
@@ -24,6 +26,7 @@ export function OperationDialog({
   requireName,
   onClose,
   onSuccess,
+  returnFocusRef,
 }: OperationDialogProps) {
   const { notify } = useApp();
   const action = useAction();
@@ -51,6 +54,7 @@ export function OperationDialog({
       description={description}
       onClose={onClose}
       busy={action.pending}
+      returnFocusRef={returnFocusRef}
       footer={
         <>
           <Button onClick={onClose} disabled={action.pending}>
@@ -67,9 +71,9 @@ export function OperationDialog({
         </>
       }
     >
-      <div className="stack-sm">
+      <div className="flex flex-col gap-3">
         {summary.length > 0 && (
-          <div className="confirm-summary">
+          <div className="confirm-summary flex flex-col gap-2 rounded-lg bg-muted/50 px-4 py-3 [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-3 [&>div]:text-xs [&>div>span]:text-muted-foreground [&_strong]:font-medium [&_strong]:wrap-anywhere">
             {summary.map(([label, value]) => (
               <div key={label}>
                 <span>{label}</span>
@@ -80,7 +84,7 @@ export function OperationDialog({
         )}
         {requireName && (
           <Field label={`输入实例名称「${requireName}」以确认`} required>
-            <input
+            <Input
               autoComplete="off"
               value={confirmation}
               onChange={(e) => setConfirmation(e.target.value)}

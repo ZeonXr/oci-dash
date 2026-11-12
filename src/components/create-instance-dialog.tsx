@@ -1,4 +1,7 @@
 "use client";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useState, type SubmitEvent } from "react";
 import { Upload } from "lucide-react";
 import type { CreateOptions, CreateOptionsSelection, JobSummary } from "@/lib/contracts";
@@ -136,10 +139,10 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <form id="create-instance-form" onSubmit={submit} className="stack">
-        <div className="form-grid">
+      <form id="create-instance-form" onSubmit={submit} className="flex flex-col gap-5">
+        <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
           <Field label="OCI 账号" required>
-            <Select value={accountId} onChange={(e) => changeAccount(e.target.value)}>
+            <Select value={accountId} onValueChange={(value) => changeAccount(value)}>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
@@ -150,8 +153,8 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
           <Field label="区域" required>
             <Select
               value={region}
-              onChange={(e) => {
-                setRegion(e.target.value);
+              onValueChange={(value) => {
+                setRegion(value);
                 setCompartment("");
                 resetChoices();
               }}
@@ -172,9 +175,9 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
         ) : (
           data && (
             <>
-              <div className="form-grid">
+              <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
                 <Field label="实例名称" required>
-                  <input
+                  <Input
                     required
                     maxLength={255}
                     value={form.displayName}
@@ -186,8 +189,8 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   <Select
                     value={compartment || data.selection.compartmentId}
                     disabled={updating || !options.data}
-                    onChange={(e) => {
-                      setCompartment(e.target.value);
+                    onValueChange={(value) => {
+                      setCompartment(value);
                       resetChoices();
                     }}
                   >
@@ -202,8 +205,8 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   <Select
                     value={form.availabilityDomain}
                     disabled={updating || !options.data}
-                    onChange={(e) => {
-                      const availabilityDomain = e.target.value;
+                    onValueChange={(value) => {
+                      const availabilityDomain = value;
                       setSelection({ availabilityDomain });
                       setAcknowledged(false);
                       setForm((current) => ({
@@ -225,8 +228,8 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   <Select
                     value={form.shape}
                     disabled={updating || !options.data}
-                    onChange={(e) => {
-                      const shape = e.target.value;
+                    onValueChange={(value) => {
+                      const shape = value;
                       setSelection({ availabilityDomain: form.availabilityDomain, shape });
                       setAcknowledged(false);
                       setForm((current) => ({ ...current, shape, imageId: "" }));
@@ -243,7 +246,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 {shape?.flexible && (
                   <>
                     <Field label="OCPU" required>
-                      <input
+                      <Input
                         type="number"
                         required
                         min={shape.minOcpus || 1}
@@ -254,7 +257,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                       />
                     </Field>
                     <Field label="内存 (GiB)" required>
-                      <input
+                      <Input
                         type="number"
                         required
                         min={shape.minMemoryGb || 1}
@@ -265,11 +268,11 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                     </Field>
                   </>
                 )}
-                <Field label="系统镜像" required className="span-2">
+                <Field label="系统镜像" required className="col-span-2 max-[620px]:col-span-1">
                   <Select
                     value={form.imageId}
                     disabled={updating || !options.data}
-                    onChange={(e) => setForm({ ...form, imageId: e.target.value })}
+                    onValueChange={(value) => setForm({ ...form, imageId: value })}
                   >
                     {!data.images.length && <option value="">该规格暂无兼容镜像</option>}
                     {data.images.map((image) => (
@@ -283,7 +286,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   <Select
                     value={form.subnetId}
                     disabled={updating || !options.data}
-                    onChange={(e) => setForm({ ...form, subnetId: e.target.value })}
+                    onValueChange={(value) => setForm({ ...form, subnetId: value })}
                   >
                     {!data.subnets.length && <option value="">该可用域暂无可用子网</option>}
                     {data.subnets.map((subnet) => (
@@ -294,7 +297,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   </Select>
                 </Field>
                 <Field label="启动卷容量 (GiB)" required>
-                  <input
+                  <Input
                     required
                     type="number"
                     min={50}
@@ -304,11 +307,12 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
               </div>
-              <label className="checkbox-field">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
                   checked={form.assignPublicIp}
-                  onChange={(e) => setForm({ ...form, assignPublicIp: e.target.checked })}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, assignPublicIp: checked === true })
+                  }
                 />
                 为主网卡分配公网 IPv4
               </label>
@@ -317,17 +321,17 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 required
                 hint="只填写公钥，例如 ssh-ed25519 AAAA…，不要上传私钥。"
               >
-                <textarea
+                <Textarea
                   required
-                  className="mono"
+                  className="font-mono tabular-nums"
                   value={form.sshPublicKey}
                   onChange={(e) => setForm({ ...form, sshPublicKey: e.target.value })}
                   placeholder="ssh-ed25519 AAAA…"
                 />
               </Field>
-              <div className="file-upload">
+              <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-dashed p-3 text-xs [&_input]:min-w-0 [&_input]:max-w-full [&_input]:flex-1">
                 <Upload size={16} />
-                <input
+                <Input
                   type="file"
                   accept=".pub,.txt"
                   aria-label="从文件读取 SSH 公钥"
@@ -350,11 +354,10 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
               </div>
               {fileError && <ErrorState message={fileError} />}
               <Alert tone="info">资源是否收费取决于账号额度与所选规格，请以 OCI 账单为准。</Alert>
-              <label className="checkbox-field">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
                   checked={acknowledged}
-                  onChange={(e) => setAcknowledged(e.target.checked)}
+                  onCheckedChange={(checked) => setAcknowledged(checked === true)}
                 />
                 确认使用上述配置创建实例
               </label>

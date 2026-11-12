@@ -182,6 +182,9 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
     await expect
       .poll(() => page.evaluate(() => (window as unknown as { copied: string }).copied))
       .toBe(account.tenancyId);
+    // Move off icon tooltips before exercising the containing dialog's Escape handler.
+    await dialog.getByRole("button", { name: "关闭", exact: true }).focus();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();
@@ -223,7 +226,7 @@ test("账号卡片在小屏保持操作间距，名称可通过键盘打开详�
   const edit = card.getByRole("button", { name: "编辑", exact: true });
   const removeBounds = await remove.boundingBox();
   const editBounds = await edit.boundingBox();
-  const contentRight = await card.evaluate((element) => {
+  const contentRight = await card.locator('[data-slot="card-content"]').evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     return bounds.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
@@ -239,7 +242,7 @@ test("账号卡片在小屏保持操作间距，名称可通过键盘打开详�
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
   await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
   const dimensions = await dialog.evaluate((element) => {
-    const body = element.querySelector(".modal-body")!;
+    const body = element.querySelector('[data-slot="dialog-body"]')!;
     const bounds = element.getBoundingClientRect();
     return {
       viewport: innerWidth,
@@ -258,6 +261,9 @@ test("账号卡片在小屏保持操作间距，名称可通过键盘打开详�
   expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport);
   expect(dimensions.dialogScroll).toBeLessThanOrEqual(dimensions.dialogClient + 1);
   expect(dimensions.bodyScroll).toBeLessThanOrEqual(dimensions.body + 1);
+  // Move off icon tooltips before exercising the containing dialog's Escape handler.
+  await dialog.getByRole("button", { name: "关闭", exact: true }).focus();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();

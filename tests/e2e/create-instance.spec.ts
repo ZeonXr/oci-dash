@@ -1,3 +1,4 @@
+import { expectSelectOptions, selectOption } from "./helpers/ui";
 import { expect, test as base } from "@playwright/test";
 import type { AccountSummary, CreateOptions, OperationRequest } from "../../src/lib/contracts";
 
@@ -110,15 +111,15 @@ test("创建实例联动规格、兼容镜像及可用域子网", async ({ page,
   await page.goto("/instances");
   await page.getByRole("button", { name: "创建实例", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel(/^区域/).locator("option")).toHaveText(account.regions);
-  await expect(dialog.getByLabel(/^实例规格/)).toHaveValue(MICRO);
-  await dialog.getByLabel(/^实例规格/).selectOption(ARM);
-  await expect(dialog.getByLabel(/^系统镜像/).locator("option")).toHaveText(["Ubuntu ARM"]);
+  await expectSelectOptions(dialog.getByLabel(/^区域/), account.regions);
+  await expect(dialog.getByLabel(/^实例规格/)).toHaveAttribute("data-value", MICRO);
+  await selectOption(dialog.getByLabel(/^实例规格/), ARM);
+  await expectSelectOptions(dialog.getByLabel(/^系统镜像/), ["Ubuntu ARM"]);
   await expect(dialog.getByLabel(/^内存\ \(GiB\)/)).toHaveValue("6");
-  await dialog.getByLabel(/^可用域/).selectOption("AD-2");
-  await expect(dialog.getByLabel(/^实例规格/).locator("option")).toHaveText([MICRO]);
-  await expect(dialog.getByLabel(/^系统镜像/).locator("option")).toHaveText(["Ubuntu x86"]);
-  await expect(dialog.getByLabel(/^子网/)).toHaveValue("ap-tokyo-1-AD-2");
+  await selectOption(dialog.getByLabel(/^可用域/), "AD-2");
+  await expectSelectOptions(dialog.getByLabel(/^实例规格/), [MICRO]);
+  await expectSelectOptions(dialog.getByLabel(/^系统镜像/), ["Ubuntu x86"]);
+  await expect(dialog.getByLabel(/^子网/)).toHaveAttribute("data-value", "ap-tokyo-1-AD-2");
   await dialog.getByLabel(/^实例名称/).fill("fixture-server");
   await dialog.getByLabel(/^SSH\ 公钥/).fill("ssh-ed25519 AAAATESTPUBLICKEY fixture");
   await dialog.getByRole("checkbox", { name: "确认使用上述配置创建实例" }).check();
@@ -137,7 +138,7 @@ test("切换区域会取消旧请求并保留新区域的兼容配置", async ({
   await page.goto("/instances");
   await page.getByRole("button", { name: "创建实例", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel(/^实例规格/)).toHaveValue(MICRO);
+  await expect(dialog.getByLabel(/^实例规格/)).toHaveAttribute("data-value", MICRO);
   let release!: () => void;
   createApi.gate = {
     shape: ARM,
@@ -146,24 +147,30 @@ test("切换区域会取消旧请求并保留新区域的兼容配置", async ({
     }),
   };
   try {
-    await dialog.getByLabel(/^实例规格/).selectOption(ARM);
+    await selectOption(dialog.getByLabel(/^实例规格/), ARM);
     await expect.poll(() => createApi.queries.at(-1)?.searchParams.get("shape")).toBe(ARM);
     await expect(dialog.getByRole("button", { name: "创建实例", exact: true })).toBeDisabled();
     const oldFailure = page.waitForEvent("requestfailed", {
       predicate: (request) => new URL(request.url()).searchParams.get("shape") === ARM,
     });
-    await dialog.getByLabel(/^区域/).selectOption("ap-singapore-1");
+    await selectOption(dialog.getByLabel(/^区域/), "ap-singapore-1");
     expect((await oldFailure).failure()).not.toBeNull();
-    await expect(dialog.getByLabel(/^系统镜像/)).toHaveValue("ap-singapore-1-x86");
+    await expect(dialog.getByLabel(/^系统镜像/)).toHaveAttribute(
+      "data-value",
+      "ap-singapore-1-x86",
+    );
     expect(createApi.queries.at(-1)?.searchParams.has("shape")).toBe(false);
     expect(createApi.queries.at(-1)?.searchParams.has("availabilityDomain")).toBe(false);
     release();
     await expect
       .poll(() => createApi.completedQueries.some((url) => url.searchParams.get("shape") === ARM))
       .toBe(true);
-    await expect(dialog.getByLabel(/^实例规格/)).toHaveValue(MICRO);
-    await expect(dialog.getByLabel(/^系统镜像/)).toHaveValue("ap-singapore-1-x86");
-    await expect(dialog.getByLabel(/^子网/)).toHaveValue("ap-singapore-1-AD-1");
+    await expect(dialog.getByLabel(/^实例规格/)).toHaveAttribute("data-value", MICRO);
+    await expect(dialog.getByLabel(/^系统镜像/)).toHaveAttribute(
+      "data-value",
+      "ap-singapore-1-x86",
+    );
+    await expect(dialog.getByLabel(/^子网/)).toHaveAttribute("data-value", "ap-singapore-1-AD-1");
     expect(createApi.operations).toEqual([]);
   } finally {
     release();

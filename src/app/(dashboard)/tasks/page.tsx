@@ -1,4 +1,13 @@
 "use client";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { Suspense, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -83,14 +92,14 @@ function TasksContent() {
         />
       </PageHeader>
       {resource.error && (
-        <div style={{ marginBottom: 18 }}>
+        <div className="mb-4">
           <ErrorState message={resource.error} retry={resource.reload} />
         </div>
       )}
-      <div className="filters">
-        <div className="search-field">
+      <div className="mb-5 flex flex-wrap items-center gap-2.5 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 *:data-[slot=select-trigger]:max-w-56 max-[620px]:gap-2 max-[620px]:*:data-[slot=select-trigger]:min-w-24 max-[620px]:*:data-[slot=select-trigger]:max-w-none max-[620px]:*:data-[slot=select-trigger]:flex-1">
+        <div className="flex min-w-52 max-w-sm flex-1 items-center gap-2 rounded-lg border bg-card px-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15 [&>svg]:text-muted-foreground [&_input]:border-0 [&_input]:bg-transparent [&_input]:pl-0 [&_input]:shadow-none [&_input]:focus-visible:ring-0 max-[620px]:w-full max-[620px]:max-w-none max-[620px]:basis-full">
           <Search size={16} />
-          <input
+          <Input
             value={query}
             onChange={(e) => filter("query", e.target.value, true)}
             maxLength={200}
@@ -100,7 +109,7 @@ function TasksContent() {
         </div>
         <Select
           value={account}
-          onChange={(e) => filter("accountId", e.target.value)}
+          onValueChange={(value) => filter("accountId", value)}
           aria-label="按账号筛选任务"
         >
           <option value="">全部账号</option>
@@ -112,7 +121,7 @@ function TasksContent() {
         </Select>
         <Select
           value={state}
-          onChange={(e) => filter("state", e.target.value)}
+          onValueChange={(value) => filter("state", value)}
           aria-label="按状态筛选任务"
         >
           <option value="">全部状态</option>
@@ -157,60 +166,71 @@ function TasksContent() {
           />
         }
       >
-        <table className="task-table task-list-table">
-          <thead>
-            <tr>
-              <th scope="col">任务</th>
-              <th scope="col">账号 / 区域</th>
-              <th scope="col">状态</th>
+        <Table className="task-table min-w-180">
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">任务</TableHead>
+              <TableHead scope="col">账号 / 区域</TableHead>
+              <TableHead scope="col">状态</TableHead>
               <SortableHeader
                 label="提交时间"
                 direction={sort}
                 onSort={() => filter("sort", sort === "ascending" ? "descending" : "ascending")}
               />
-              <th scope="col">操作</th>
-            </tr>
-          </thead>
-          <tbody>
+              <TableHead scope="col">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {jobs.map((job) => (
-              <tr key={job.id}>
-                <td>
-                  <Link href={taskHref(job.id)} className="name-link">
+              <TableRow key={job.id}>
+                <TableCell>
+                  <Link
+                    href={taskHref(job.id)}
+                    className="name-link inline-flex items-center gap-2 font-medium text-foreground hover:text-primary"
+                  >
                     {operationLabels[job.kind]}
                   </Link>
-                  <div className="task-id mono" title={job.resourceId || job.id}>
+                  <div
+                    className="mt-1 text-xs text-muted-foreground font-mono tabular-nums"
+                    title={job.resourceId || job.id}
+                  >
                     {shortId(job.resourceId || job.id)}
                   </div>
                   {job.lastError && (
-                    <div className="cell-secondary danger-text" style={{ maxWidth: 300 }}>
+                    <div className="mt-1 block text-xs text-destructive max-w-75">
                       {job.lastError}
                     </div>
                   )}
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
                   {job.accountName}
-                  <span className="cell-secondary">
+                  <span className="mt-1 block text-xs text-muted-foreground">
                     <RegionTag region={job.region} />
                   </span>
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
                   <Status value={job.state} />
-                </td>
-                <td className="nowrap">
+                </TableCell>
+                <TableCell className="whitespace-nowrap">
                   {formatDate(job.createdAt)}
                   {job.nextRunAt && (
-                    <span className="cell-secondary">下次 {formatDate(job.nextRunAt)}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      下次 {formatDate(job.nextRunAt)}
+                    </span>
                   )}
-                </td>
-                <td>
-                  <Link href={taskHref(job.id)} className="text-link">
+                </TableCell>
+                <TableCell>
+                  <Link
+                    href={taskHref(job.id)}
+                    className="inline-flex items-center gap-1 text-sm text-primary hover:underline underline-offset-4"
+                  >
                     查看详情
                   </Link>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </TablePanel>
     </>
   );

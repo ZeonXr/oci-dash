@@ -1,6 +1,7 @@
 "use client";
 
 import { formatDate } from "./format";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function UpdatedAt({
   value,
@@ -31,10 +32,17 @@ export function UpdatedAt({
     localTime.resolvedOptions().timeZone +
     "，本地时间）";
   return (
-    <span className="updated-at" title={tooltip}>
-      <time dateTime={date.toISOString()}>
-        {label} {formatDate(value)}
-      </time>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <time
+          dateTime={date.toISOString()}
+          tabIndex={0}
+          className="updated-at whitespace-nowrap text-xs text-muted-foreground"
+        >
+          {label} {formatDate(value)}
+        </time>
+      </TooltipTrigger>
+      <TooltipContent className="whitespace-pre-line">{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -80,7 +80,11 @@ npm run build
 
 使用 `npm run format` 修正格式。项目的 Prettier、EditorConfig 和忽略规则决定格式与扫描范围，不要格式化环境文件、私钥、数据库或构建产物。
 
-页面复用 `src/components/ui.tsx` 中的交互组件。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，由组件替换图标。初始加载使用 `LoadingState` 或 `Spinner`，不要在页面另写旋转动画。
+基础 UI 使用 `src/components/ui/` 中的 shadcn/ui Radix Nova 组件，配置保存在 `components.json`。优先复用库组件和交互，共享配色与尺寸统一在主题和基础组件中调整，业务组件的布局与状态样式使用 Tailwind，并与 TSX 放在一起；`globals.css` 仅保留主题、语义颜色与基础规则。主题通过 `html[data-theme]` 切换，颜色使用语义 token，避免给通用控件逐页定制外观。
+
+使用项目固定版本的 CLI 按需增加组件：`npx shadcn add <组件名>`。生成后检查依赖、交互及本地封装，新增依赖保持固定版本；不要自动覆盖已有组件。第三方组件的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+`src/components/ui.tsx` 封装项目的加载状态、确认弹窗和声明式选项。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，初始加载使用 `LoadingState` 或 `Spinner`。`Select` 使用 `onValueChange(value)`，浏览器测试通过可见的 combobox 和 option 操作；弹窗由 Dialog 管理焦点与键盘，菜单触发的弹窗需要传入稳定的焦点返回引用。
 
 区域使用 `RegionTag`，仅在同一标签内展示国旗与 OCI 区域代码；规格、OCID 等标识使用 `CodeTag`。这些标签不承担按钮行为。长标识允许换行，提供复制时始终复制完整原值；连接和任务状态继续使用 `Status` 或 `Badge`。
 

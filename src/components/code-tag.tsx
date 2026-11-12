@@ -1,5 +1,8 @@
-import { clsx } from "clsx";
-import styles from "./code-tag.module.css";
+import { cn } from "@/lib/utils";
+import { Badge } from "./ui/badge";
+
+export const codeTagClassName =
+  "h-auto min-w-0 max-w-full shrink whitespace-normal font-mono font-normal wrap-anywhere";
 
 export function CodeTag({
   children,
@@ -11,8 +14,13 @@ export function CodeTag({
   className?: string;
 }) {
   return (
-    <code className={clsx(styles.tag, className)} title={title ?? children}>
-      {children}
-    </code>
+    <Badge
+      asChild
+      variant="outline"
+      className={cn(codeTagClassName, className)}
+      title={title ?? children}
+    >
+      <code>{children}</code>
+    </Badge>
   );
 }

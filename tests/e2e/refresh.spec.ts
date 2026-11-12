@@ -1,3 +1,4 @@
+import { selectOption } from "./helpers/ui";
 import { expect, test as base, type Page } from "@playwright/test";
 import { jobPageFixture } from "../fixtures/job-page";
 import type {
@@ -389,7 +390,7 @@ test("任务分页读取完整历史，筛选与浏览器前进后退保持查�
   await expect(list).toContainText("task-resource-001");
   await page.reload();
   await expect(list.locator("tbody tr")).toHaveCount(1);
-  await page.getByLabel("按状态筛选任务", { exact: true }).selectOption("running");
+  await selectOption(page.getByLabel("按状态筛选任务", { exact: true }), "running");
   await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 1 条");
   await expect(list).toContainText("task-resource-001");
   await expect.poll(() => refreshApi.jobQueries.at(-1)?.get("state")).toBe("running");
@@ -417,7 +418,7 @@ test("实例历史按实例查询完整页，近期任务不受其他实例的�
   const history = page.getByRole("region", { name: "实例任务表格", exact: true });
   await expect(history.locator("tbody tr")).toHaveCount(10);
   await expect(page.getByRole("navigation", { name: "表格分页" })).toContainText("共 101 条");
-  await page.getByLabel("每页条数", { exact: true }).selectOption("50");
+  await selectOption(page.getByLabel("每页条数", { exact: true }), "50");
   await expect(history.locator("tbody tr")).toHaveCount(50);
   await page.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(history.locator("tbody tr")).toHaveCount(50);
@@ -451,9 +452,9 @@ test("实例任务观察单独查询全部活动任务，发现最近100条以�
 test.use({ trace: "off", video: "off", screenshot: "off", serviceWorkers: "block" });
 
 const refreshButton = (page: Page) =>
-  page.locator(".page-heading").getByRole("button", { name: "刷新", exact: true });
+  page.locator("[data-slot=page-heading]").getByRole("button", { name: "刷新", exact: true });
 const rows = (page: Page) => page.locator(".resource-table tbody tr");
-const cards = (page: Page) => page.locator("article.instance-card");
+const cards = (page: Page) => page.locator("[role=article].instance-card");
 async function openInstances(page: Page) {
   await page.goto("/instances");
   await page.getByRole("button", { name: "表格视图", exact: true }).click();
@@ -530,7 +531,7 @@ test("实例总览账号链接校验后限定同步，历史切换保留搜索�
     await page.getByRole("button", { name: "表格视图", exact: true }).click();
     const selector = page.getByLabel("筛选账号", { exact: true });
     const search = page.getByLabel("搜索实例名称、地址或 OCID", { exact: true });
-    await expect(selector).toHaveValue(account.id);
+    await expect(selector).toHaveAttribute("data-value", account.id);
     await expect(rows(page)).toHaveCount(1);
     await expect(rows(page)).toContainText("Fixture-01");
     await expect.poll(() => refreshApi.count("/api/inventory/refresh", "POST")).toBe(1);
@@ -538,20 +539,20 @@ test("实例总览账号链接校验后限定同步，历史切换保留搜索�
       refreshApi.requests.filter((request) => request.path === "/api/inventory/refresh")[0].body,
     ).toMatchObject({ accountIds: [account.id] });
     await search.fill("01");
-    await selector.selectOption(slow.id);
+    await selectOption(selector, slow.id);
     await expect(page).toHaveURL(new RegExp(`/instances\\?accountId=${slow.id}&keep=1#scope$`));
     await expect(rows(page)).toHaveCount(1);
     await expect(rows(page)).toContainText("Slow-01");
     await expect(search).toHaveValue("01");
     await page.goBack();
-    await expect(selector).toHaveValue(account.id);
+    await expect(selector).toHaveAttribute("data-value", account.id);
     await expect(rows(page)).toContainText("Fixture-01");
     await expect(search).toHaveValue("01");
     await page.goForward();
-    await expect(selector).toHaveValue(slow.id);
+    await expect(selector).toHaveAttribute("data-value", slow.id);
     await expect(rows(page)).toContainText("Slow-01");
     await page.reload();
-    await expect(selector).toHaveValue(slow.id);
+    await expect(selector).toHaveAttribute("data-value", slow.id);
     await expect(rows(page)).toHaveCount(1);
     await expect(rows(page)).toContainText("Slow-01");
     expect(
@@ -569,7 +570,7 @@ test("实例失效账号链接校验后回到全部账号，不向已移除账�
   twoAccounts(refreshApi);
   await page.goto("/instances?accountId=removed-account&keep=1#scope");
   await expect(page).toHaveURL(/\/instances\?keep=1#scope$/);
-  await expect(page.getByLabel("筛选账号", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("筛选账号", { exact: true })).toHaveAttribute("data-value", "");
   await page.getByRole("button", { name: "表格视图", exact: true }).click();
   await expect(rows(page)).toHaveCount(2);
   await expect.poll(() => refreshApi.count("/api/inventory/refresh", "POST")).toBeGreaterThan(0);
@@ -645,9 +646,9 @@ test("卡片切换与刷新保留筛选和当前页，详情读取新快照且�
   await pauseClock(page, refreshApi);
   await openInstances(page);
   await page.getByLabel("搜索实例名称、地址或 OCID").fill("Fixture");
-  await page.getByLabel("筛选账号", { exact: true }).selectOption(account.id);
-  await page.getByLabel("筛选区域", { exact: true }).selectOption(account.homeRegion);
-  await page.getByLabel("筛选状态", { exact: true }).selectOption("RUNNING");
+  await selectOption(page.getByLabel("筛选账号", { exact: true }), account.id);
+  await selectOption(page.getByLabel("筛选区域", { exact: true }), account.homeRegion);
+  await selectOption(page.getByLabel("筛选状态", { exact: true }), "RUNNING");
   await page.getByRole("button", { name: "下一页", exact: true }).click();
   const pagination = page.getByRole("navigation", { name: "表格分页" });
   await expect(pagination).toContainText("2 / 3");
@@ -673,9 +674,18 @@ test("卡片切换与刷新保留筛选和当前页，详情读取新快照且�
   await expect(page.getByRole("link", { name: "Fixture-12 updated", exact: true })).toBeVisible();
   await expect(pagination).toContainText("2 / 3");
   await expect(page.getByLabel("搜索实例名称、地址或 OCID")).toHaveValue("Fixture");
-  await expect(page.getByLabel("筛选账号", { exact: true })).toHaveValue(account.id);
-  await expect(page.getByLabel("筛选区域", { exact: true })).toHaveValue(account.homeRegion);
-  await expect(page.getByLabel("筛选状态", { exact: true })).toHaveValue("RUNNING");
+  await expect(page.getByLabel("筛选账号", { exact: true })).toHaveAttribute(
+    "data-value",
+    account.id,
+  );
+  await expect(page.getByLabel("筛选区域", { exact: true })).toHaveAttribute(
+    "data-value",
+    account.homeRegion,
+  );
+  await expect(page.getByLabel("筛选状态", { exact: true })).toHaveAttribute(
+    "data-value",
+    "RUNNING",
+  );
   await page.getByRole("link", { name: "Fixture-12 updated", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Fixture-12 updated");
   expect(refreshApi.count("/api/instances/refresh-instance-12")).toBeGreaterThan(0);
@@ -1039,17 +1049,17 @@ test("账号逐个完成后仅慢账号保留转圈，失败账号及时显示�
   const slowCard = page
     .locator(".account-card")
     .filter({ has: page.getByRole("button", { name: `查看 ${slow.name} 详情`, exact: true }) });
-  await expect(fastCard.locator(".spin")).toHaveCount(1);
-  await expect(slowCard.locator(".spin")).toHaveCount(1);
+  await expect(fastCard.locator(".animate-spin")).toHaveCount(1);
+  await expect(slowCard.locator(".animate-spin")).toHaveCount(1);
   refreshApi.finish("failed");
   await advance(page, refreshApi);
-  await expect(fastCard.locator(".spin")).toHaveCount(0);
+  await expect(fastCard.locator(".animate-spin")).toHaveCount(0);
   await expect(fastCard.getByRole("button", { name: "重试刷新", exact: true })).toBeEnabled();
   await expect(fastCard).toContainText("模拟 OCI 读取失败");
-  await expect(slowCard.locator(".spin")).toHaveCount(1);
+  await expect(slowCard.locator(".animate-spin")).toHaveCount(1);
   refreshApi.finishAccount(slow.id, "succeeded");
   await advance(page, refreshApi);
-  await expect(slowCard.locator(".spin")).toHaveCount(0);
+  await expect(slowCard.locator(".animate-spin")).toHaveCount(0);
   await expect(slowCard.getByRole("button", { name: "刷新资源", exact: true })).toBeEnabled();
   expect(refreshApi.manualRequests()).toEqual([]);
 });

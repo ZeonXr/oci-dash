@@ -3,7 +3,6 @@
 import type { InstanceSummary, PublicIpBinding, VnicSummary } from "@/lib/contracts";
 import { primaryAddress } from "./format";
 import { publicIpRotation } from "./public-ip-rotation";
-import styles from "./ip-details-dialog.module.css";
 
 /** Preserve the address and public-IP identity the user selected, even if inventory changes. */
 export interface IpDetailsTarget {
@@ -88,7 +87,7 @@ export function IpAddressButton({
   return (
     <button
       type="button"
-      className={`${styles.addressButton} mono`}
+      className="inline min-w-0 max-w-full rounded-sm border-0 bg-transparent p-0 text-start font-mono text-primary wrap-anywhere hover:underline hover:underline-offset-4"
       aria-label={label ?? `查看 IP ${target.address} 详情`}
       title="查看 IP 详情"
       onClick={() => onClick(target)}

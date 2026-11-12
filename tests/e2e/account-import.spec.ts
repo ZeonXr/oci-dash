@@ -148,7 +148,7 @@ async function centered(dialog: Locator) {
       vh: v?.height ?? innerHeight,
       vx: v?.offsetLeft ?? 0,
       vy: v?.offsetTop ?? 0,
-      modal: element.matches(":modal"),
+      modal: element.getAttribute("aria-modal") === "true",
     };
   });
   expect(box.modal).toBe(true);
@@ -203,12 +203,14 @@ test("桌面添加弹窗居中，两项必填即可导入，键盘焦点正确",
       tag: document.activeElement?.tagName,
       id: document.activeElement?.id,
     }));
-    // Native dialogs allow Tab to reach browser chrome. While the document has
-    // focus, no background page control may receive it.
+    // Keyboard traversal must never put focus on a background page control.
     expect(focus.inside || !focus.documentHasFocus, `Focus after ${key}`).toBe(true);
   }
   await dialog.getByLabel(/^OCI 配置文本/).focus();
-  await opener(page).evaluate((element) => element.focus());
+  await page
+    .locator(".settings-account-toolbar")
+    .getByRole("button", { name: "添加账号", exact: true, includeHidden: true })
+    .evaluate((element) => element.focus());
   expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
@@ -444,10 +446,10 @@ test("390×480 短屏仅内容滚动，标题与操作栏可见，遮罩点击�
   await dialog.locator("summary").click();
   await centered(dialog);
   await emptyScreenshot(page, dialog, info, "account-add-mobile-empty");
-  const body = dialog.locator(".modal-body");
+  const body = dialog.locator('[data-slot="dialog-body"]');
   expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-  const heading = dialog.locator(".modal-heading");
-  const footer = dialog.locator(".modal-footer");
+  const heading = dialog.locator('[data-slot="dialog-header"]');
+  const footer = dialog.locator('[data-slot="dialog-footer"]');
   const before = { heading: await heading.boundingBox(), footer: await footer.boundingBox() };
   await body.evaluate((el) => {
     el.scrollTop = el.scrollHeight;

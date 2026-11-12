@@ -1,4 +1,6 @@
 "use client";
+import { TableHead } from "@/components/ui/table";
+import { Card } from "@/components/ui/card";
 
 import type { ReactNode } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
@@ -30,16 +32,27 @@ export function TablePanel({
   /** Reuse table behavior inside an existing Card without adding another border. */
   embedded?: boolean;
 }) {
+  const Container = embedded ? "section" : Card;
   return (
-    <section
-      className={clsx(!embedded && "card", !embedded && "table-card", className)}
+    <Container
+      role="region"
+      className={clsx(
+        "min-w-0 gap-0 overflow-hidden py-0",
+        !embedded && "card table-card",
+        className,
+      )}
       aria-label={label}
       aria-busy={loading || refreshing}
     >
       {toolbar}
       {hasRows ? (
         <>
-          <div className="table-scroll" role="region" aria-label={`${label}表格`} tabIndex={0}>
+          <div
+            className="table-scroll min-w-0 overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            role="region"
+            aria-label={`${label}表格`}
+            tabIndex={0}
+          >
             {children}
           </div>
           {footer}
@@ -49,7 +62,7 @@ export function TablePanel({
       ) : (
         empty
       )}
-    </section>
+    </Container>
   );
 }
 
@@ -64,10 +77,10 @@ export function SortableHeader({
 }) {
   const nextOrder = direction === "ascending" ? "降序" : "升序";
   return (
-    <th scope="col" aria-sort={direction}>
+    <TableHead scope="col" aria-sort={direction}>
       <button
         type="button"
-        className="table-sort"
+        className="inline-flex items-center gap-1 rounded-sm whitespace-nowrap hover:text-foreground"
         title={`按${label}${nextOrder}排列`}
         onClick={onSort}
       >
@@ -78,6 +91,6 @@ export function SortableHeader({
           <ArrowDown size={13} aria-hidden="true" />
         )}
       </button>
-    </th>
+    </TableHead>
   );
 }

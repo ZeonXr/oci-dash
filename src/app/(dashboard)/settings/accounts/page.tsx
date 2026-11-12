@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Input } from "@/components/ui/input";
 import { ChevronRight, KeyRound, Plus } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { isJobPending as pendingSync } from "@/lib/job-state";
@@ -103,22 +104,22 @@ export default function AccountsPage() {
   };
   const syncJobs = new Map((resource.data?.syncJobs ?? []).map((job) => [job.accountId, job]));
   return (
-    <section className="settings-accounts" aria-label="OCI 账号">
-      <div className="settings-account-toolbar">
+    <section className="min-w-0" aria-label="OCI 账号">
+      <div className="settings-account-toolbar mb-5 flex flex-wrap items-center justify-between gap-3 [&_p]:text-xs [&_p]:text-muted-foreground [&_button]:shrink-0">
         <p>管理 OCI 连接凭据与区域同步范围。</p>
         <Button variant="primary" onClick={() => setEditing(null)}>
           <Plus size={16} />
           添加账号
         </Button>
       </div>
-      <div className="stack">
+      <div className="flex flex-col gap-5">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
         {inventory.error && <ErrorState message={inventory.error} retry={inventory.refresh} />}
         {action.error && !removing && <ErrorState message={action.error} />}
         {resource.loading ? (
           <LoadingState />
         ) : !resource.data ? null : resource.data.accounts.length ? (
-          <div className="grid-3">
+          <div className="grid grid-cols-3 gap-5 max-[1180px]:grid-cols-2 max-[620px]:grid-cols-1">
             {resource.data.accounts.map((account) => {
               const job = syncJobs.get(account.id);
               const syncing = Boolean(job && pendingSync(job));
@@ -128,16 +129,20 @@ export default function AccountsPage() {
               const label = connectionAction(account, job);
               const requesting = busyKey === `${account.id}:sync`;
               return (
-                <Card key={account.id} className="account-card">
-                  <div className="account-heading">
-                    <span className="resource-icon">
+                <Card
+                  key={account.id}
+                  className="account-card"
+                  contentClassName="flex flex-1 flex-col gap-4"
+                >
+                  <div className="flex items-center gap-3 **:data-[slot=badge]:shrink-0 [&_h2]:text-sm [&_h2]:wrap-anywhere">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                       <KeyRound size={20} />
                     </span>
-                    <div className="grow">
+                    <div className="min-w-0 flex-1">
                       <h2>
                         <button
                           type="button"
-                          className="account-name"
+                          className="inline-flex max-w-full items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-start text-inherit [font:inherit] hover:text-primary [&_span]:min-w-0 [&_svg]:shrink-0 [&_svg]:text-muted-foreground hover:[&_svg]:text-inherit"
                           aria-label={`查看 ${account.name} 详情`}
                           onClick={() => setViewing(account)}
                         >
@@ -152,8 +157,8 @@ export default function AccountsPage() {
                       <Status value={account.status} />
                     )}
                   </div>
-                  <div className="account-meta">
-                    <div className="account-regions">
+                  <div className="flex flex-col gap-2 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 wrap-anywhere">
                       <span>同步区域</span>
                       {account.regions.slice(0, 3).map((region) => (
                         <RegionTag key={region} region={region} />
@@ -168,24 +173,21 @@ export default function AccountsPage() {
                     />
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
-                  <div className="account-actions">
+                  <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3.5">
                     <RefreshButton
-                      className="button-sm"
+                      size="sm"
                       disabled={action.pending || syncing}
                       loading={requesting || syncing}
                       onClick={() => sync(account)}
                     >
                       {label}
                     </RefreshButton>
-                    <Button
-                      className="button-sm"
-                      variant="ghost"
-                      onClick={() => setEditing(account)}
-                    >
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(account)}>
                       编辑
                     </Button>
                     <Button
-                      className="button-sm danger-text account-remove"
+                      size="sm"
+                      className="text-danger ms-auto"
                       variant="ghost"
                       disabled={syncing}
                       onClick={() => {
@@ -253,9 +255,9 @@ export default function AccountsPage() {
             </>
           }
         >
-          <div className="stack">
+          <div className="flex flex-col gap-5">
             <Field label={`输入「${removing.name}」以确认`}>
-              <input
+              <Input
                 autoComplete="off"
                 value={removeName}
                 onChange={(e) => setRemoveName(e.target.value)}

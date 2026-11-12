@@ -1,3 +1,4 @@
+import { selectOption } from "./helpers/ui";
 import { expect, test as base, type Page } from "@playwright/test";
 import type { AccountSummary } from "../../src/lib/contracts";
 import type { CostReport, TrafficReport } from "../../src/lib/analytics-contracts";
@@ -396,13 +397,13 @@ test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", as
     release();
     overview.costGate = undefined;
   }
-  await page.getByLabel("总览费用币种").selectOption("USD");
+  await selectOption(page.getByLabel("总览费用币种"), "USD");
   await expect(page.locator(".overview-cost-summary strong")).toHaveText("1.40");
   const cpuCalls = overview.count("/api/analytics/cpu");
-  await page.getByLabel("总览时间范围").selectOption("30d");
+  await selectOption(page.getByLabel("总览时间范围"), "30d");
   await expect(page.locator(".overview-cost-summary strong")).toHaveText("6.00");
   expect(overview.count("/api/analytics/cpu")).toBe(cpuCalls);
-  await page.getByLabel("总览账号").selectOption("a");
+  await selectOption(page.getByLabel("总览账号"), "a");
   await expect(page.locator(".overview-ranking li")).toHaveCount(1);
   await expect(summary(page, "发送流量")).toHaveText("172.7");
   await expect(page.locator(".overview-cost-summary strong")).toHaveText("4.50");
@@ -466,7 +467,7 @@ test("快速切换账号时旧请求不能覆盖新筛选结果", async ({ page,
       release = resolve;
     }),
   };
-  await page.getByLabel("总览账号").selectOption("a");
+  await selectOption(page.getByLabel("总览账号"), "a");
   await expect
     .poll(() =>
       overview.calls.some(
@@ -474,7 +475,7 @@ test("快速切换账号时旧请求不能覆盖新筛选结果", async ({ page,
       ),
     )
     .toBe(true);
-  await page.getByLabel("总览账号").selectOption("b");
+  await selectOption(page.getByLabel("总览账号"), "b");
   await expect(page.locator(".overview-ranking li")).toHaveCount(2);
   release();
   await expect(summary(page, "发送流量")).toHaveText("97.1");
@@ -512,7 +513,7 @@ test("常驻页面跨UTC月份后本月统计自动切换到新月份", async ({
   overview.now = monthEnd;
   await page.clock.install({ time: monthEnd });
   await page.goto("/overview");
-  await page.getByLabel("总览时间范围").selectOption("month");
+  await selectOption(page.getByLabel("总览时间范围"), "month");
   await expect
     .poll(() =>
       overview.calls

@@ -103,7 +103,10 @@ async function currentSection(page: Page, path: string) {
     if (section.path === path) await expect(link).toHaveAttribute("aria-current", "page");
     else await expect(link).not.toHaveAttribute("aria-current", "page");
   }
-  await expect(page.locator(".sidebar-settings")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#primary-navigation .sidebar-settings")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   if (path === "/settings/accounts") {
     await expect(page.getByRole("region", { name: "OCI 账号", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "添加你的第一个 OCI 账号" })).toBeVisible();
@@ -190,7 +193,9 @@ test("移动导航通过底部设置进入分区，切换后页面不溢出", as
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/overview");
   await expect(page.getByRole("heading", { level: 1, name: "数据总览" })).toBeVisible();
-  await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
+  await expect(page.locator("#primary-navigation")).toBeHidden();
+  const sheet = page.getByRole("dialog", { name: "主导航", exact: true });
+  await expect(sheet).not.toBeVisible();
   await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await primaryNavigation(page);
   const settings = page
@@ -199,7 +204,8 @@ test("移动导航通过底部设置进入分区，切换后页面不溢出", as
   await expect(settings).not.toHaveAttribute("aria-current", "page");
   await settings.click();
   await currentSection(page, "/settings/accounts");
-  await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
+  await expect(sheet).not.toBeVisible();
+  await expect(page.locator("#primary-navigation")).toBeHidden();
   await capture(page, info, "settings-accounts-mobile");
   await page
     .getByRole("navigation", { name: "设置分区", exact: true })
@@ -217,7 +223,7 @@ test("移动导航通过底部设置进入分区，切换后页面不溢出", as
   await primaryNavigation(page);
   await capture(page, info, "settings-navigation-mobile");
   await page.keyboard.press("Escape");
-  await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
+  await expect(sheet).not.toBeVisible();
   await expect(page.getByRole("button", { name: "展开导航", exact: true })).toBeFocused();
   await page
     .getByRole("navigation", { name: "设置分区", exact: true })
@@ -225,6 +231,58 @@ test("移动导航通过底部设置进入分区，切换后页面不溢出", as
     .click();
   await currentSection(page, "/settings/general");
   await capture(page, info, "settings-general-mobile");
+});
+
+test("移动 Sheet 约束键盘焦点，Escape 和遮罩关闭均返回触发器", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/settings/general");
+  await currentSection(page, "/settings/general");
+  const trigger = page.getByRole("button", { name: "展开导航", exact: true });
+  const sheet = page.getByRole("dialog", { name: "主导航", exact: true });
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(sheet).toBeVisible();
+  await expect(page.locator('[aria-label="展开导航"]')).toHaveAttribute("aria-expanded", "true");
+  for (const key of [
+    ...Array.from({ length: 12 }, () => "Tab"),
+    ...Array.from({ length: 12 }, () => "Shift+Tab"),
+  ]) {
+    await page.keyboard.press(key);
+    expect(await sheet.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  }
+  // Move off icon tooltips before exercising the containing dialog's Escape handler.
+  await sheet.getByRole("button", { name: "关闭导航", exact: true }).focus();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(sheet).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  await trigger.click();
+  await expect(sheet).toBeVisible();
+  await page.locator('[data-slot="sheet-overlay"]').click({ position: { x: 385, y: 420 } });
+  await expect(sheet).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+});
+
+test("移动 Sheet 展开后切回桌面会关闭，并将焦点移到当前导航", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/settings/accounts");
+  await currentSection(page, "/settings/accounts");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
+  const sheet = page.getByRole("dialog", { name: "主导航", exact: true });
+  await expect(sheet).toBeVisible();
+
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await expect(sheet).not.toBeVisible();
+  await expect(page.locator("#primary-navigation")).toBeVisible();
+  const current = page.locator("#primary-navigation .sidebar-settings");
+  await expect(current).toHaveAttribute("aria-current", "page");
+  await expect(current).toBeFocused();
+  await primaryNavigation(page);
+  await expect(page.getByRole("button", { name: "展开导航", exact: true })).not.toBeVisible();
 });
 
 test("空账号时总览、实例、流量和成本的引导都进入新账号路径", async ({ page }) => {

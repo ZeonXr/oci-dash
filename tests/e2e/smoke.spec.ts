@@ -1,3 +1,4 @@
+import { selectOption } from "./helpers/ui";
 import { expect, test, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
 import type { DashboardData, SessionUser } from "../../src/lib/contracts";
 import {
@@ -346,9 +347,9 @@ test("数据总览展示用量摘要与四个统计面板", async ({ page }, tes
     await expect(page.getByText("演示环境 · 只读", { exact: true })).toHaveCount(0);
   });
   await test.step("总览时间范围可以切换", async () => {
-    const range = page.locator(".data-overview .page-heading p");
+    const range = page.locator(".data-overview [data-slot=page-heading] p");
     const previous = await range.innerText();
-    await page.getByLabel("总览时间范围", { exact: true }).selectOption("30d");
+    await selectOption(page.getByLabel("总览时间范围", { exact: true }), "30d");
     await expect(range).not.toHaveText(previous);
     await expect(page.getByRole("img", { name: "每日发送与接收流量，单位 GiB" })).toBeVisible();
   });
@@ -367,19 +368,19 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
     await page.getByLabel("搜索实例名称、地址或 OCID").fill("");
   });
   await test.step("停止状态计数和结果一致", async () => {
-    await page.getByLabel("筛选状态", { exact: true }).selectOption("STOPPED");
+    await selectOption(page.getByLabel("筛选状态", { exact: true }), "STOPPED");
     await expect(rows).toHaveCount(
       samples.instances.filter((item) => item.state === "STOPPED").length,
     );
-    await page.getByLabel("筛选状态", { exact: true }).selectOption("");
+    await selectOption(page.getByLabel("筛选状态", { exact: true }), "");
   });
   await test.step("账号筛选限定资源范围", async () => {
     const account = samples.instances[0].accountId;
-    await page.getByLabel("筛选账号").selectOption(account);
+    await selectOption(page.getByLabel("筛选账号"), account);
     await expect(rows).toHaveCount(
       samples.instances.filter((item) => item.accountId === account).length,
     );
-    await page.getByLabel("筛选账号").selectOption("");
+    await selectOption(page.getByLabel("筛选账号"), "");
   });
   await test.step("已有账号时可进入创建实例", async () => {
     await expect(page.getByRole("button", { name: "创建实例", exact: true })).toBeEnabled();
@@ -393,7 +394,7 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
       "aria-pressed",
       "true",
     );
-    const cards = page.locator("article.instance-card");
+    const cards = page.locator("[role=article].instance-card");
     await expect(cards).toHaveCount(Math.min(10, samples.instances.length));
     await expect(cards.first().locator(".name-link")).toHaveCount(1);
     await expect(page.locator(".resource-table")).toHaveCount(0);
@@ -468,16 +469,16 @@ test("实例监控摘要分别采用有效采样并按区间计算网络平均�
   });
   await instancePage(page);
   const card = (label: string) =>
-    page.locator(".metric-card").filter({ has: page.getByText(label, { exact: true }) });
-  await expect(card("CPU 使用率").locator(".metric-value")).toHaveText("15%");
-  await expect(card("网络接收").locator(".metric-value")).toHaveText("10 Mbps");
-  await expect(card("网络发送").locator(".metric-value")).toHaveText("20 Mbps");
-  await expect(card("网络接收").locator(".metric-note")).toContainText("1 分钟平均");
-  await page.getByLabel("监控时间范围").selectOption("24h");
-  await expect(card("CPU 使用率").locator(".metric-value")).toHaveText("15%");
-  await expect(card("网络接收").locator(".metric-value")).toHaveText("2 Mbps");
-  await expect(card("网络发送").locator(".metric-value")).toHaveText("4 Mbps");
-  await expect(card("网络接收").locator(".metric-note")).toContainText("5 分钟平均");
+    page.locator("[data-slot=metric-card]").filter({ has: page.getByText(label, { exact: true }) });
+  await expect(card("CPU 使用率").locator("[data-slot=metric-value]")).toHaveText("15%");
+  await expect(card("网络接收").locator("[data-slot=metric-value]")).toHaveText("10 Mbps");
+  await expect(card("网络发送").locator("[data-slot=metric-value]")).toHaveText("20 Mbps");
+  await expect(card("网络接收").locator("[data-slot=metric-note]")).toContainText("1 分钟平均");
+  await selectOption(page.getByLabel("监控时间范围"), "24h");
+  await expect(card("CPU 使用率").locator("[data-slot=metric-value]")).toHaveText("15%");
+  await expect(card("网络接收").locator("[data-slot=metric-value]")).toHaveText("2 Mbps");
+  await expect(card("网络发送").locator("[data-slot=metric-value]")).toHaveText("4 Mbps");
+  await expect(card("网络接收").locator("[data-slot=metric-note]")).toContainText("5 分钟平均");
 });
 
 test("离开实例监控时取消无人使用的查询", async ({ page }) => {
@@ -588,7 +589,9 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
   await expect(page.getByRole("heading", { name: "数据总览" })).toBeVisible();
   await expect(page.locator(".overview-summary")).toHaveCount(3);
   await test.step("侧栏默认隐藏且不接受焦点", async () => {
-    await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
+    await expect(page.locator("#primary-navigation")).toBeHidden();
+    await expect(page.getByRole("dialog", { name: "主导航", exact: true })).not.toBeVisible();
+    await expect(page.getByRole("navigation", { name: "主导航", exact: true })).toHaveCount(0);
     const width = await page.evaluate(() => ({
       viewport: innerWidth,
       document: document.documentElement.scrollWidth,
@@ -598,14 +601,14 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
   });
   await test.step("展开导航并进入实例页", async () => {
     await page.getByRole("button", { name: "展开导航", exact: true }).click();
-    await expect(page.getByRole("button", { name: "展开导航", exact: true })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    await page.locator(".sidebar nav").getByRole("link", { name: "实例", exact: true }).click();
+    const navigation = page.getByRole("dialog", { name: "主导航", exact: true });
+    await expect(navigation).toBeVisible();
+    await expect(page.locator('[aria-label="展开导航"]')).toHaveAttribute("aria-expanded", "true");
+    await navigation.getByRole("link", { name: "实例", exact: true }).click();
+    await expect(navigation).not.toBeVisible();
     await page.getByRole("button", { name: "表格视图", exact: true }).click();
     await expect(page.locator(".resource-table tbody tr").first()).toBeVisible();
-    await expect(page.locator(".sidebar")).toHaveAttribute("inert", "");
+    await expect(page.locator("#primary-navigation")).toBeHidden();
   });
   await test.step("宽表格只在自身容器内横向滚动", async () => {
     const width = await page.evaluate(() => ({
@@ -622,14 +625,14 @@ test("390px 小屏导航与实例表格和卡片均不撑宽页面", async ({ pa
   });
   await test.step("卡片在小屏使用网格布局且不横向溢出", async () => {
     await page.getByRole("button", { name: "卡片视图", exact: true }).click();
-    await expect(page.locator("article.instance-card")).toHaveCount(
+    await expect(page.locator("[role=article].instance-card")).toHaveCount(
       Math.min(10, samples.instances.length),
     );
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     const dimensions = await page.evaluate(() => ({
       viewport: innerWidth,
       document: document.documentElement.scrollWidth,
-      cardWidths: [...document.querySelectorAll("article.instance-card")].map(
+      cardWidths: [...document.querySelectorAll("[role=article].instance-card")].map(
         (element) => element.getBoundingClientRect().width,
       ),
     }));

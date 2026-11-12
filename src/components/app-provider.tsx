@@ -2,16 +2,11 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, X } from "lucide-react";
+import { toast } from "sonner";
 import type { AccountSummary, SessionUser } from "@/lib/contracts";
 import { api, ApiError, errorMessage, send, useResource } from "./api";
-import { Button, ErrorState, IconButton, LoadingState } from "./ui";
-
-interface Toast {
-  id: string;
-  message: string;
-  href?: string;
-}
+import { ErrorState, LoadingState } from "./ui";
+import { Toaster } from "./ui/sonner";
 interface AppContextValue {
   user: SessionUser;
   accounts: AccountSummary[];
@@ -36,7 +31,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<{ user: SessionUser } | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setThemeState] = useState<"light" | "dark">("light");
   const accounts = useResource<{ accounts: AccountSummary[] }>(
     session ? "/api/accounts" : null,
@@ -73,15 +67,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => controller.abort();
   }, [revision, router]);
   const notify = useCallback(
-    (message: string, href?: string) =>
-      setToasts((items) => [...items.slice(-3), { id: crypto.randomUUID(), message, href }]),
+    (message: string, href?: string) => {
+      toast(
+        message,
+        href ? { action: { label: "查看详情", onClick: () => router.push(href) } } : undefined,
+      );
+    },
+    [router],
+  );
+  useEffect(
+    () => () => {
+      toast.dismiss();
+    },
     [],
   );
-  useEffect(() => {
-    if (!toasts.length) return;
-    const t = window.setTimeout(() => setToasts((items) => items.slice(1)), 6000);
-    return () => window.clearTimeout(t);
-  }, [toasts]);
   const setTheme = (value: "light" | "dark") => {
     setThemeState(value);
     document.documentElement.dataset.theme = value;
@@ -102,11 +101,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
   if (!session)
     return (
-      <main className="auth-loading">
+      <main className="flex min-h-dvh items-center justify-center p-6">
         {authError ? (
-          <div className="auth-error">
+          <div className="grid w-full max-w-lg gap-4">
             <ErrorState message={authError} retry={reloadSession} />
-            <Link href="/login" className="text-link">
+            <Link href="/login" className="text-sm text-primary hover:underline">
               返回登录
             </Link>
           </div>
@@ -132,23 +131,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
-      <div className="toast-stack" aria-live="polite">
-        {toasts.map((toast) => (
-          <div key={toast.id} className="toast">
-            <CheckCircle2 size={19} />
-            <div>
-              {toast.message}
-              {toast.href && <Link href={toast.href}>查看详情 →</Link>}
-            </div>
-            <IconButton
-              label="关闭提示"
-              onClick={() => setToasts((items) => items.filter((item) => item.id !== toast.id))}
-            >
-              <X size={15} />
-            </IconButton>
-          </div>
-        ))}
-      </div>
+      <Toaster theme={theme} closeButton />
     </AppContext.Provider>
   );
 }

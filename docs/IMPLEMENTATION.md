@@ -1,12 +1,13 @@
 # 架构与 API
 
-OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-sqlite3）和官方 OCI TypeScript SDK。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
+OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-sqlite3）和官方 OCI TypeScript SDK。前端使用 Tailwind CSS 与 shadcn/ui（Radix Nova）。面向单管理员管理多个云账号；不是带用户级云资源隔离的多租户服务。
 
 ## 模块
 
 | 路径                                           | 职责                                               |
 | ---------------------------------------------- | -------------------------------------------------- |
 | `src/app/`、`src/components/`                  | 页面、交互、筛选、渐进刷新和确认界面。             |
+| `src/components/ui/`、`src/components/ui.tsx`  | shadcn 基础组件与项目交互封装。                    |
 | `src/server/router.ts`、`auth.ts`、`http.ts`   | 业务 API、会话、MFA、同源检查和请求边界。          |
 | `src/server/accounts.ts`、`inventory.ts`       | 加密凭据、账号版本、库存合并和资源归属。           |
 | `src/server/database/`、`drizzle/`             | TypeScript 表结构、共享 ORM 连接与生成的迁移。     |
@@ -21,6 +22,8 @@ OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-
 | `scripts/`                                     | 备份及隔离验证的 TypeScript 工具。                 |
 
 主导航为总览、实例、流量、成本和任务。设置有 `/settings/accounts`、`/settings/security`、`/settings/general` 三个分区；`/accounts` 和 `/settings` 重定向到账号分区。网络、安全规则和启动卷位于实例详情。
+
+组件与页面样式使用同文件的 Tailwind 类，基础组件复用 shadcn 的交互，通过共享主题与基础组件统一蓝灰配色、控件尺寸和间距。全局 CSS 负责主题和基础规则；下拉选择、弹窗、菜单、提示及移动导航分别复用 Select、Dialog、Dropdown Menu、Tooltip 和 Sheet，通知复用 Sonner。图表保留数据驱动的颜色、位置和比例值，区域与标识标签复用 Badge。
 
 工具脚本通过 Node.js `26.13.0` 原生类型移除执行，只使用可移除的类型语法。Node.js 不执行类型检查；独立的严格配置 `scripts/tsconfig.json` 由 `tsc` 检查，`npm run typecheck` 同时覆盖应用与脚本。运行入口等服务端 TypeScript 经构建输出为 `dist/*.mjs`；这些是部署产物，不是单独维护的 JavaScript 源码。
 

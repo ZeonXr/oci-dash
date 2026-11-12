@@ -1,5 +1,8 @@
 "use client";
-import { useState, type SubmitEvent } from "react";
+import { useId, useState, type SubmitEvent } from "react";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { useRouter } from "next/navigation";
 import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useApp } from "@/components/app-provider";
@@ -15,12 +18,14 @@ import {
   Modal,
 } from "@/components/ui";
 import type { SettingsResult } from "@/lib/settings-contracts";
+import { SettingsSection } from "./settings-section";
 interface MfaSetup {
   secret: string;
   uri: string;
   qrDataUrl: string;
 }
 export function SettingsSecurity() {
+  const recoverySavedId = useId();
   const router = useRouter();
   const { notify, reloadSession } = useApp();
   const resource = useResource<SettingsResult>("/api/settings", 30000);
@@ -107,41 +112,37 @@ export function SettingsSecurity() {
     return <ErrorState message={resource.error || "无法加载设置。"} retry={resource.reload} />;
   return (
     <>
-      <div className="stack">
+      <div className="flex flex-col gap-5">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
-        <div className="settings-section">
-          <div className="settings-copy">
-            <h2>登录安全</h2>
-            <p>保护管理员账号和 OCI 账号凭据。</p>
-          </div>
+        <SettingsSection title="登录安全" description="保护管理员账号和 OCI 账号凭据。">
           <Card>
-            <div className="inline-resource">
-              <span className="resource-icon">
+            <div className="flex items-center gap-3 border-b border-border py-3.5 last:border-0">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                 <KeyRound size={18} />
               </span>
-              <div className="grow">
+              <div className="min-w-0 flex-1">
                 <strong>管理员账号</strong>
-                <p className="muted small">{settings.username}</p>
+                <p className="text-muted-foreground text-xs">{settings.username}</p>
               </div>
               <Badge>管理员</Badge>
             </div>
-            <div className="inline-resource">
-              <span className="resource-icon">
+            <div className="flex items-center gap-3 border-b border-border py-3.5 last:border-0">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                 <LockKeyhole size={18} />
               </span>
-              <div className="grow">
+              <div className="min-w-0 flex-1">
                 <strong>登录密码</strong>
-                <p className="muted small">修改后需要重新登录。</p>
+                <p className="text-muted-foreground text-xs">修改后需要重新登录。</p>
               </div>
               <Button onClick={() => open("password")}>修改密码</Button>
             </div>
-            <div className="inline-resource">
-              <span className="resource-icon">
+            <div className="flex items-center gap-3 border-b border-border py-3.5 last:border-0">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                 <ShieldCheck size={18} />
               </span>
-              <div className="grow">
+              <div className="min-w-0 flex-1">
                 <strong>双重验证 (MFA)</strong>
-                <p className="muted small">
+                <p className="text-muted-foreground text-xs">
                   {settings.mfaEnabled
                     ? "已启用验证器验证码保护。"
                     : "通过验证器应用增加一道登录验证。"}
@@ -152,7 +153,7 @@ export function SettingsSecurity() {
               </Button>
             </div>
           </Card>
-        </div>
+        </SettingsSection>
       </div>
       {modal === "password" && (
         <Modal
@@ -178,9 +179,9 @@ export function SettingsSecurity() {
             </>
           }
         >
-          <form id="password-form" onSubmit={changePassword} className="stack">
+          <form id="password-form" onSubmit={changePassword} className="flex flex-col gap-5">
             <Field label="当前密码" required>
-              <input
+              <Input
                 type="password"
                 autoComplete="current-password"
                 required
@@ -189,7 +190,7 @@ export function SettingsSecurity() {
               />
             </Field>
             <Field label="新密码" required hint="至少 12 个字符。">
-              <input
+              <Input
                 type="password"
                 autoComplete="new-password"
                 minLength={12}
@@ -200,7 +201,7 @@ export function SettingsSecurity() {
               />
             </Field>
             <Field label="再次输入新密码" required>
-              <input
+              <Input
                 type="password"
                 autoComplete="new-password"
                 minLength={12}
@@ -242,18 +243,22 @@ export function SettingsSecurity() {
           }
         >
           {setup ? (
-            <form id="mfa-confirm-form" className="stack" onSubmit={confirmMfa}>
+            <form id="mfa-confirm-form" className="flex flex-col gap-5" onSubmit={confirmMfa}>
               {setup.qrDataUrl.startsWith("data:image/") && (
-                <img src={setup.qrDataUrl} className="qr-code" alt="验证器绑定二维码" />
+                <img
+                  src={setup.qrDataUrl}
+                  className="mx-auto block size-45 rounded-lg bg-white p-1"
+                  alt="验证器绑定二维码"
+                />
               )}
               <Field label="无法扫码时，手动输入密钥">
-                <div className="code-block">
+                <div className="flex items-center justify-between gap-2.5 overflow-auto rounded-lg border border-border bg-canvas px-4 py-3 [&_code]:wrap-anywhere">
                   <code>{setup.secret}</code>
                   <CopyButton value={setup.secret} />
                 </div>
               </Field>
               <Field label="验证码" required>
-                <input
+                <Input
                   autoComplete="one-time-code"
                   inputMode="numeric"
                   pattern="[0-9]{6}"
@@ -268,9 +273,9 @@ export function SettingsSecurity() {
               {action.error && <ErrorState message={action.error} />}
             </form>
           ) : (
-            <form id="mfa-setup-form" className="stack" onSubmit={prepareMfa}>
+            <form id="mfa-setup-form" className="flex flex-col gap-5" onSubmit={prepareMfa}>
               <Field label="当前密码" required>
-                <input
+                <Input
                   autoFocus
                   type="password"
                   autoComplete="current-password"
@@ -299,20 +304,24 @@ export function SettingsSecurity() {
             </Button>
           }
         >
-          <div className="stack">
-            <div className="recovery-codes">
+          <div className="flex flex-col gap-5">
+            <div className="grid grid-cols-2 gap-2.5 rounded-lg bg-canvas p-4">
               {codes.map((value) => (
                 <code key={value}>{value}</code>
               ))}
             </div>
-            <div className="row">
+            <div className="flex items-center gap-2.5">
               <CopyButton value={codes.join("\n")} label="复制全部恢复码" />
-              <span className="small muted">复制全部恢复码并妥善保存</span>
+              <span className="text-xs text-muted-foreground">复制全部恢复码并妥善保存</span>
             </div>
-            <label className="checkbox-field">
-              <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
-              我已保存这些恢复码
-            </label>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={recoverySavedId}
+                checked={saved}
+                onCheckedChange={(checked) => setSaved(checked === true)}
+              />
+              <Label htmlFor={recoverySavedId}>我已保存这些恢复码</Label>
+            </div>
           </div>
         </Modal>
       )}
@@ -339,9 +348,9 @@ export function SettingsSecurity() {
             </>
           }
         >
-          <form id="mfa-disable-form" className="stack" onSubmit={disableMfa}>
+          <form id="mfa-disable-form" className="flex flex-col gap-5" onSubmit={disableMfa}>
             <Field label="当前密码" required>
-              <input
+              <Input
                 type="password"
                 autoComplete="current-password"
                 required
@@ -350,7 +359,7 @@ export function SettingsSecurity() {
               />
             </Field>
             <Field label="验证码或恢复码" required>
-              <input
+              <Input
                 autoComplete="one-time-code"
                 required
                 value={code}

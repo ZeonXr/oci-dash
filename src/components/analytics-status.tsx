@@ -4,6 +4,7 @@ import type { AnalyticsMetadata, AnalyticsStatus } from "@/lib/analytics-contrac
 import { useState } from "react";
 import { CircleAlert, Info } from "lucide-react";
 import { Modal } from "./ui";
+import { Button } from "./ui/button";
 
 export function AnalyticsStatusNote({
   report,
@@ -34,8 +35,10 @@ export function AnalyticsStatusNote({
   const label = failed ? "读取失败" : incomplete ? "部分数据" : duplicate ? "已去重" : "统计说明";
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="analytics-status-trigger"
         onClick={() => setOpen(true)}
         aria-label={label}
@@ -44,7 +47,7 @@ export function AnalyticsStatusNote({
       >
         {incomplete ? <CircleAlert size={14} /> : <Info size={14} />}
         {(incomplete || duplicate) && label}
-      </button>
+      </Button>
       <Modal
         open={open}
         onClose={() => setOpen(false)}
@@ -60,7 +63,7 @@ export function AnalyticsStatusNote({
         }
       >
         {notes.length > 0 && (
-          <ul className="analytics-note-list">
+          <ul className="analytics-note-list m-0 list-disc pl-5 text-sm leading-[1.8] text-muted-foreground wrap-anywhere [&>li+li]:mt-2">
             {notes.map((note) => (
               <li key={note}>{note}</li>
             ))}

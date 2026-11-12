@@ -1,6 +1,10 @@
 "use client";
 
-import { useMemo, useState, type SubmitEvent } from "react";
+import { useId, useMemo, useState, type SubmitEvent } from "react";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Upload } from "lucide-react";
 import type { AccountSummary, JobSummary } from "@/lib/contracts";
 import { parseOciConfig } from "@/lib/oci-config";
@@ -20,6 +24,8 @@ export function AccountDialog({
   onSaved: () => void;
 }) {
   const { notify } = useApp();
+  const replaceCredentialsId = useId();
+  const recoverConsoleCleanupId = useId();
   const action = useAction();
   const [replaceCredentials, setReplaceCredentials] = useState(!account);
   const [recoverConsoleCleanup, setRecoverConsoleCleanup] = useState(false);
@@ -99,7 +105,7 @@ export function AccountDialog({
 
   const nameField = (
     <Field label="账号名称（选填）" hint="留空时，连接成功后使用 OCI 租户名称。">
-      <input
+      <Input
         autoFocus={!!account}
         maxLength={80}
         value={name}
@@ -111,8 +117,8 @@ export function AccountDialog({
   );
   const regionsField = (
     <Field label="同步区域" hint="多个区域用逗号或换行分隔。配置中的区域始终包含在同步范围中。">
-      <textarea
-        className="mono"
+      <Textarea
+        className="font-mono tabular-nums"
         rows={2}
         value={recoverConsoleCleanup ? (account?.regions.join("\n") ?? regions) : regions}
         disabled={action.pending || recoverConsoleCleanup}
@@ -144,7 +150,7 @@ export function AccountDialog({
         </>
       }
     >
-      <form id="account-form" onSubmit={submit} className="stack">
+      <form id="account-form" onSubmit={submit} className="flex flex-col gap-5">
         {account && (
           <>
             {nameField}
@@ -152,38 +158,38 @@ export function AccountDialog({
           </>
         )}
         {account && (
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={replaceCredentialsId}
               checked={replaceCredentials}
               disabled={action.pending}
-              onChange={(event) => {
-                setReplaceCredentials(event.target.checked);
-                if (!event.target.checked) setRecoverConsoleCleanup(false);
+              onCheckedChange={(checked) => {
+                setReplaceCredentials(checked === true);
+                if (checked !== true) setRecoverConsoleCleanup(false);
                 action.clearError();
               }}
             />
-            替换连接凭据
-          </label>
+            <Label htmlFor={replaceCredentialsId}>替换连接凭据</Label>
+          </div>
         )}
         {replaceCredentials && (
           <>
             {account && (
-              <label className="checkbox-field">
-                <input
-                  type="checkbox"
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={recoverConsoleCleanupId}
                   checked={recoverConsoleCleanup}
                   disabled={action.pending}
-                  onChange={(event) => {
-                    setRecoverConsoleCleanup(event.target.checked);
+                  onCheckedChange={(checked) => {
+                    setRecoverConsoleCleanup(checked === true);
                     action.clearError();
                   }}
                 />
-                恢复控制台清理（旧 API 密钥已失效）
-              </label>
+                <Label htmlFor={recoverConsoleCleanupId}>恢复控制台清理（旧 API 密钥已失效）</Label>
+              </div>
             )}
             {account && recoverConsoleCleanup && (
-              <p className="muted">
+              <p className="text-muted-foreground">
                 先断开控制台并等待清理请求结束。仅可上传同一租户、同一用户的新密钥，区域保持原值；控制台占用会在验证清理成功后解除。
               </p>
             )}
@@ -201,8 +207,8 @@ export function AccountDialog({
                 )
               }
             >
-              <textarea
-                className="mono"
+              <Textarea
+                className="font-mono tabular-nums"
                 autoFocus={!account}
                 required
                 rows={7}
@@ -221,9 +227,9 @@ export function AccountDialog({
               />
             </Field>
             <Field label="API 私钥文件" required>
-              <span className="file-upload">
+              <span className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border p-3.5 text-xs [&_input]:min-w-0 [&_input]:max-w-full [&_input]:flex-1 [&_input]:text-xs">
                 <Upload size={18} aria-hidden="true" />
-                <input
+                <Input
                   type="file"
                   accept=".pem,.key,.txt"
                   required
@@ -238,9 +244,9 @@ export function AccountDialog({
           </>
         )}
         {!account && (
-          <details className="account-options">
+          <details className="rounded-lg border border-border bg-canvas px-3.5 py-3 text-xs [&>summary]:cursor-pointer [&>summary]:text-primary [&>div]:mt-4">
             <summary>更多选项</summary>
-            <div className="stack-sm">
+            <div className="flex flex-col gap-3">
               {nameField}
               {regionsField}
             </div>

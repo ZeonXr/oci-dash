@@ -2,9 +2,10 @@
 import { Check, Moon, Sun } from "lucide-react";
 import { useApp } from "@/components/app-provider";
 import { useResource } from "@/components/api";
-import { Alert, Badge, Card, ErrorState, LoadingState } from "@/components/ui";
+import { Alert, Badge, Button, Card, ErrorState, LoadingState } from "@/components/ui";
 import { formatDate } from "@/components/format";
 import type { SettingsResult } from "@/lib/settings-contracts";
+import { SettingsSection } from "./settings-section";
 
 export function SettingsGeneral() {
   const { theme, setTheme } = useApp();
@@ -14,41 +15,33 @@ export function SettingsGeneral() {
   if (!settings)
     return <ErrorState message={resource.error || "无法加载设置。"} retry={resource.reload} />;
   return (
-    <div className="stack">
+    <div className="flex flex-col gap-5">
       {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
-      <div className="settings-section">
-        <div className="settings-copy">
-          <h2>外观</h2>
-          <p>主题偏好保存在当前浏览器中。</p>
-        </div>
+      <SettingsSection title="外观" description="主题偏好保存在当前浏览器中。">
         <Card>
-          <div className="theme-options">
-            <button
-              className={`theme-option ${theme === "light" ? "selected" : ""}`}
+          <div className="theme-options flex gap-3 max-[620px]:flex-wrap">
+            <Button
+              className="h-auto min-w-32 flex-col gap-3 p-4 aria-pressed:border-primary aria-pressed:bg-soft aria-pressed:text-primary max-sm:flex-1"
               onClick={() => setTheme("light")}
               aria-pressed={theme === "light"}
             >
               <Sun size={25} />
-              <span>浅色{theme === "light" && <Check size={13} style={{ marginLeft: 8 }} />}</span>
-            </button>
-            <button
-              className={`theme-option ${theme === "dark" ? "selected" : ""}`}
+              <span>浅色{theme === "light" && <Check size={13} className="ml-2" />}</span>
+            </Button>
+            <Button
+              className="h-auto min-w-32 flex-col gap-3 p-4 aria-pressed:border-primary aria-pressed:bg-soft aria-pressed:text-primary max-sm:flex-1"
               onClick={() => setTheme("dark")}
               aria-pressed={theme === "dark"}
             >
               <Moon size={25} />
-              <span>深色{theme === "dark" && <Check size={13} style={{ marginLeft: 8 }} />}</span>
-            </button>
+              <span>深色{theme === "dark" && <Check size={13} className="ml-2" />}</span>
+            </Button>
           </div>
         </Card>
-      </div>
-      <div className="settings-section">
-        <div className="settings-copy">
-          <h2>运行状态</h2>
-          <p>查看当前应用与后台任务执行器状态。</p>
-        </div>
+      </SettingsSection>
+      <SettingsSection title="运行状态" description="查看当前应用与后台任务执行器状态。">
         <Card>
-          <dl className="details-list">
+          <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:text-foreground [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-x-2.5 max-[620px]:gap-y-3.5 max-[620px]:text-xs">
             <dt>应用版本</dt>
             <dd>{settings.version}</dd>
             <dt>任务执行器</dt>
@@ -63,12 +56,12 @@ export function SettingsGeneral() {
             <dd>{settings.worker.runningJobs}</dd>
           </dl>
           {!settings.worker.alive && (
-            <div style={{ marginTop: 18 }}>
+            <div className="mt-4">
               <Alert>后台执行器尚未连接，已排队的任务会等待执行器恢复。</Alert>
             </div>
           )}
         </Card>
-      </div>
+      </SettingsSection>
     </div>
   );
 }

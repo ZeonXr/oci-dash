@@ -26,6 +26,15 @@ import {
   Select,
 } from "@/components/ui";
 import { TablePanel, SortableHeader } from "@/components/table";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import { Button as LinkButton } from "@/components/ui/button";
 import { instanceHref, shortId } from "@/components/format";
 import { RegionTag } from "@/components/region-label";
 
@@ -120,15 +129,15 @@ function TrafficContent() {
           刷新数据
         </RefreshButton>
       </PageHeader>
-      <div className="analytics-controls">
-        <div className="filters analytics-filters">
+      <div className="analytics-controls mb-6 flex flex-wrap items-center gap-3">
+        <div className="analytics-filters contents *:data-[slot=select-trigger]:w-45 *:data-[slot=select-trigger]:max-w-full max-sm:*:data-[slot=select-trigger]:flex-1">
           <Select
             aria-label="流量账号"
             value={account}
             disabled={!accountsReady}
-            onChange={(event) => {
-              setAccount(event.target.value);
-              setFilters({ account: event.target.value, region: "", instance: "", vnic: "" });
+            onValueChange={(value) => {
+              setAccount(value);
+              setFilters({ account: value, region: "", instance: "", vnic: "" });
             }}
           >
             <option value="">全部账号</option>
@@ -141,8 +150,8 @@ function TrafficContent() {
           <Select
             aria-label="流量区域"
             value={region}
-            onChange={(event) => {
-              changeFilters({ region: event.target.value, instance: "", vnic: "" });
+            onValueChange={(value) => {
+              changeFilters({ region: value, instance: "", vnic: "" });
             }}
           >
             <option value="">全部区域</option>
@@ -155,8 +164,8 @@ function TrafficContent() {
           <Select
             aria-label="流量实例"
             value={instance}
-            onChange={(event) => {
-              changeFilters({ instance: event.target.value, vnic: "" });
+            onValueChange={(value) => {
+              changeFilters({ instance: value, vnic: "" });
             }}
           >
             <option value="">全部实例</option>
@@ -169,7 +178,7 @@ function TrafficContent() {
           <Select
             aria-label="流量网卡"
             value={vnic}
-            onChange={(event) => changeFilters({ vnic: event.target.value })}
+            onValueChange={(value) => changeFilters({ vnic: value })}
           >
             <option value="">全部网卡</option>
             {vnics.map((item) => (
@@ -179,12 +188,12 @@ function TrafficContent() {
             ))}
           </Select>
         </div>
-        <div className="analytics-period">
+        <div className="analytics-period contents *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-28">
           <AnalyticsRange value={range} onChange={setRange} />
           <Select
             aria-label="流量统计粒度"
             value={granularity}
-            onChange={(event) => setGranularity(event.target.value as "hourly" | "daily")}
+            onValueChange={(value) => setGranularity(value as "hourly" | "daily")}
           >
             <option value="hourly">按小时</option>
             <option value="daily">按日</option>
@@ -206,15 +215,15 @@ function TrafficContent() {
             title="先添加 OCI 账号"
             description="添加账号并同步实例后，可查询网卡流量。"
             action={
-              <Link className="button" href="/settings/accounts">
-                管理账号
-              </Link>
+              <LinkButton asChild>
+                <Link href="/settings/accounts">管理账号</Link>
+              </LinkButton>
             }
           />
         </Card>
       ) : data ? (
-        <div className="stack analytics-content" aria-busy={report.refreshing}>
-          <div className="analytics-metrics">
+        <div className="stack analytics-content flex flex-col gap-5" aria-busy={report.refreshing}>
+          <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 max-sm:grid-cols-1">
             <MetricCard
               label="接收流量"
               value={
@@ -291,11 +300,13 @@ function TrafficContent() {
                 description="没有监控样本不等同于零流量，可调整日期或筛选条件。"
               />
             )}
-            <p className="chart-note">仅统计当前网卡，非公网计费流量。</p>
+            <p className="chart-note mt-2.5 text-xs text-muted-foreground">
+              仅统计当前网卡，非公网计费流量。
+            </p>
           </Card>
-          <div className="section-heading">
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
             <h2>网卡明细</h2>
-            <span className="muted small">数值单位：GiB</span>
+            <span className="muted small text-xs text-muted-foreground">数值单位：GiB</span>
           </div>
           <TablePanel
             label="网卡流量明细"
@@ -317,44 +328,51 @@ function TrafficContent() {
               />
             }
           >
-            <table className="analytics-table">
-              <thead>
-                <tr>
-                  <th scope="col">实例 / 网卡</th>
-                  <th scope="col">账号 / 区域</th>
-                  <th scope="col">接收</th>
-                  <th scope="col">发送</th>
+            <Table className="analytics-table min-w-205">
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">实例 / 网卡</TableHead>
+                  <TableHead scope="col">账号 / 区域</TableHead>
+                  <TableHead scope="col">接收</TableHead>
+                  <TableHead scope="col">发送</TableHead>
                   <SortableHeader
                     label="合计"
                     direction={sort}
                     onSort={() => setSort(sort === "ascending" ? "descending" : "ascending")}
                   />
-                  <th scope="col">数据状态</th>
-                </tr>
-              </thead>
-              <tbody>
+                  <TableHead scope="col">数据状态</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rows.slice((safePage - 1) * pageSize, safePage * pageSize).map((row) => (
-                  <tr key={`${row.accountId}/${row.vnicId}`}>
-                    <td>
-                      <Link href={instanceHref(row.instanceId)} className="name-link">
+                  <TableRow key={`${row.accountId}/${row.vnicId}`}>
+                    <TableCell>
+                      <Link
+                        href={instanceHref(row.instanceId)}
+                        className="font-medium text-foreground hover:text-primary"
+                      >
                         {row.instanceName || shortId(row.instanceId)}
                       </Link>
-                      <span className="cell-secondary" title={row.vnicId}>
+                      <span className="mt-1 block text-xs text-muted-foreground" title={row.vnicId}>
                         {row.vnicName || shortId(row.vnicId)}
                       </span>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       {row.accountName}
-                      <span className="cell-secondary">
+                      <span className="mt-1 block text-xs text-muted-foreground">
                         <RegionTag region={row.region} />
                       </span>
-                    </td>
-                    <td className="tabular">{analyticsNumber(gib(row.receivedBytes))}</td>
-                    <td className="tabular">{analyticsNumber(gib(row.sentBytes))}</td>
-                    <td className="tabular">
+                    </TableCell>
+                    <TableCell className="tabular tabular-nums">
+                      {analyticsNumber(gib(row.receivedBytes))}
+                    </TableCell>
+                    <TableCell className="tabular tabular-nums">
+                      {analyticsNumber(gib(row.sentBytes))}
+                    </TableCell>
+                    <TableCell className="tabular tabular-nums">
                       {analyticsNumber(gib(totalBytes(row.receivedBytes, row.sentBytes)))}
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <Badge
                         tone={
                           row.coverage === "complete"
@@ -370,11 +388,11 @@ function TrafficContent() {
                             ? "部分数据"
                             : "暂无数据"}
                       </Badge>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TablePanel>
         </div>
       ) : null}
