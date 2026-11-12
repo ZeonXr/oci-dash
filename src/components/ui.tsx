@@ -616,7 +616,10 @@ export function Modal({
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription id={descriptionId}>{description}</DialogDescription>}
         </DialogHeader>
-        <div data-slot="dialog-body" className="grid min-h-0 min-w-0 gap-4 overflow-y-auto">
+        <div
+          data-slot="dialog-body"
+          className="-mx-6 grid min-h-0 min-w-0 gap-4 overflow-y-auto px-6"
+        >
           {children}
         </div>
         {footer && <DialogFooter className="shrink-0">{footer}</DialogFooter>}
