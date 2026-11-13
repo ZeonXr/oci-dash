@@ -1,5 +1,5 @@
 "use client";
-import { Input } from "@/components/ui/input";
+import { FilterBar, SearchField, filterSelectClassName } from "@/components/view-layout";
 import {
   Table,
   TableHeader,
@@ -11,7 +11,7 @@ import {
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowUp, LayoutGrid, List, Plus, Search, Server } from "lucide-react";
+import { ArrowDown, ArrowUp, LayoutGrid, List, Plus, Server } from "lucide-react";
 import type { InstanceSummary } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
@@ -20,7 +20,7 @@ import { useInventoryRefresh } from "@/components/inventory-refresh";
 import { SortableHeader, TablePanel } from "@/components/table";
 import {
   Button,
-  Card,
+  Panel,
   RefreshButton,
   CopyButton,
   EmptyState,
@@ -142,6 +142,7 @@ function InstancesContent() {
   );
   const pagination = (
     <Pagination
+      className={view === "cards" ? "mt-4 border-t-0 px-0" : undefined}
       page={safePage}
       pageSize={pageSize}
       total={filtered.length}
@@ -163,7 +164,7 @@ function InstancesContent() {
           disabled={!accountsReady || !accounts.length}
         />
         <Button
-          variant="primary"
+          variant="default"
           icon={<Plus size={16} />}
           disabled={!accountsReady || !accounts.length}
           title={accountsReady && !accounts.length ? "请先添加 OCI 账号" : undefined}
@@ -188,47 +189,50 @@ function InstancesContent() {
           />
         </div>
       )}
-      <div className="mb-5 flex flex-wrap items-center gap-2.5 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 *:data-[slot=select-trigger]:max-w-56 max-[620px]:gap-2 max-[620px]:*:data-[slot=select-trigger]:min-w-24 max-[620px]:*:data-[slot=select-trigger]:max-w-none max-[620px]:*:data-[slot=select-trigger]:flex-1 instance-filters">
-        <div className="flex min-w-52 max-w-sm flex-1 items-center gap-2 rounded-lg border bg-card px-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15 [&>svg]:text-muted-foreground [&_input]:border-0 [&_input]:bg-transparent [&_input]:pl-0 [&_input]:shadow-none [&_input]:focus-visible:ring-0 max-[620px]:w-full max-[620px]:max-w-none max-[620px]:basis-full">
-          <Search size={16} />
-          <Input
-            aria-label="搜索实例名称、地址或 OCID"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索名称、IP 或 OCID"
-          />
-        </div>
+      <FilterBar className="instance-filters">
+        <SearchField
+          aria-label="搜索实例名称、地址或 OCID"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索名称、IP 或 OCID"
+        />
         <Select
+          className={filterSelectClassName}
           aria-label="筛选账号"
           value={account}
           disabled={!accountsReady}
           onValueChange={(value) => setAccount(value)}
-        >
-          <option value="">全部账号</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </Select>
-        <Select aria-label="筛选区域" value={region} onValueChange={(value) => setRegion(value)}>
-          <option value="">全部区域</option>
-          {Array.from(new Set(instances.map((i) => i.region)))
-            .sort()
-            .map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-        </Select>
-        <Select aria-label="筛选状态" value={state} onValueChange={(value) => setState(value)}>
-          <option value="">全部状态</option>
-          <option value="RUNNING">运行中</option>
-          <option value="STOPPED">已停止</option>
-          <option value="PROVISIONING">创建中</option>
-          <option value="STARTING">启动中</option>
-          <option value="STOPPING">停止中</option>
-        </Select>
+          options={[
+            { value: "", label: "全部账号" },
+            ...accounts.map((a) => ({ value: a.id, label: a.name })),
+          ]}
+        />
+        <Select
+          className={filterSelectClassName}
+          aria-label="筛选区域"
+          value={region}
+          onValueChange={(value) => setRegion(value)}
+          options={[
+            { value: "", label: "全部区域" },
+            ...Array.from(new Set(instances.map((i) => i.region)))
+              .sort()
+              .map((r) => ({ value: r, label: r })),
+          ]}
+        />
+        <Select
+          className={filterSelectClassName}
+          aria-label="筛选状态"
+          value={state}
+          onValueChange={(value) => setState(value)}
+          options={[
+            { value: "", label: "全部状态" },
+            { value: "RUNNING", label: "运行中" },
+            { value: "STOPPED", label: "已停止" },
+            { value: "PROVISIONING", label: "创建中" },
+            { value: "STARTING", label: "启动中" },
+            { value: "STOPPING", label: "停止中" },
+          ]}
+        />
         {(query || account || region || state) && (
           <Button
             variant="ghost"
@@ -259,7 +263,7 @@ function InstancesContent() {
             aria-label="实例展示方式"
           >
             <Button
-              variant={view === "table" ? "secondary" : "ghost"}
+              variant={view === "table" ? "outline" : "ghost"}
               size="icon"
               aria-label="表格视图"
               title="表格视图"
@@ -269,7 +273,7 @@ function InstancesContent() {
               <List size={17} aria-hidden="true" />
             </Button>
             <Button
-              variant={view === "cards" ? "secondary" : "ghost"}
+              variant={view === "cards" ? "outline" : "ghost"}
               size="icon"
               aria-label="卡片视图"
               title="卡片视图"
@@ -280,12 +284,12 @@ function InstancesContent() {
             </Button>
           </div>
         </div>
-      </div>
+      </FilterBar>
       {view === "cards" ? (
         <section aria-label="实例卡片列表" aria-busy={resource.loading || refreshing}>
           {filtered.length ? (
             <>
-              <div className="instance-cards grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-4">
+              <div className="instance-cards grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-4">
                 {visible.map((instance) => {
                   const context = ipRotationContext(instance, instanceJobs, resource.error);
                   return (
@@ -300,10 +304,10 @@ function InstancesContent() {
                   );
                 })}
               </div>
-              <div className="mt-4 [&>nav]:border-t-0 [&>nav]:px-0">{pagination}</div>
+              {pagination}
             </>
           ) : (
-            <Card>{resource.loading ? <LoadingState /> : empty}</Card>
+            <Panel>{resource.loading ? <LoadingState /> : empty}</Panel>
           )}
         </section>
       ) : (

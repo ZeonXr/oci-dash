@@ -6,46 +6,19 @@ import Link from "next/link";
 import type { CpuHour, CpuReport } from "../lib/cpu-contracts";
 import { instanceHref, number } from "./format";
 import { Button, EmptyState } from "./ui";
+import { cn } from "@/lib/utils";
+import { ChartTooltip } from "./chart-presentation";
 
-// Keep chart geometry and intensity next to the chart markup.
-const styles = {
-  root: "w-full min-w-0 [--heat-0:#edf4ff] [--heat-1:#d1e2fc] [--heat-2:#92b7f0] [--heat-3:#4a86dc] [--heat-4:#1e57a4] [--heat-missing:#edf0f4] dark:[--heat-0:#1f2c40] dark:[--heat-1:#24436b] dark:[--heat-2:#2d5c92] dark:[--heat-3:#4b85ca] dark:[--heat-4:#79adf1] dark:[--heat-missing:#303640]",
-  description:
-    "mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] leading-normal text-muted-foreground",
-  scroll:
-    "relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain pt-[3px] pb-[5px] scrollbar-thin [scrollbar-color:var(--border)_transparent] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-  grid: "grid min-w-[717px] gap-2",
-  row: "grid min-w-0 grid-cols-[156px_minmax(477px,1fr)_60px] items-center gap-x-3",
-  axis: "mb-0.5 min-h-[15px] text-[10px] leading-[15px] text-muted-foreground",
-  hours: "grid min-w-0 grid-cols-[repeat(24,minmax(17px,1fr))] gap-[3px]",
-  hourLabel:
-    "min-w-0 text-center whitespace-nowrap tabular-nums first:text-left last:flex last:justify-end",
-  instance:
-    "min-w-0 text-[11px] leading-[1.4] [&>a]:block [&>a]:w-fit [&>a]:max-w-full [&>a]:truncate [&>a]:text-foreground [&>a:hover]:text-primary [&>a:hover]:underline [&>a:hover]:underline-offset-[3px]",
-  state: "block text-[9px] leading-3 text-muted-foreground",
-  cellWrap: "h-[27px] min-w-0",
-  cell: "block m-0 h-[27px] w-full cursor-pointer touch-manipulation appearance-none rounded-[3px] border-0 p-0 hover:ring-1 hover:ring-foreground/35 hover:ring-inset data-selected:ring-1 data-selected:ring-foreground/35 data-selected:ring-inset focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring data-[level=0]:bg-(--heat-0) data-[level=1]:bg-(--heat-1) data-[level=2]:bg-(--heat-2) data-[level=3]:bg-(--heat-3) data-[level=4]:bg-(--heat-4) data-[level=5]:bg-(--heat-missing)",
-  average: "text-right text-[10px] whitespace-nowrap text-muted-foreground tabular-nums",
-  footer:
-    "mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 text-[10px] leading-[1.4] text-muted-foreground",
-  legend:
-    "flex flex-wrap items-center gap-x-3 gap-y-[7px] [&>span]:inline-flex [&>span]:items-center [&>span]:gap-1 [&>span]:whitespace-nowrap",
-  swatch:
-    "inline-block h-[9px] w-[13px] shrink-0 rounded-[2px] data-[level=0]:bg-(--heat-0) data-[level=1]:bg-(--heat-1) data-[level=2]:bg-(--heat-2) data-[level=3]:bg-(--heat-3) data-[level=4]:bg-(--heat-4) data-[level=5]:bg-(--heat-missing)",
-  peak: "ml-auto whitespace-nowrap [&>strong]:font-medium [&>strong]:text-foreground [&>strong]:tabular-nums",
-  expand: "mt-2.5 flex justify-center",
-  expandButton: "text-xs",
-  tooltip:
-    "fixed z-100 flex w-[278px] max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] flex-col gap-[5px] overflow-auto rounded-lg border border-border bg-popover px-3.5 py-3 text-xs leading-normal text-popover-foreground shadow-md wrap-anywhere",
-  tooltipName: "text-xs font-semibold text-foreground",
-  tooltipContext: "text-[10px] text-muted-foreground",
-  tooltipTime: "mt-[3px] text-[10px] text-muted-foreground tabular-nums",
-  tooltipValues:
-    "mt-[5px] grid gap-1 border-t border-border pt-2 text-[11px] [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-2 [&_dt]:shrink-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:text-right [&_dd]:font-semibold [&_dd]:tabular-nums",
-  tooltipNote: "mt-1 text-[11px] text-warning",
-  tooltipHint: "mt-[3px] text-[10px] text-muted-foreground",
-  srOnly: "sr-only",
-} as const;
+const rowClassName = cn("col-span-full grid min-w-0 grid-cols-subgrid items-center");
+const hoursClassName = cn("col-span-24 grid min-w-0 grid-cols-subgrid");
+const heatColors = [
+  cn("bg-blue-50 dark:bg-blue-950"),
+  cn("bg-blue-200 dark:bg-blue-900"),
+  cn("bg-blue-400 dark:bg-blue-700"),
+  cn("bg-blue-600 dark:bg-blue-500"),
+  cn("bg-blue-800 dark:bg-blue-300"),
+  cn("bg-slate-200 dark:bg-slate-700"),
+] as const;
 
 const HOUR = 60 * 60 * 1000;
 const VISIBLE_ROWS = 6;
@@ -258,28 +231,28 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
   }
 
   return (
-    <div className={styles.root}>
+    <div className="w-full min-w-0">
       <div
-        className={styles.description}
+        className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground"
         title={`${utcTime(start)} – ${utcTime(start + 24 * HOUR)} UTC`}
       >
         <span>近 24 小时 · UTC</span>
         <span>每格为小时平均 CPU</span>
       </div>
-      <p id={instructionsId} className={styles.srOnly}>
+      <p id={instructionsId} className="sr-only">
         使用方向键查看各小时和实例，Home 或 End 跳至该行首尾，Ctrl 加 Home 或 End 跳至全表首尾。 按
         Enter 或点击固定详情，按 Escape 关闭。无样本与实际 0% 分别显示。
       </p>
       <div
         ref={scrollRef}
-        className={styles.scroll}
+        className="relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain py-1 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         role="region"
         aria-label="按实例和 UTC 小时显示 CPU 使用率，可横向滚动"
         tabIndex={0}
       >
         <div
           id={gridId}
-          className={styles.grid}
+          className="grid w-full min-w-min grid-cols-[10rem_repeat(24,minmax(1rem,1fr))_4rem] gap-x-1 gap-y-2"
           role="grid"
           aria-label="最近 24 小时 CPU 热力图"
           aria-readonly="true"
@@ -287,19 +260,23 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
           aria-colcount={26}
           aria-describedby={instructionsId}
         >
-          <div role="row" className={`${styles.row} ${styles.axis}`} aria-rowindex={1}>
+          <div
+            role="row"
+            className={cn(rowClassName, "mb-0.5 min-h-4 text-xs text-muted-foreground")}
+            aria-rowindex={1}
+          >
             <span role="columnheader" aria-colindex={1}>
               实例
             </span>
-            <div className={styles.hours} role="presentation">
+            <div className={hoursClassName} role="presentation">
               {hours.map((timestamp, index) => (
                 <span
                   key={timestamp}
                   role="columnheader"
                   aria-colindex={index + 2}
-                  className={styles.hourLabel}
+                  className="min-w-0 text-center whitespace-nowrap tabular-nums first:text-left last:text-right"
                 >
-                  <span className={styles.srOnly}>{utcTime(timestamp)} UTC</span>
+                  <span className="sr-only">{utcTime(timestamp)} UTC</span>
                   <span aria-hidden="true">
                     {index % 4 === 0 || index === 23
                       ? `${new Date(timestamp).getUTCHours().toString().padStart(2, "0")}:00`
@@ -308,7 +285,11 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
                 </span>
               ))}
             </div>
-            <span role="columnheader" aria-colindex={26} className={styles.average}>
+            <span
+              role="columnheader"
+              aria-colindex={26}
+              className="text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums"
+            >
               平均
             </span>
           </div>
@@ -317,18 +298,21 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
               key={row.instanceId}
               role="row"
               aria-rowindex={rowIndex + 2}
-              className={styles.row}
+              className={rowClassName}
             >
-              <div role="rowheader" aria-colindex={1} className={styles.instance}>
+              <div role="rowheader" aria-colindex={1} className="min-w-0 text-xs leading-normal">
                 <Link
                   href={instanceHref(row.instanceId)}
                   title={`${row.instanceName} · ${row.accountName} · ${row.region}`}
+                  className="block w-fit max-w-full truncate text-foreground hover:text-primary hover:underline underline-offset-2"
                 >
                   {row.instanceName}
                 </Link>
-                {row.state === "STOPPED" && <small className={styles.state}>已停止</small>}
+                {row.state === "STOPPED" && (
+                  <small className="block text-xs text-muted-foreground">已停止</small>
+                )}
               </div>
-              <div className={styles.hours} role="presentation">
+              <div className={hoursClassName} role="presentation">
                 {hours.map((timestamp, column) => {
                   const point = rowPoints[rowIndex].get(timestamp);
                   const value = observedCpu(point);
@@ -342,7 +326,7 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
                       key={timestamp}
                       role="gridcell"
                       aria-colindex={column + 2}
-                      className={styles.cellWrap}
+                      className="h-7 min-w-0"
                     >
                       <button
                         ref={(element) => {
@@ -351,7 +335,10 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
                           else cellRefs.current.delete(key);
                         }}
                         type="button"
-                        className={styles.cell}
+                        className={cn(
+                          "block m-0 h-7 w-full cursor-pointer touch-manipulation appearance-none rounded-sm border-0 p-0 hover:ring-1 hover:ring-foreground/35 hover:ring-inset data-selected:ring-1 data-selected:ring-foreground/35 data-selected:ring-inset focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                          heatColors[intensity(value)],
+                        )}
                         data-level={intensity(value)}
                         data-selected={isSelected || undefined}
                         aria-label={label}
@@ -383,31 +370,42 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
                   );
                 })}
               </div>
-              <span role="gridcell" aria-colindex={26} className={styles.average}>
+              <span
+                role="gridcell"
+                aria-colindex={26}
+                className="text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums"
+              >
                 {percent(row.averageCpuPercent)}
               </span>
             </div>
           ))}
         </div>
       </div>
-      <div className={styles.footer}>
-        <div className={styles.legend} aria-label="CPU 使用率图例">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2" aria-label="CPU 使用率图例">
           {LEGEND.map((label, index) => (
-            <span key={label}>
-              <i className={styles.swatch} data-level={index} aria-hidden="true" />
+            <span key={label} className="inline-flex items-center gap-1 whitespace-nowrap">
+              <i
+                className={cn("inline-block h-2 w-3 shrink-0 rounded-sm", heatColors[index])}
+                data-level={index}
+                aria-hidden="true"
+              />
               {label}
             </span>
           ))}
         </div>
-        <span className={styles.peak}>
-          最高 <strong>{percent(report.summary.peakCpuPercent)}</strong>
+        <span className="ml-auto whitespace-nowrap">
+          最高{" "}
+          <strong className="font-medium text-foreground tabular-nums">
+            {percent(report.summary.peakCpuPercent)}
+          </strong>
         </span>
       </div>
       {report.rows.length > VISIBLE_ROWS && (
-        <div className={styles.expand}>
+        <div className="mt-3 flex justify-center">
           <Button
             variant="ghost"
-            className={styles.expandButton}
+            className="text-xs"
             aria-expanded={expanded}
             aria-controls={gridId}
             onClick={() => {
@@ -425,45 +423,51 @@ export function CpuHeatmap({ report }: { report: CpuReport }) {
         selected &&
         selectedRow &&
         createPortal(
-          <div
+          <ChartTooltip
             ref={tooltipRef}
             id={tooltipId}
             role="tooltip"
-            className={styles.tooltip}
+            className="fixed z-100 max-h-[calc(100dvh-1rem)] w-72 max-w-[calc(100vw-1rem)] overflow-auto"
             style={position}
             onPointerEnter={clearHideTimer}
             onPointerLeave={scheduleHide}
           >
-            <strong className={styles.tooltipName}>{selectedRow.instanceName}</strong>
-            <span className={styles.tooltipContext}>
+            <strong className="text-xs font-semibold text-foreground">
+              {selectedRow.instanceName}
+            </strong>
+            <span className="text-xs text-muted-foreground">
               {selectedRow.accountName} · {selectedRow.region}
             </span>
-            <span className={styles.tooltipTime}>
+            <span className="mt-1 text-xs text-muted-foreground tabular-nums">
               {utcTime(selected.timestamp)} –<br />
               {utcTime(selected.timestamp + HOUR)} UTC
             </span>
-            <dl className={styles.tooltipValues}>
-              <div>
-                <dt>平均 CPU</dt>
-                <dd>{selectedValue === null ? "无数据" : `${number(selectedValue, 2)}%`}</dd>
+            <dl className="mt-1 grid gap-1 border-t border-border pt-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <dt className="shrink-0 text-muted-foreground">平均 CPU</dt>
+                <dd className="m-0 text-right font-semibold tabular-nums">
+                  {selectedValue === null ? "无数据" : `${number(selectedValue, 2)}%`}
+                </dd>
               </div>
-              <div>
-                <dt>采样数</dt>
-                <dd>
+              <div className="flex items-baseline justify-between gap-2">
+                <dt className="shrink-0 text-muted-foreground">采样数</dt>
+                <dd className="m-0 text-right font-semibold tabular-nums">
                   {selectedPoint?.sampleCount ?? 0} / {selectedPoint?.expectedSamples ?? 12}
                 </dd>
               </div>
             </dl>
             {selectedValue === null ? (
-              <p className={styles.tooltipNote}>无有效样本，不按 0% 处理。</p>
+              <p className="mt-1 text-xs text-warning">无有效样本，不按 0% 处理。</p>
             ) : selectedPoint?.coverage === "partial" ||
               selectedPoint?.sampleCount !== selectedPoint?.expectedSamples ? (
-              <p className={styles.tooltipNote}>部分样本，均值仅基于已取得的数据。</p>
+              <p className="mt-1 text-xs text-warning">部分样本，均值仅基于已取得的数据。</p>
             ) : null}
             {selected.pinned && (
-              <span className={styles.tooltipHint}>再次点击、点击外部或按 Esc 关闭</span>
+              <span className="mt-1 text-xs text-muted-foreground">
+                再次点击、点击外部或按 Esc 关闭
+              </span>
             )}
-          </div>,
+          </ChartTooltip>,
           document.body,
         )}
     </div>

@@ -45,7 +45,7 @@ export function InstanceCard({
   return (
     <Card
       role="article"
-      className="instance-card flex flex-col gap-0 p-5 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:leading-normal [&_h2]:wrap-anywhere"
+      className="instance-card flex flex-col gap-0 p-5"
       aria-labelledby={titleId}
     >
       <div className="flex items-center justify-between gap-3">
@@ -57,7 +57,7 @@ export function InstanceCard({
           <Status value={instance.state} />
         </div>
       </div>
-      <h2 id={titleId}>
+      <h2 id={titleId} className="mt-3 text-base leading-normal wrap-anywhere">
         <Link
           className="name-link inline-flex items-center gap-2 font-medium text-foreground hover:text-primary"
           href={instanceHref(instance.id)}
@@ -75,19 +75,20 @@ export function InstanceCard({
         <RegionTag region={instance.region} />
         <CodeTag title={instance.shape}>{instance.shape.replace("VM.Standard.", "")}</CodeTag>
       </div>
-      <dl className="my-4 grid grid-cols-2 gap-4 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:mt-1 [&_dd]:text-xl [&_dd]:font-medium [&_dd]:tabular-nums [&_dd_span]:text-xs [&_dd_span]:font-normal [&_dd_span]:text-muted-foreground">
+      <dl className="my-4 grid grid-cols-2 gap-4">
         <div>
-          <dt>OCPU</dt>
-          <dd>{number(instance.ocpus, 1)}</dd>
+          <dt className="text-xs text-muted-foreground">OCPU</dt>
+          <dd className="mt-1 text-xl font-medium tabular-nums">{number(instance.ocpus, 1)}</dd>
         </div>
         <div>
-          <dt>内存</dt>
-          <dd>
-            {number(instance.memoryGb, 1)} <span>GB</span>
+          <dt className="text-xs text-muted-foreground">内存</dt>
+          <dd className="mt-1 text-xl font-medium tabular-nums">
+            {number(instance.memoryGb, 1)}{" "}
+            <span className="text-xs font-normal text-muted-foreground">GB</span>
           </dd>
         </div>
       </dl>
-      <div className="mt-auto grid gap-2 border-y py-3 text-xs [&_.table-address]:min-w-0 [&_.table-address]:max-w-full">
+      <div className="mt-auto grid gap-2 border-y py-3 text-xs">
         {addresses.length ? (
           addresses.map(({ vnic, binding }) => {
             const fixed = binding.protected || binding.lifetime === "RESERVED";

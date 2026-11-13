@@ -1,4 +1,5 @@
 "use client";
+import { FilterBar, filterSelectClassName } from "@/components/view-layout";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -23,7 +24,7 @@ import {
 import {
   Button,
   RefreshButton,
-  Card,
+  Panel,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -168,9 +169,10 @@ function CostsContent() {
           disabled={!url}
         />
       </PageHeader>
-      <div className="analytics-controls mb-6 flex flex-wrap items-center gap-3">
-        <div className="analytics-filters contents *:data-[slot=select-trigger]:w-45 *:data-[slot=select-trigger]:max-w-full max-sm:*:data-[slot=select-trigger]:flex-1">
+      <FilterBar className="analytics-controls mb-6">
+        <div className="analytics-filters contents">
           <Select
+            className={filterSelectClassName}
             aria-label="成本账号"
             value={account}
             disabled={!accountsReady}
@@ -178,38 +180,37 @@ function CostsContent() {
               setAccount(value);
               setFilters({ account: value, region: "", service: "" });
             }}
-          >
-            <option value="">全部账号</option>
-            {accounts.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部账号" },
+              ...accounts.map((item) => ({ value: item.id, label: item.name })),
+            ]}
+          />
           <Select
+            className={filterSelectClassName}
             aria-label="成本区域"
             value={region}
             onValueChange={(value) => changeFilters({ region: value })}
-          >
-            <option value="">全部区域</option>
-            {regions.map((item) => (
-              <option key={item} value={item}>
-                {item === missing ? "未提供区域" : item}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部区域" },
+              ...regions.map((item) => ({
+                value: item,
+                label: item === missing ? "未提供区域" : item,
+              })),
+            ]}
+          />
           <Select
+            className={filterSelectClassName}
             aria-label="成本服务"
             value={service}
             onValueChange={(value) => changeFilters({ service: value })}
-          >
-            <option value="">全部服务</option>
-            {services.map((item) => (
-              <option key={item} value={item}>
-                {item === missing ? "未提供服务" : item}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部服务" },
+              ...services.map((item) => ({
+                value: item,
+                label: item === missing ? "未提供服务" : item,
+              })),
+            ]}
+          />
           {filtered && (
             <Button
               variant="ghost"
@@ -221,7 +222,7 @@ function CostsContent() {
             </Button>
           )}
         </div>
-        <div className="analytics-period contents *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-28">
+        <div className="analytics-period contents">
           <AnalyticsRange
             value={range}
             onChange={setRange}
@@ -229,6 +230,7 @@ function CostsContent() {
             fullMonths={granularity === "monthly"}
           />
           <Select
+            className="w-auto min-w-28 max-sm:flex-1"
             aria-label="成本统计粒度"
             value={granularity}
             onValueChange={(value) => {
@@ -236,12 +238,13 @@ function CostsContent() {
               setGranularity(next);
               setRange(analyticsRange(next === "monthly" ? "last12Months" : "month"));
             }}
-          >
-            <option value="daily">按日</option>
-            <option value="monthly">按月</option>
-          </Select>
+            options={[
+              { value: "daily", label: "按日" },
+              { value: "monthly", label: "按月" },
+            ]}
+          />
         </div>
-      </div>
+      </FilterBar>
       {accountsError && (
         <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
       )}
@@ -249,7 +252,7 @@ function CostsContent() {
       {accountsLoading || report.loading ? (
         <LoadingState label="正在读取成本分析…" />
       ) : !accountsReady ? null : !accounts.length ? (
-        <Card>
+        <Panel>
           <EmptyState
             title="先添加 OCI 账号"
             description="连接账号后，可读取该租户的已报告成本。"
@@ -259,11 +262,11 @@ function CostsContent() {
               </LinkButton>
             }
           />
-        </Card>
+        </Panel>
       ) : data ? (
         <div className="stack analytics-content flex flex-col gap-5" aria-busy={report.refreshing}>
           {totals.length > 0 ? (
-            <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 max-sm:grid-cols-1">
+            <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4 max-sm:grid-cols-1">
               {totals.map((total) => (
                 <MetricCard
                   key={total.currency || "unknown"}
@@ -287,7 +290,7 @@ function CostsContent() {
               ))}
             </div>
           ) : (
-            <Card>
+            <Panel>
               <EmptyState
                 title={
                   rows.length
@@ -302,12 +305,12 @@ function CostsContent() {
                     : "没有记录不等同于零费用；请留意上报延迟并调整时间范围。"
                 }
               />
-            </Card>
+            </Panel>
           )}
           {currencies.map((currency) => {
             const chartPoints = costChartPoints(data, points, currency);
             return (
-              <Card
+              <Panel
                 key={currency}
                 title={`${currency} 成本趋势`}
                 description={`${subtotalLabel} · ${granularity === "monthly" ? "按月" : "按日"}统计`}
@@ -326,11 +329,11 @@ function CostsContent() {
                     description="金额缺失的日期保留为空，不自动补零。"
                   />
                 )}
-              </Card>
+              </Panel>
             );
           })}
-          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
-            <h2>服务分类</h2>
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="m-0 text-base font-semibold">服务分类</h2>
             <span className="muted small text-xs text-muted-foreground">按币种分别汇总</span>
           </div>
           <TablePanel
@@ -371,8 +374,8 @@ function CostsContent() {
               </TableBody>
             </Table>
           </TablePanel>
-          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
-            <h2>资源明细</h2>
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="m-0 text-base font-semibold">资源明细</h2>
           </div>
           <TablePanel
             label="资源成本明细"

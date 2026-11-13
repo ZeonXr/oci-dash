@@ -1,4 +1,5 @@
 "use client";
+import { DetailList, DetailTerm, DetailValue } from "@/components/view-layout";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -37,10 +38,10 @@ import { SortableHeader, TablePanel } from "@/components/table";
 import { RegionTag } from "@/components/region-label";
 import { CodeTag } from "@/components/code-tag";
 import {
-  Badge,
+  StatusBadge,
   Button,
   RefreshButton,
-  Card,
+  Panel,
   CopyButton,
   EmptyState,
   ErrorState,
@@ -124,7 +125,7 @@ function RenameDialog({
           <Button
             type="submit"
             form="rename-form"
-            variant="primary"
+            variant="default"
             disabled={name.trim() === instance.displayName}
             loading={action.pending}
           >
@@ -248,7 +249,7 @@ export default function InstanceDetailPage() {
     });
   const latestMetrics = instanceMetrics(metrics.data);
   const metricCards = (
-    <div className="mb-6 grid grid-cols-4 gap-4 max-[620px]:grid-cols-2 max-[620px]:gap-2">
+    <div className="mb-6 grid grid-cols-4 gap-4 max-sm:grid-cols-2 max-sm:gap-2">
       <MetricCard
         label="CPU 使用率"
         value={percent(latestMetrics.cpu?.value)}
@@ -397,7 +398,7 @@ export default function InstanceDetailPage() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button asChild variant="primary">
+        <Button asChild variant="default">
           <Link
             href={`/instances/${encodeURIComponent(instance.id)}/console`}
             target="_blank"
@@ -447,78 +448,79 @@ export default function InstanceDetailPage() {
           {tab === "overview" && (
             <>
               {metricCards}
-              <div className="grid grid-cols-2 gap-6 max-[900px]:gap-4 max-[620px]:grid-cols-1 *:min-w-0 mb-6">
-                <Card title="基本信息">
-                  <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-3 max-[620px]:text-xs">
-                    <dt>账号</dt>
-                    <dd>
+              <div className="grid grid-cols-2 gap-6 max-lg:gap-4 max-sm:grid-cols-1 *:min-w-0 mb-6">
+                <Panel title="基本信息">
+                  <DetailList>
+                    <DetailTerm>账号</DetailTerm>
+                    <DetailValue>
                       <Link
                         href="/settings/accounts"
                         className="inline-flex items-center gap-1 text-sm text-primary hover:underline underline-offset-4"
                       >
                         {instance.accountName}
                       </Link>
-                    </dd>
-                    <dt>区域 / 可用域</dt>
-                    <dd>
+                    </DetailValue>
+                    <DetailTerm>区域 / 可用域</DetailTerm>
+                    <DetailValue>
                       <RegionTag region={instance.region} />
                       <CodeTag title={instance.availabilityDomain}>
                         {instance.availabilityDomain.split(":").at(-1) ||
                           instance.availabilityDomain}
                       </CodeTag>
-                    </dd>
-                    <dt>规格</dt>
-                    <dd>
+                    </DetailValue>
+                    <DetailTerm>规格</DetailTerm>
+                    <DetailValue>
                       <CodeTag>{instance.shape}</CodeTag>
                       <span className="text-muted-foreground text-xs">
                         {number(instance.ocpus, 1)} OCPU / {number(instance.memoryGb, 1)} GB
                       </span>
-                    </dd>
-                    <dt>操作系统</dt>
-                    <dd>{instance.os || "未提供"}</dd>
-                    <dt>实例 OCID</dt>
-                    <dd>
+                    </DetailValue>
+                    <DetailTerm>操作系统</DetailTerm>
+                    <DetailValue>{instance.os || "未提供"}</DetailValue>
+                    <DetailTerm>实例 OCID</DetailTerm>
+                    <DetailValue>
                       <CodeTag title={instance.id}>{shortId(instance.id)}</CodeTag>
                       <CopyButton value={instance.id} />
-                    </dd>
-                    <dt>区间</dt>
-                    <dd>
+                    </DetailValue>
+                    <DetailTerm>区间</DetailTerm>
+                    <DetailValue>
                       <CodeTag title={instance.compartmentId}>
                         {shortId(instance.compartmentId)}
                       </CodeTag>
                       <CopyButton value={instance.compartmentId} />
-                    </dd>
-                    <dt>标签</dt>
-                    <dd>
+                    </DetailValue>
+                    <DetailTerm>标签</DetailTerm>
+                    <DetailValue>
                       {Object.keys(instance.tags).length ? (
                         Object.entries(instance.tags)
                           .slice(0, 8)
                           .map(([key, value]) => (
-                            <Badge key={key} tone="info">
+                            <StatusBadge key={key} tone="info">
                               {key}: {value}
-                            </Badge>
+                            </StatusBadge>
                           ))
                       ) : (
                         <span className="text-muted-foreground">暂无标签</span>
                       )}
-                    </dd>
-                  </dl>
+                    </DetailValue>
+                  </DetailList>
                   <p className="text-muted-foreground text-xs mt-5">
                     创建于 {formatDate(instance.createdAt, true)}
                   </p>
-                </Card>
-                <Card
+                </Panel>
+                <Panel
                   title="性能趋势"
                   action={
                     <Select
                       aria-label="监控时间范围"
                       value={range}
                       onValueChange={(value) => setRange(value)}
-                    >
-                      <option value="1h">最近 1 小时</option>
-                      <option value="24h">最近 24 小时</option>
-                      <option value="7d">过去 7 天</option>
-                    </Select>
+                      options={[
+                        { value: "1h", label: "最近 1 小时" },
+                        { value: "24h", label: "最近 24 小时" },
+                        { value: "7d", label: "过去 7 天" },
+                      ]}
+                    />
                   }
                 >
                   <MetricsChart
@@ -526,18 +528,18 @@ export default function InstanceDetailPage() {
                     loading={metrics.loading}
                     error={metrics.error}
                   />
-                </Card>
-                <Card
+                </Panel>
+                <Panel
                   title="网络"
-                  action={<Badge>{publicBindings(instance).length} 个公网地址</Badge>}
+                  action={<StatusBadge>{publicBindings(instance).length} 个公网地址</StatusBadge>}
                 >
                   <div className="row flex items-center gap-2.5">
                     <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <Network size={19} />
                     </span>
-                    <div className="flex min-w-0 flex-col [&>strong]:font-medium [&>span]:text-xs [&>span]:text-muted-foreground">
-                      <strong>{instance.vnics.length} 个虚拟网卡</strong>
-                      <span>
+                    <div className="flex min-w-0 flex-col">
+                      <strong className="font-medium">{instance.vnics.length} 个虚拟网卡</strong>
+                      <span className="text-xs text-muted-foreground">
                         {privateVnic && privateIp ? (
                           <IpAddressButton
                             target={targetForBinding(privateVnic, privateIp, "private")}
@@ -563,17 +565,20 @@ export default function InstanceDetailPage() {
                       查看网络详情 <ArrowUpRight size={14} />
                     </button>
                   </div>
-                </Card>
-                <Card title="存储" action={<Badge>{instance.bootVolumes.length} 个启动卷</Badge>}>
+                </Panel>
+                <Panel
+                  title="存储"
+                  action={<StatusBadge>{instance.bootVolumes.length} 个启动卷</StatusBadge>}
+                >
                   <div className="row flex items-center gap-2.5">
                     <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <HardDrive size={19} />
                     </span>
-                    <div className="flex min-w-0 flex-col [&>strong]:font-medium [&>span]:text-xs [&>span]:text-muted-foreground">
-                      <strong>
+                    <div className="flex min-w-0 flex-col">
+                      <strong className="font-medium">
                         {number(instance.bootVolumes.reduce((sum, v) => sum + v.sizeGb, 0))} GiB
                       </strong>
-                      <span>
+                      <span className="text-xs text-muted-foreground">
                         {instance.bootVolumes[0]
                           ? `${instance.bootVolumes[0].vpusPerGb} VPU / GB`
                           : "暂无启动卷"}
@@ -591,12 +596,12 @@ export default function InstanceDetailPage() {
                       查看存储详情 <ArrowUpRight size={14} />
                     </button>
                   </div>
-                </Card>
+                </Panel>
               </div>
-              <Card className="recent-task-summary [&_h2]:text-sm [&_h2]:font-medium">
+              <Panel className="recent-task-summary">
                 <div className="row flex items-center gap-2.5 flex-wrap">
                   <ListChecks size={17} className="text-muted-foreground" />
-                  <h2>近期任务</h2>
+                  <h2 className="text-sm font-medium">近期任务</h2>
                   {instanceJobs[0] ? (
                     <>
                       <Link href={taskHref(instanceJobs[0].id)} className="min-w-0 flex-1 text-xs">
@@ -617,13 +622,13 @@ export default function InstanceDetailPage() {
                     查看全部 <ChevronRight size={14} />
                   </button>
                 </div>
-              </Card>
+              </Panel>
             </>
           )}
           {tab === "monitoring" && (
             <>
               {metricCards}
-              <Card
+              <Panel
                 title="监控指标"
                 action={
                   <div className="row flex items-center gap-2.5">
@@ -631,19 +636,21 @@ export default function InstanceDetailPage() {
                       aria-label="选择监控指标"
                       value={mode}
                       onValueChange={(value) => setMode(value as "cpu" | "network")}
-                    >
-                      <option value="cpu">CPU 使用率</option>
-                      <option value="network">网络流量</option>
-                    </Select>
+                      options={[
+                        { value: "cpu", label: "CPU 使用率" },
+                        { value: "network", label: "网络流量" },
+                      ]}
+                    />
                     <Select
                       aria-label="监控时间范围"
                       value={range}
                       onValueChange={(value) => setRange(value)}
-                    >
-                      <option value="1h">最近 1 小时</option>
-                      <option value="24h">最近 24 小时</option>
-                      <option value="7d">过去 7 天</option>
-                    </Select>
+                      options={[
+                        { value: "1h", label: "最近 1 小时" },
+                        { value: "24h", label: "最近 24 小时" },
+                        { value: "7d", label: "过去 7 天" },
+                      ]}
+                    />
                     <RefreshButton
                       label="刷新监控"
                       onClick={metrics.reload}
@@ -658,7 +665,7 @@ export default function InstanceDetailPage() {
                   error={metrics.error}
                   mode={mode}
                 />
-              </Card>
+              </Panel>
             </>
           )}
           {tab === "network" && <NetworkPanel instance={instance} onAddress={openIp} />}{" "}
@@ -671,13 +678,13 @@ export default function InstanceDetailPage() {
           )}{" "}
           {tab === "storage" && <StoragePanel instance={instance} />}{" "}
           {tab === "activity" && (
-            <Card
+            <Panel
               title="任务与活动"
               action={<RefreshButton onClick={jobs.reload} updatedAt={jobs.updatedAt} />}
             >
               {jobs.error && <ErrorState message={jobs.error} retry={jobs.reload} />}
               {taskRows()}
-            </Card>
+            </Panel>
           )}
         </TabsContent>
       </Tabs>

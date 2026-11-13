@@ -8,13 +8,13 @@ import { CodeTag } from "./code-tag";
 import { taskHref } from "./format";
 import { getIpDetails, type IpDetailsTarget } from "./ip-address";
 import { RegionTag } from "./region-label";
-import { Alert, Badge, Button, CopyButton, ErrorState, Modal } from "./ui";
+import { Alert, StatusBadge, Button, CopyButton, ErrorState, Modal } from "./ui";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
-      <span>{label}</span>
-      <strong className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-right max-[420px]:max-w-[72%]">
+    <div className="flex min-w-0 items-start justify-between gap-3 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <strong className="flex min-w-0 max-w-3/4 flex-wrap items-center justify-end gap-2 text-right font-medium wrap-anywhere">
         {children}
       </strong>
     </div>
@@ -23,7 +23,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 function Identifier({ value, label }: { value: string; label: string }) {
   return (
-    <span className="flex min-w-0 items-center gap-1.5 *:first:min-w-0 *:last:shrink-0">
+    <span className="flex min-w-0 items-center gap-2">
       <CodeTag>{value}</CodeTag>
       <CopyButton value={value} label={`复制${label}`} />
     </span>
@@ -88,7 +88,7 @@ export function IpDetailsDialog({
             关闭
           </Button>
           <Button
-            variant="primary"
+            variant="default"
             disabled={!operation || Boolean(reason)}
             title={reason}
             loading={action.pending}
@@ -100,13 +100,13 @@ export function IpDetailsDialog({
       }
     >
       <div className="flex flex-col gap-5">
-        <div className="confirm-summary flex flex-col gap-2 rounded-lg bg-muted/50 px-4 py-3 [&>div]:flex [&>div]:items-center [&>div]:justify-between [&>div]:gap-3 [&>div]:text-xs [&>div>span]:shrink-0 [&>div>span]:text-muted-foreground [&_strong]:font-medium [&_strong]:wrap-anywhere max-[420px]:[&>div]:items-start">
+        <div className="confirm-summary flex flex-col gap-3 rounded-lg bg-muted/50 px-4 py-3">
           <Row label="IP 地址">
             <Identifier value={target.address} label="IP 地址" />
           </Row>
           <Row label="类型">
             {addressType}
-            {target.kind === "public" && binding?.protected && <Badge>已保护</Badge>}
+            {target.kind === "public" && binding?.protected && <StatusBadge>已保护</StatusBadge>}
           </Row>
           <Row label="实例">{instance?.displayName || "实例信息不可用"}</Row>
           {instance && (
@@ -118,7 +118,7 @@ export function IpDetailsDialog({
             {vnic ? (
               <>
                 <CodeTag>{vnic.name || vnic.id}</CodeTag>
-                <Badge>{vnic.primary ? "主网卡" : "附加网卡"}</Badge>
+                <StatusBadge>{vnic.primary ? "主网卡" : "附加网卡"}</StatusBadge>
               </>
             ) : (
               "网卡信息不可用"
@@ -147,13 +147,13 @@ export function IpDetailsDialog({
           <Alert>更换将释放此私网地址绑定的临时公网 IP，旧地址释放后无法保证找回。</Alert>
         )}
         {action.error && <ErrorState message={action.error} />}
-        <details className="border-t pt-3 [&>summary]:cursor-pointer [&>summary]:text-xs [&>summary]:text-muted-foreground [&_dl]:mt-3 [&_dl]:grid [&_dl]:gap-2 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:mb-1.5 [&_dd]:min-w-0">
-          <summary>资源标识</summary>
-          <dl>
+        <details className="border-t pt-3">
+          <summary className="cursor-pointer text-sm text-muted-foreground">资源标识</summary>
+          <dl className="mt-3 grid gap-3">
             {identifiers.map(([label, value]) => (
               <div key={label}>
-                <dt>{label}</dt>
-                <dd>
+                <dt className="text-xs text-muted-foreground">{label}</dt>
+                <dd className="mt-1 min-w-0">
                   <Identifier value={value} label={label} />
                 </dd>
               </div>

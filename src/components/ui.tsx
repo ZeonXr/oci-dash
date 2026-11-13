@@ -1,10 +1,7 @@
 "use client";
 
 import {
-  Children,
-  Fragment,
   createContext,
-  isValidElement,
   useContext,
   useEffect,
   useId,
@@ -25,9 +22,11 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
+import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { refreshTooltip } from "./format";
-import { Button as UiButton } from "./ui/button";
+import { Button } from "./ui/button";
+export { Button } from "./ui/button";
 import { Badge as UiBadge } from "./ui/badge";
 import {
   Card as UiCard,
@@ -57,18 +56,7 @@ import {
 } from "./ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-type ButtonProps = Omit<ComponentProps<typeof UiButton>, "variant"> & {
-  variant?: "primary" | "secondary" | "ghost" | "danger";
-  loading?: boolean;
-  icon?: ReactNode;
-  loadingIcon?: ReactNode;
-};
-const buttonVariant = {
-  primary: "default",
-  secondary: "outline",
-  ghost: "ghost",
-  danger: "destructive",
-} as const;
+type ButtonProps = ComponentProps<typeof Button>;
 
 export function Spinner({ size = 16 }: { size?: number }) {
   return (
@@ -76,47 +64,11 @@ export function Spinner({ size = 16 }: { size?: number }) {
   );
 }
 
-export function Button({
-  children,
-  variant = "secondary",
-  loading,
-  icon,
-  loadingIcon,
-  ...props
-}: ButtonProps) {
-  return (
-    <UiButton
-      {...props}
-      type={props.type ?? "button"}
-      variant={buttonVariant[variant]}
-      disabled={props.disabled || loading}
-      aria-busy={loading || undefined}
-    >
-      {props.asChild ? (
-        children
-      ) : (
-        <>
-          {(icon || loading) && (
-            <span
-              data-icon="inline-start"
-              aria-hidden="true"
-              className="inline-flex size-4 shrink-0 items-center justify-center [&>svg]:size-full"
-            >
-              {loading ? (loadingIcon ?? <Spinner />) : icon}
-            </span>
-          )}
-          {children}
-        </>
-      )}
-    </UiButton>
-  );
-}
-
 export function RefreshButton({
   label,
   updatedAt,
   onClick,
-  variant = "secondary",
+  variant = "outline",
   ...props
 }: Omit<ButtonProps, "icon" | "loadingIcon" | "loading" | "title" | "children"> & {
   label?: string;
@@ -183,7 +135,7 @@ export function IconButton({
   );
 }
 
-export function Card({
+export function Panel({
   children,
   title,
   description,
@@ -228,7 +180,7 @@ export function PageHeader({
   return (
     <div
       data-slot="page-heading"
-      className="page-heading mb-6.5 flex flex-wrap items-start justify-between gap-4"
+      className="page-heading mb-6 flex flex-wrap items-start justify-between gap-4"
     >
       <div className="min-w-0">
         {eyebrow && (
@@ -236,7 +188,7 @@ export function PageHeader({
             {eyebrow}
           </div>
         )}
-        <h1 className="flex flex-wrap items-center gap-3 text-2xl leading-[1.4] font-semibold text-foreground">
+        <h1 className="flex flex-wrap items-center gap-3 text-2xl leading-tight font-semibold text-foreground">
           {title}
         </h1>
         {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
@@ -291,36 +243,13 @@ export function Field({
   );
 }
 
-type Option = { value: string; label: ReactNode; disabled: boolean };
-function selectOptions(children: ReactNode): Option[] {
-  return Children.toArray(children).flatMap((child) => {
-    if (
-      !isValidElement<{
-        value?: string | number;
-        label?: string;
-        disabled?: boolean;
-        children?: ReactNode;
-      }>(child)
-    )
-      return [];
-    if (child.type === Fragment || child.type === "optgroup")
-      return selectOptions(child.props.children);
-    if (child.type !== "option") return [];
-    return [
-      {
-        value: String(child.props.value ?? child.props.children ?? ""),
-        label: child.props.label ?? child.props.children,
-        disabled: Boolean(child.props.disabled),
-      },
-    ];
-  });
-}
+export type SelectOption = { value: string | number; label: ReactNode; disabled?: boolean };
 
 type SelectProps = Omit<
   ComponentProps<typeof SelectTrigger>,
   "children" | "value" | "defaultValue" | "onChange" | "onSelect" | "dir"
 > & {
-  children: ReactNode;
+  options: readonly SelectOption[];
   value?: string | number;
   defaultValue?: string | number;
   onValueChange?: (value: string) => void;
@@ -329,9 +258,9 @@ type SelectProps = Omit<
   form?: string;
 };
 
-/** Existing option declarations are translated into the accessible shadcn Select. */
+/** Compact data-driven options rendered by the shared shadcn Select. */
 export function Select({
-  children,
+  options,
   value,
   defaultValue,
   onValueChange,
@@ -346,7 +275,6 @@ export function Select({
   const emptyValue = `__empty_${useId()}`;
   const [localValue, setLocalValue] = useState(String(defaultValue ?? ""));
   const selected = value === undefined ? localValue : String(value);
-  const options = selectOptions(children);
   return (
     <UiSelect
       value={selected === "" ? emptyValue : selected}
@@ -372,8 +300,8 @@ export function Select({
         {options.map((option) => (
           <SelectItem
             key={option.value}
-            value={option.value === "" ? emptyValue : option.value}
-            data-value={option.value}
+            value={option.value === "" ? emptyValue : String(option.value)}
+            data-value={String(option.value)}
             disabled={option.disabled}
           >
             {option.label}
@@ -407,13 +335,17 @@ export function Alert({
 }
 
 type BadgeTone = "neutral" | "info" | "success" | "warning" | "danger";
-const badgeTones: Record<BadgeTone, string> = {
-  neutral: "",
-  info: "bg-primary/10 text-primary",
-  success: "bg-success-bg text-success",
-  warning: "bg-warning-bg text-warning",
-  danger: "bg-destructive/10 text-destructive",
-};
+const statusBadgeVariants = cva("", {
+  variants: {
+    tone: {
+      neutral: "",
+      info: "bg-primary/10 text-primary",
+      success: "bg-success-bg text-success",
+      warning: "bg-warning-bg text-warning",
+      danger: "bg-destructive/10 text-destructive",
+    },
+  },
+});
 const statuses: Record<string, [string, BadgeTone]> = {
   RUNNING: ["运行中", "success"],
   STOPPED: ["已停止", "neutral"],
@@ -439,20 +371,20 @@ const statuses: Record<string, [string, BadgeTone]> = {
 export function Status({ value }: { value: string }) {
   const [label, tone] = statuses[value] ?? [value, "neutral"];
   return (
-    <Badge tone={tone}>
+    <StatusBadge tone={tone}>
       <span className="size-1.5 rounded-full bg-current" />
       {label}
-    </Badge>
+    </StatusBadge>
   );
 }
-export function Badge({
+export function StatusBadge({
   children,
   tone = "neutral",
   className,
   ...props
 }: Omit<ComponentProps<typeof UiBadge>, "variant"> & { tone?: BadgeTone }) {
   return (
-    <UiBadge {...props} variant="secondary" className={cn(badgeTones[tone], className)}>
+    <UiBadge {...props} variant="secondary" className={statusBadgeVariants({ tone, className })}>
       {children}
     </UiBadge>
   );
@@ -667,7 +599,7 @@ export function Modal({
         </div>
         {footer && <DialogFooter className="mx-0 mb-0 shrink-0">{footer}</DialogFooter>}
         <DialogClose asChild>
-          <UiButton
+          <Button
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -676,7 +608,7 @@ export function Modal({
             aria-label="关闭对话框"
           >
             <X />
-          </UiButton>
+          </Button>
         </DialogClose>
       </DialogContent>
     </Dialog>
@@ -689,18 +621,23 @@ export function Pagination({
   total,
   onPage,
   onPageSize,
+  className,
 }: {
   page: number;
   pageSize: number;
   total: number;
   onPage: (page: number) => void;
   onPageSize?: (size: number) => void;
+  className?: string;
 }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const current = Math.max(1, Math.min(page, pages));
   return (
     <nav
-      className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground"
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground",
+        className,
+      )}
       aria-label="表格分页"
     >
       <span>
@@ -714,11 +651,8 @@ export function Pagination({
             aria-label="每页条数"
             value={pageSize}
             onValueChange={(value) => onPageSize(Number(value))}
-          >
-            <option value={10}>每页 10 条</option>
-            <option value={20}>每页 20 条</option>
-            <option value={50}>每页 50 条</option>
-          </Select>
+            options={[10, 20, 50].map((value) => ({ value, label: `每页 ${value} 条` }))}
+          />
         )}
         <IconButton label="上一页" disabled={current <= 1} onClick={() => onPage(current - 1)}>
           <ChevronLeft />

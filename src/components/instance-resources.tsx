@@ -1,4 +1,5 @@
 "use client";
+import { DetailList, DetailTerm, DetailValue } from "@/components/view-layout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,10 +25,10 @@ import { send, useAction, useResource } from "./api";
 import { number, shortId, taskHref } from "./format";
 import {
   Alert,
-  Badge,
+  StatusBadge,
   Button,
   RefreshButton,
-  Card,
+  Panel,
   CopyButton,
   EmptyState,
   ErrorState,
@@ -52,18 +53,18 @@ export function NetworkPanel({
   return (
     <div className="flex flex-col gap-5">
       {!instance.vnics.length ? (
-        <Card>
+        <Panel>
           <EmptyState title="没有网卡信息" description="可在账号页刷新资源，重新读取网络信息。" />
-        </Card>
+        </Panel>
       ) : (
         instance.vnics.map((vnic) => (
-          <Card
+          <Panel
             key={vnic.id}
             title={vnic.name || "虚拟网卡"}
             action={
-              <Badge tone={vnic.primary ? "info" : "neutral"}>
+              <StatusBadge tone={vnic.primary ? "info" : "neutral"}>
                 {vnic.primary ? "主网卡" : "附加网卡"}
-              </Badge>
+              </StatusBadge>
             }
           >
             <div className="row flex items-center gap-2.5 flex-wrap text-xs text-muted-foreground mb-4">
@@ -81,7 +82,7 @@ export function NetworkPanel({
               hasRows={vnic.privateIps.length > 0}
               empty={<EmptyState title="此网卡没有 IPv4 地址信息" />}
             >
-              <Table className="min-w-[730px]">
+              <Table className="min-w-182.5">
                 <TableHeader>
                   <TableRow>
                     <TableHead scope="col">私网 IPv4</TableHead>
@@ -124,10 +125,10 @@ export function NetworkPanel({
                       </TableCell>
                       <TableCell>
                         {binding.protected || binding.lifetime === "RESERVED" ? (
-                          <Badge>
+                          <StatusBadge>
                             <Lock size={11} />
                             受保护
-                          </Badge>
+                          </StatusBadge>
                         ) : (
                           <span className="text-muted-foreground">
                             {binding.publicIp ? "未保护" : "—"}
@@ -183,7 +184,7 @@ export function NetworkPanel({
                 分配 IPv6
               </Button>
             </div>
-          </Card>
+          </Panel>
         ))
       )}
       {operation && <OperationDialog {...operation} onClose={() => setOperation(null)} />}
@@ -239,7 +240,7 @@ function VolumeDialog({
           <Button
             form="volume-form"
             type="submit"
-            variant="primary"
+            variant="default"
             disabled={!ack || (size === volume.sizeGb && vpu === volume.vpusPerGb)}
             loading={action.pending}
           >
@@ -264,17 +265,15 @@ function VolumeDialog({
           />
         </Field>
         <Field label="性能 (VPU / GB)" required>
-          <Select value={vpu} onValueChange={(value) => setVpu(Number(value))}>
-            {Array.from(
+          <Select
+            value={vpu}
+            onValueChange={(value) => setVpu(Number(value))}
+            options={Array.from(
               new Set([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, volume.vpusPerGb]),
             )
               .sort((a, b) => a - b)
-              .map((value) => (
-                <option key={value} value={value}>
-                  {value} VPU / GB
-                </option>
-              ))}
-          </Select>
+              .map((value) => ({ value, label: `${value} VPU / GB` }))}
+          />
         </Field>
         <Alert>容量和性能调整可能影响费用；扩容后可能还需要在操作系统内扩展分区。</Alert>
         <label className="flex items-center gap-2 text-sm">
@@ -293,43 +292,40 @@ export function StoragePanel({ instance }: { instance: InstanceSummary }) {
       <div className="flex flex-col gap-5">
         {instance.bootVolumes.length ? (
           instance.bootVolumes.map((volume) => (
-            <Card
-              key={volume.id}
-
-              title={volume.name}
-              action={<Status value={volume.state} />}
-            >
+            <Panel key={volume.id} title={volume.name} action={<Status value={volume.state} />}>
               <div className="row flex items-center gap-2.5">
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <HardDrive size={20} />
                 </span>
-                <div className="flex min-w-0 flex-col [&>strong]:font-medium [&>span]:text-xs [&>span]:text-muted-foreground">
-                  <strong>启动卷</strong>
-                  <span className="font-mono tabular-nums">
+                <div className="flex min-w-0 flex-col">
+                  <strong className="font-medium">启动卷</strong>
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
                     {shortId(volume.id)} <CopyButton value={volume.id} />
                   </span>
                 </div>
               </div>
-              <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-3 max-[620px]:text-xs">
-                <dt>容量</dt>
-                <dd>{number(volume.sizeGb)} GiB</dd>
-                <dt>配置性能</dt>
-                <dd>{volume.vpusPerGb} VPU / GB</dd>
-                <dt>区域</dt>
-                <dd>{volume.region}</dd>
-                <dt>挂载状态</dt>
-                <dd>{volume.attachmentId ? "已附加到当前实例" : "未提供挂载信息"}</dd>
-              </dl>
+              <DetailList>
+                <DetailTerm>容量</DetailTerm>
+                <DetailValue>{number(volume.sizeGb)} GiB</DetailValue>
+                <DetailTerm>配置性能</DetailTerm>
+                <DetailValue>{volume.vpusPerGb} VPU / GB</DetailValue>
+                <DetailTerm>区域</DetailTerm>
+                <DetailValue>{volume.region}</DetailValue>
+                <DetailTerm>挂载状态</DetailTerm>
+                <DetailValue>
+                  {volume.attachmentId ? "已附加到当前实例" : "未提供挂载信息"}
+                </DetailValue>
+              </DetailList>
               <Button onClick={() => setEditing(volume)}>调整容量与性能</Button>
-            </Card>
+            </Panel>
           ))
         ) : (
-          <Card>
+          <Panel>
             <EmptyState
               title="没有已挂载启动卷"
               description="可在账号页刷新资源，重新读取启动卷信息。"
             />
-          </Card>
+          </Panel>
         )}
       </div>
       {editing && (
@@ -416,7 +412,7 @@ function RuleDialog({
           <Button
             type="submit"
             form="security-rule-form"
-            variant="primary"
+            variant="default"
             loading={action.pending}
           >
             添加规则
@@ -428,48 +424,51 @@ function RuleDialog({
         <Alert tone="info">
           规则会作用于此{group.kind === "nsg" ? "网络安全组" : "安全列表"}关联的所有资源。
         </Alert>
-        <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
+        <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
           <Field label="方向">
             <Select
               value={form.direction}
               onValueChange={(value) =>
                 setForm({ ...form, direction: value as "INGRESS" | "EGRESS" })
               }
-            >
-              <option value="INGRESS">入站</option>
-              <option value="EGRESS">出站</option>
-            </Select>
+              options={[
+                { value: "INGRESS", label: "入站" },
+                { value: "EGRESS", label: "出站" },
+              ]}
+            />
           </Field>
           <Field label="协议">
             <Select
               value={form.protocol}
               onValueChange={(value) => setForm({ ...form, protocol: value })}
-            >
-              <option value="6">TCP</option>
-              <option value="17">UDP</option>
-              <option value="1">ICMP</option>
-              <option value="58">ICMPv6</option>
-              <option value="all">所有协议</option>
-            </Select>
+              options={[
+                { value: "6", label: "TCP" },
+                { value: "17", label: "UDP" },
+                { value: "1", label: "ICMP" },
+                { value: "58", label: "ICMPv6" },
+                { value: "all", label: "所有协议" },
+              ]}
+            />
           </Field>
-          <Field label="地址类型" className="col-span-2 max-[620px]:col-span-1">
+          <Field label="地址类型" className="col-span-2 max-sm:col-span-1">
             <Select
               value={form.peerType}
               onValueChange={(value) => setForm({ ...form, peerType: value })}
-            >
-              <option value="CIDR_BLOCK">CIDR 地址段</option>
-              {group.kind === "nsg" && (
-                <option value="NETWORK_SECURITY_GROUP">网络安全组 OCID</option>
-              )}
-              {form.direction === "EGRESS" && (
-                <option value="SERVICE_CIDR_BLOCK">OCI 服务 CIDR</option>
-              )}
-            </Select>
+              options={[
+                { value: "CIDR_BLOCK", label: "CIDR 地址段" },
+                ...(group.kind === "nsg"
+                  ? [{ value: "NETWORK_SECURITY_GROUP", label: "网络安全组 OCID" }]
+                  : []),
+                ...(form.direction === "EGRESS"
+                  ? [{ value: "SERVICE_CIDR_BLOCK", label: "OCI 服务 CIDR" }]
+                  : []),
+              ]}
+            />
           </Field>
           <Field
             label={form.direction === "INGRESS" ? "来源" : "目标"}
             required
-            className="col-span-2 max-[620px]:col-span-1"
+            className="col-span-2 max-sm:col-span-1"
           >
             <Input
               required
@@ -527,7 +526,7 @@ function RuleDialog({
               </Field>
             </>
           )}
-          <Field label="说明" className="col-span-2 max-[620px]:col-span-1">
+          <Field label="说明" className="col-span-2 max-sm:col-span-1">
             <Input
               value={form.description}
               maxLength={255}
@@ -616,7 +615,7 @@ export function SecurityPanel({
       {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
       {resource.data?.groups.length
         ? resource.data.groups.map((group) => (
-            <Card
+            <Panel
               key={group.id}
               title={group.name}
               description={group.kind === "nsg" ? "网络安全组 (NSG)" : "子网安全列表"}
@@ -637,7 +636,7 @@ export function SecurityPanel({
                 hasRows={group.rules.length > 0}
                 empty={<EmptyState title="此资源中没有安全规则" icon={<ShieldCheck size={25} />} />}
               >
-                <Table className="min-w-[730px]">
+                <Table className="min-w-182.5">
                   <TableHeader>
                     <TableRow>
                       <TableHead scope="col">方向</TableHead>
@@ -652,9 +651,9 @@ export function SecurityPanel({
                     {group.rules.map((rule) => (
                       <TableRow key={rule.id}>
                         <TableCell>
-                          <Badge tone={rule.direction === "INGRESS" ? "info" : "neutral"}>
+                          <StatusBadge tone={rule.direction === "INGRESS" ? "info" : "neutral"}>
                             {rule.direction === "INGRESS" ? "入站" : "出站"}
-                          </Badge>
+                          </StatusBadge>
                         </TableCell>
                         <TableCell>
                           {protocolLabels[rule.protocol] || rule.protocol}
@@ -686,15 +685,15 @@ export function SecurityPanel({
                   </TableBody>
                 </Table>
               </TablePanel>
-            </Card>
+            </Panel>
           ))
         : !resource.error && (
-            <Card>
+            <Panel>
               <EmptyState
                 title="没有可显示的安全规则"
                 description="当前网卡未返回网络安全组或子网安全列表。"
               />
-            </Card>
+            </Panel>
           )}
       {adding && (
         <RuleDialog

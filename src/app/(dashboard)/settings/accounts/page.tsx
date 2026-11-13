@@ -11,10 +11,10 @@ import { useApp } from "@/components/app-provider";
 import { useInventoryRefresh } from "@/components/inventory-refresh";
 import {
   Alert,
-  Badge,
+  StatusBadge,
   Button,
   RefreshButton,
-  Card,
+  Panel,
   EmptyState,
   ErrorState,
   Field,
@@ -100,9 +100,9 @@ export default function AccountsPage() {
   const syncJobs = new Map((resource.data?.syncJobs ?? []).map((job) => [job.accountId, job]));
   return (
     <section className="min-w-0" aria-label="OCI 账号">
-      <div className="settings-account-toolbar mb-5 flex flex-wrap items-center justify-between gap-3 [&_p]:text-xs [&_p]:text-muted-foreground [&_button]:shrink-0">
-        <p>管理 OCI 连接凭据与区域同步范围。</p>
-        <Button variant="primary" onClick={() => setEditing(null)}>
+      <div className="settings-account-toolbar mb-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">管理 OCI 连接凭据与区域同步范围。</p>
+        <Button variant="default" onClick={() => setEditing(null)}>
           <Plus size={16} />
           添加账号
         </Button>
@@ -114,7 +114,7 @@ export default function AccountsPage() {
         {resource.loading ? (
           <LoadingState />
         ) : !resource.data ? null : resource.data.accounts.length ? (
-          <div className="grid grid-cols-3 gap-5 max-[1180px]:grid-cols-2 max-[620px]:grid-cols-1">
+          <div className="grid grid-cols-3 gap-5 max-xl:grid-cols-2 max-sm:grid-cols-1">
             {resource.data.accounts.map((account) => {
               const job = syncJobs.get(account.id);
               const syncing = Boolean(job && pendingSync(job));
@@ -123,30 +123,34 @@ export default function AccountsPage() {
                 (job && ["failed", "interrupted"].includes(job.state) ? job.lastError : null);
               const label = connectionAction(account, job);
               return (
-                <Card
+                <Panel
                   key={account.id}
                   className="account-card"
                   contentClassName="flex flex-1 flex-col gap-4"
                 >
-                  <div className="flex items-center gap-3 **:data-[slot=badge]:shrink-0 [&_h2]:text-sm [&_h2]:wrap-anywhere">
+                  <div className="flex items-center gap-3">
                     <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                       <KeyRound size={20} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <h2>
+                      <h2 className="text-sm wrap-anywhere">
                         <button
                           type="button"
-                          className="inline-flex max-w-full items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-start text-inherit [font:inherit] hover:text-primary [&_span]:min-w-0 [&_svg]:shrink-0 [&_svg]:text-muted-foreground hover:[&_svg]:text-inherit"
+                          className="group inline-flex max-w-full items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-start text-sm font-medium hover:text-primary"
                           aria-label={`查看 ${account.name} 详情`}
                           onClick={() => setViewing(account)}
                         >
-                          <span>{account.name}</span>
-                          <ChevronRight size={15} aria-hidden="true" />
+                          <span className="min-w-0">{account.name}</span>
+                          <ChevronRight
+                            className="shrink-0 text-muted-foreground group-hover:text-inherit"
+                            size={15}
+                            aria-hidden="true"
+                          />
                         </button>
                       </h2>
                     </div>
                     {syncing && job ? (
-                      <Badge tone="info">{connectionLabel(account, job)}</Badge>
+                      <StatusBadge tone="info">{connectionLabel(account, job)}</StatusBadge>
                     ) : (
                       <Status value={account.status} />
                     )}
@@ -188,24 +192,24 @@ export default function AccountsPage() {
                       移除
                     </Button>
                   </div>
-                </Card>
+                </Panel>
               );
             })}
           </div>
         ) : (
-          <Card>
+          <Panel>
             <EmptyState
               icon={<KeyRound size={25} />}
               title="添加你的第一个 OCI 账号"
               description="粘贴 OCI 配置并上传 PEM 私钥文件，即可添加账号。"
               action={
-                <Button variant="primary" onClick={() => setEditing(null)}>
+                <Button variant="default" onClick={() => setEditing(null)}>
                   <Plus size={15} />
                   添加账号
                 </Button>
               }
             />
-          </Card>
+          </Panel>
         )}
       </div>
       {viewing && (
@@ -234,7 +238,7 @@ export default function AccountsPage() {
                 取消
               </Button>
               <Button
-                variant="danger"
+                variant="destructive"
                 disabled={removeName !== removing.name}
                 loading={action.pending}
                 onClick={remove}

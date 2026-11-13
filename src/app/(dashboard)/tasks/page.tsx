@@ -1,5 +1,5 @@
 "use client";
-import { Input } from "@/components/ui/input";
+import { FilterBar, SearchField, filterSelectClassName } from "@/components/view-layout";
 import {
   Table,
   TableHeader,
@@ -11,7 +11,6 @@ import {
 import { Suspense, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
 import type { JobPage } from "@/lib/contracts";
 import { useResource } from "@/components/api";
 import { useApp } from "@/components/app-provider";
@@ -92,44 +91,41 @@ function TasksContent() {
           <ErrorState message={resource.error} retry={resource.reload} />
         </div>
       )}
-      <div className="mb-5 flex flex-wrap items-center gap-2.5 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 *:data-[slot=select-trigger]:max-w-56 max-[620px]:gap-2 max-[620px]:*:data-[slot=select-trigger]:min-w-24 max-[620px]:*:data-[slot=select-trigger]:max-w-none max-[620px]:*:data-[slot=select-trigger]:flex-1">
-        <div className="flex min-w-52 max-w-sm flex-1 items-center gap-2 rounded-lg border bg-card px-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15 [&>svg]:text-muted-foreground [&_input]:border-0 [&_input]:bg-transparent [&_input]:pl-0 [&_input]:shadow-none [&_input]:focus-visible:ring-0 max-[620px]:w-full max-[620px]:max-w-none max-[620px]:basis-full">
-          <Search size={16} />
-          <Input
-            value={query}
-            onChange={(e) => filter("query", e.target.value, true)}
-            maxLength={200}
-            aria-label="搜索任务"
-            placeholder="搜索任务、资源或错误"
-          />
-        </div>
+      <FilterBar>
+        <SearchField
+          value={query}
+          onChange={(e) => filter("query", e.target.value, true)}
+          maxLength={200}
+          aria-label="搜索任务"
+          placeholder="搜索任务、资源或错误"
+        />
         <Select
+          className={filterSelectClassName}
           value={account}
           onValueChange={(value) => filter("accountId", value)}
           aria-label="按账号筛选任务"
-        >
-          <option value="">全部账号</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </Select>
+          options={[
+            { value: "", label: "全部账号" },
+            ...accounts.map((a) => ({ value: a.id, label: a.name })),
+          ]}
+        />
         <Select
+          className={filterSelectClassName}
           value={state}
           onValueChange={(value) => filter("state", value)}
           aria-label="按状态筛选任务"
-        >
-          <option value="">全部状态</option>
-          <option value="queued">等待执行</option>
-          <option value="running">执行中</option>
-          <option value="retrying">等待重试</option>
-          <option value="succeeded">已完成</option>
-          <option value="failed">失败</option>
-          <option value="cancel_requested">正在取消</option>
-          <option value="cancelled">已取消</option>
-          <option value="interrupted">执行中断</option>
-        </Select>
+          options={[
+            { value: "", label: "全部状态" },
+            { value: "queued", label: "等待执行" },
+            { value: "running", label: "执行中" },
+            { value: "retrying", label: "等待重试" },
+            { value: "succeeded", label: "已完成" },
+            { value: "failed", label: "失败" },
+            { value: "cancel_requested", label: "正在取消" },
+            { value: "cancelled", label: "已取消" },
+            { value: "interrupted", label: "执行中断" },
+          ]}
+        />
         {(query || account || state) && (
           <Button
             variant="ghost"
@@ -140,7 +136,7 @@ function TasksContent() {
             重置筛选
           </Button>
         )}
-      </div>
+      </FilterBar>
       <TablePanel
         label="任务列表"
         loading={resource.loading}

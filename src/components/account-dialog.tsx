@@ -144,7 +144,7 @@ export function AccountDialog({
           <Button onClick={onClose} disabled={action.pending}>
             取消
           </Button>
-          <Button form="account-form" type="submit" variant="primary" loading={action.pending}>
+          <Button form="account-form" type="submit" variant="default" loading={action.pending}>
             {account ? "保存更改" : "添加账号"}
           </Button>
         </>
@@ -227,9 +227,10 @@ export function AccountDialog({
               />
             </Field>
             <Field label="API 私钥文件" required>
-              <span className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border p-3.5 text-xs [&_input]:min-w-0 [&_input]:max-w-full [&_input]:flex-1 [&_input]:text-xs">
+              <span className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border p-4 text-xs">
                 <Upload size={18} aria-hidden="true" />
                 <Input
+                  className="min-w-0 max-w-full flex-1 text-xs"
                   type="file"
                   accept=".pem,.key,.txt"
                   required
@@ -244,9 +245,9 @@ export function AccountDialog({
           </>
         )}
         {!account && (
-          <details className="rounded-lg border border-border bg-canvas px-3.5 py-3 text-xs [&>summary]:cursor-pointer [&>summary]:text-primary [&>div]:mt-4">
-            <summary>更多选项</summary>
-            <div className="flex flex-col gap-3">
+          <details className="rounded-lg border border-border bg-canvas px-4 py-3 text-xs">
+            <summary className="cursor-pointer text-primary">更多选项</summary>
+            <div className="mt-4 flex flex-col gap-3">
               {nameField}
               {regionsField}
             </div>

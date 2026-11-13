@@ -1,4 +1,5 @@
 "use client";
+import { DetailList, DetailTerm, DetailValue } from "@/components/view-layout";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -19,7 +20,7 @@ import {
   Alert,
   Button,
   RefreshButton,
-  Card,
+  Panel,
   CopyButton,
   EmptyState,
   ErrorState,
@@ -117,7 +118,7 @@ export default function TaskDetailPage() {
         {job.waitingForCompletion && isJobPending(job) && (
           <Alert tone="info">OCI 仍在处理操作，系统会继续核对结果。</Alert>
         )}
-        <Card>
+        <Panel>
           <div className="mb-5 flex flex-wrap items-center gap-2.5">
             {stages.map((label, index) => (
               <div
@@ -130,14 +131,14 @@ export default function TaskDetailPage() {
               </div>
             ))}
           </div>
-          <dl className="grid grid-cols-[105px_minmax(0,1fr)] gap-x-4 gap-y-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:flex [&_dd]:min-w-0 [&_dd]:flex-wrap [&_dd]:items-center [&_dd]:gap-1.5 [&_dd]:wrap-anywhere max-[620px]:grid-cols-[85px_minmax(0,1fr)] max-[620px]:gap-3 max-[620px]:text-xs">
-            <dt>任务 ID</dt>
-            <dd className="font-mono tabular-nums">
+          <DetailList>
+            <DetailTerm>任务 ID</DetailTerm>
+            <DetailValue className="font-mono tabular-nums">
               {job.id}
               <CopyButton value={job.id} />
-            </dd>
-            <dt>关联资源</dt>
-            <dd>
+            </DetailValue>
+            <DetailTerm>关联资源</DetailTerm>
+            <DetailValue>
               {job.resourceId ? (
                 <Link
                   href={instanceHref(job.resourceId)}
@@ -148,37 +149,37 @@ export default function TaskDetailPage() {
               ) : (
                 "账号级操作"
               )}
-            </dd>
-            <dt>执行次数</dt>
-            <dd>
+            </DetailValue>
+            <DetailTerm>执行次数</DetailTerm>
+            <DetailValue>
               {job.attempt} / {job.maxAttempts}
-            </dd>
+            </DetailValue>
             {job.completionDeadlineAt && isJobPending(job) && (
               <>
-                <dt>本轮完成期限</dt>
-                <dd>{formatDate(job.completionDeadlineAt, true)}</dd>
+                <DetailTerm>本轮完成期限</DetailTerm>
+                <DetailValue>{formatDate(job.completionDeadlineAt, true)}</DetailValue>
               </>
             )}
-            <dt>开始时间</dt>
-            <dd>{formatDate(job.startedAt, true)}</dd>
-            <dt>结束时间</dt>
-            <dd>{formatDate(job.finishedAt, true)}</dd>
+            <DetailTerm>开始时间</DetailTerm>
+            <DetailValue>{formatDate(job.startedAt, true)}</DetailValue>
+            <DetailTerm>结束时间</DetailTerm>
+            <DetailValue>{formatDate(job.finishedAt, true)}</DetailValue>
             {job.nextRunAt && (
               <>
-                <dt>下次执行</dt>
-                <dd>{formatDate(job.nextRunAt, true)}</dd>
+                <DetailTerm>下次执行</DetailTerm>
+                <DetailValue>{formatDate(job.nextRunAt, true)}</DetailValue>
               </>
             )}
-          </dl>
-        </Card>
+          </DetailList>
+        </Panel>
         {job.result && (
-          <Card title="执行结果">
+          <Panel title="执行结果">
             <pre className="max-w-full overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/50 p-3 text-xs wrap-anywhere">
               {JSON.stringify(job.result, null, 2)}
             </pre>
-          </Card>
+          </Panel>
         )}
-        <Card
+        <Panel
           title="执行日志"
           description={
             isJobPending(job)
@@ -207,14 +208,20 @@ export default function TaskDetailPage() {
                     )}
                   </div>
                   <div>
-                    <div className="mb-1 flex items-baseline justify-between gap-3 [&_p]:text-sm [&_time]:whitespace-nowrap [&_time]:text-xs [&_time]:text-muted-foreground max-[620px]:flex-col max-[620px]:gap-1">
-                      <p>{event.message}</p>
-                      <time>{formatDate(event.createdAt, true)}</time>
+                    <div className="mb-1 flex items-baseline justify-between gap-3 max-sm:flex-col max-sm:gap-1">
+                      <p className="text-sm">{event.message}</p>
+                      <time className="text-xs whitespace-nowrap text-muted-foreground">
+                        {formatDate(event.createdAt, true)}
+                      </time>
                     </div>
                     {event.detail && (
-                      <details className="mt-2 rounded-md bg-muted/50 px-3 py-2 [&_summary]:cursor-pointer [&_summary]:text-xs [&_summary]:text-muted-foreground [&_pre]:mt-2 [&_pre]:max-w-full [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:text-xs [&_pre]:wrap-anywhere">
-                        <summary>查看事件详情</summary>
-                        <pre>{JSON.stringify(event.detail, null, 2)}</pre>
+                      <details className="mt-2 rounded-md bg-muted/50 px-3 py-2">
+                        <summary className="cursor-pointer text-xs text-muted-foreground">
+                          查看事件详情
+                        </summary>
+                        <pre className="mt-2 max-w-full overflow-auto text-xs whitespace-pre-wrap wrap-anywhere">
+                          {JSON.stringify(event.detail, null, 2)}
+                        </pre>
                       </details>
                     )}
                   </div>
@@ -227,7 +234,7 @@ export default function TaskDetailPage() {
               description="任务开始后，执行阶段与结果会显示在这里。"
             />
           )}
-        </Card>
+        </Panel>
       </div>
       {confirm && (
         <Modal
@@ -245,7 +252,7 @@ export default function TaskDetailPage() {
               <Button onClick={() => setConfirm(null)} disabled={action.pending}>
                 返回
               </Button>
-              <Button variant="primary" loading={action.pending} onClick={execute}>
+              <Button variant="default" loading={action.pending} onClick={execute}>
                 确认{confirm === "cancel" ? "取消" : "重试"}
               </Button>
             </>

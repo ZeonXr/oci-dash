@@ -50,6 +50,7 @@ export function AnalyticsStatusNote({
       </Button>
       <Modal
         open={open}
+        initialFocus="title"
         onClose={() => setOpen(false)}
         title={label}
         description={
@@ -63,7 +64,7 @@ export function AnalyticsStatusNote({
         }
       >
         {notes.length > 0 && (
-          <ul className="analytics-note-list m-0 list-disc pl-5 text-sm leading-[1.8] text-muted-foreground wrap-anywhere [&>li+li]:mt-2">
+          <ul className="analytics-note-list m-0 list-disc space-y-2 pl-5 text-sm leading-relaxed text-muted-foreground wrap-anywhere">
             {notes.map((note) => (
               <li key={note}>{note}</li>
             ))}

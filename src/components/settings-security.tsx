@@ -8,9 +8,9 @@ import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useApp } from "@/components/app-provider";
 import { send, useAction, useResource } from "@/components/api";
 import {
-  Badge,
+  StatusBadge,
   Button,
-  Card,
+  Panel,
   CopyButton,
   ErrorState,
   Field,
@@ -115,7 +115,7 @@ export function SettingsSecurity() {
       <div className="flex flex-col gap-5">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
         <SettingsSection title="登录安全" description="保护管理员账号和 OCI 账号凭据。">
-          <Card>
+          <Panel>
             <div className="flex items-center gap-3 border-b border-border py-3.5 last:border-0">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
                 <KeyRound size={18} />
@@ -124,7 +124,7 @@ export function SettingsSecurity() {
                 <strong>管理员账号</strong>
                 <p className="text-muted-foreground text-xs">{settings.username}</p>
               </div>
-              <Badge>管理员</Badge>
+              <StatusBadge>管理员</StatusBadge>
             </div>
             <div className="flex items-center gap-3 border-b border-border py-3.5 last:border-0">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-canvas text-muted-foreground">
@@ -152,7 +152,7 @@ export function SettingsSecurity() {
                 {settings.mfaEnabled ? "关闭" : "设置"}
               </Button>
             </div>
-          </Card>
+          </Panel>
         </SettingsSection>
       </div>
       {modal === "password" && (
@@ -170,7 +170,7 @@ export function SettingsSecurity() {
               <Button
                 form="password-form"
                 type="submit"
-                variant="primary"
+                variant="default"
                 loading={action.pending}
                 disabled={newPassword !== repeat}
               >
@@ -234,7 +234,7 @@ export function SettingsSecurity() {
               <Button
                 form={setup ? "mfa-confirm-form" : "mfa-setup-form"}
                 type="submit"
-                variant="primary"
+                variant="default"
                 loading={action.pending}
               >
                 {setup ? "开启双重验证" : "继续"}
@@ -252,8 +252,8 @@ export function SettingsSecurity() {
                 />
               )}
               <Field label="无法扫码时，手动输入密钥">
-                <div className="flex items-center justify-between gap-2.5 overflow-auto rounded-lg border border-border bg-canvas px-4 py-3 [&_code]:wrap-anywhere">
-                  <code>{setup.secret}</code>
+                <div className="flex items-center justify-between gap-2.5 overflow-auto rounded-lg border border-border bg-canvas px-4 py-3">
+                  <code className="wrap-anywhere">{setup.secret}</code>
                   <CopyButton value={setup.secret} />
                 </div>
               </Field>
@@ -300,7 +300,7 @@ export function SettingsSecurity() {
             if (saved) close();
           }}
           footer={
-            <Button variant="primary" disabled={!saved} onClick={close}>
+            <Button variant="default" disabled={!saved} onClick={close}>
               已保存，完成设置
             </Button>
           }
@@ -341,7 +341,7 @@ export function SettingsSecurity() {
               <Button
                 form="mfa-disable-form"
                 type="submit"
-                variant="danger"
+                variant="destructive"
                 loading={action.pending}
               >
                 关闭双重验证

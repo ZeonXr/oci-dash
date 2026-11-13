@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import type { AccountSummary } from "@/lib/contracts";
 import type { AccountDetails } from "@/lib/account-details-contracts";
 import { useResource } from "./api";
@@ -9,7 +10,7 @@ import { formatDate, number } from "./format";
 import { RegionTag } from "./region-label";
 import {
   Alert,
-  Badge,
+  StatusBadge,
   Button,
   CopyButton,
   ErrorState,
@@ -18,25 +19,8 @@ import {
   RefreshButton,
   Status,
 } from "./ui";
-const styles = {
-  content: "flex min-w-0 flex-col gap-6",
-  section:
-    "flex min-w-0 flex-col gap-4 [&+section]:border-t [&+section]:border-border [&+section]:pt-6 [&_h3]:text-sm [&_h3]:font-semibold",
-  sectionHeading: "flex flex-wrap items-center justify-between gap-3",
-  sectionNote: "flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground",
-  details:
-    "m-0 grid grid-cols-2 gap-6 max-sm:grid-cols-1 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:min-w-0 [&_dd]:text-sm [&_dd]:wrap-anywhere",
-  detail: "flex min-w-0 flex-col gap-2",
-  wideDetail: "col-span-full flex min-w-0 flex-col gap-2",
-  identifier:
-    "flex min-w-0 items-center gap-2 *:first:min-w-0 *:first:whitespace-normal *:first:wrap-anywhere *:last:shrink-0",
-  tags: "flex min-w-0 flex-wrap items-center gap-2",
-  stats:
-    "grid grid-cols-5 gap-4 max-sm:grid-cols-2 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-col [&>div]:gap-2 [&_span]:text-xs [&_span]:text-muted-foreground [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground [&_strong]:flex [&_strong]:flex-wrap [&_strong]:items-baseline [&_strong]:gap-1 [&_strong]:text-2xl [&_strong]:font-semibold [&_strong]:leading-tight max-sm:[&>div:first-child]:col-span-full",
-  regionList: "flex flex-col gap-3",
-  regionRow: "flex flex-wrap items-center justify-between gap-3",
-  empty: "text-xs text-muted-foreground",
-};
+const sectionClassName = cn("flex min-w-0 flex-col gap-4 [&+section]:border-t [&+section]:pt-6");
+const detailGridClassName = cn("m-0 grid grid-cols-2 gap-6 max-sm:grid-cols-1");
 
 function Detail({
   label,
@@ -48,16 +32,16 @@ function Detail({
   wide?: boolean;
 }) {
   return (
-    <div className={wide ? styles.wideDetail : styles.detail}>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
+    <div className={cn("flex min-w-0 flex-col gap-2", wide && "col-span-full")}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="m-0 min-w-0 text-sm wrap-anywhere">{children}</dd>
     </div>
   );
 }
 
 function Identifier({ value, label }: { value: string; label: string }) {
   return (
-    <span className={styles.identifier}>
+    <span className="flex min-w-0 items-center gap-2">
       <CodeTag>{value}</CodeTag>
       <CopyButton value={value} label={`复制${label}`} />
     </span>
@@ -98,14 +82,14 @@ export function AccountDetailsDialog({
         </>
       }
     >
-      <div className={styles.content}>
+      <div className="flex min-w-0 flex-col gap-6">
         {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
-        <section className={styles.section} aria-label="连接配置">
-          <div className={styles.sectionHeading}>
-            <h3>连接配置</h3>
+        <section className={sectionClassName} aria-label="连接配置">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold">连接配置</h3>
             <Status value={account.status} />
           </div>
-          <dl className={styles.details}>
+          <dl className={detailGridClassName}>
             <Detail label="配置主区域">
               <RegionTag region={account.homeRegion} />
             </Detail>
@@ -120,7 +104,7 @@ export function AccountDetailsDialog({
               <Identifier value={account.fingerprint} label="API 密钥指纹" />
             </Detail>
             <Detail label="同步区域" wide>
-              <div className={styles.tags}>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 {account.regions.map((region) => (
                   <RegionTag key={region} region={region} />
                 ))}
@@ -131,43 +115,49 @@ export function AccountDetailsDialog({
         </section>
 
         {inventory && (
-          <section className={styles.section} aria-label="已同步资源">
-            <div className={styles.sectionHeading}>
-              <h3>已同步资源</h3>
-              {inventory.partial && <Badge tone="warning">部分资源未更新</Badge>}
+          <section className={sectionClassName} aria-label="已同步资源">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">已同步资源</h3>
+              {inventory.partial && <StatusBadge tone="warning">部分资源未更新</StatusBadge>}
             </div>
-            <div className={styles.stats}>
-              <div>
-                <span>实例</span>
-                <strong>{number(inventory.instances)}</strong>
-                <small>
+            <div className="grid grid-cols-5 gap-4 max-sm:grid-cols-2">
+              <div className="flex min-w-0 flex-col gap-2 max-sm:col-span-full">
+                <span className="text-xs text-muted-foreground">实例</span>
+                <strong className="flex flex-wrap items-baseline gap-1 text-2xl leading-tight font-semibold">
+                  {number(inventory.instances)}
+                </strong>
+                <small className="text-xs font-normal text-muted-foreground">
                   {number(inventory.running)} 运行中 · {number(inventory.stopped)} 已停止
                 </small>
               </div>
-              <div>
-                <span>OCPU</span>
-                <strong>{number(inventory.ocpus, 2)}</strong>
+              <div className="flex min-w-0 flex-col gap-2">
+                <span className="text-xs text-muted-foreground">OCPU</span>
+                <strong className="flex flex-wrap items-baseline gap-1 text-2xl leading-tight font-semibold">
+                  {number(inventory.ocpus, 2)}
+                </strong>
               </div>
-              <div>
-                <span>内存</span>
-                <strong>
+              <div className="flex min-w-0 flex-col gap-2">
+                <span className="text-xs text-muted-foreground">内存</span>
+                <strong className="flex flex-wrap items-baseline gap-1 text-2xl leading-tight font-semibold">
                   {number(inventory.memoryGb, 2)}
-                  <small>GiB</small>
+                  <small className="text-xs font-normal text-muted-foreground">GiB</small>
                 </strong>
               </div>
-              <div>
-                <span>启动卷</span>
-                <strong>
+              <div className="flex min-w-0 flex-col gap-2">
+                <span className="text-xs text-muted-foreground">启动卷</span>
+                <strong className="flex flex-wrap items-baseline gap-1 text-2xl leading-tight font-semibold">
                   {number(inventory.bootVolumeGb, 2)}
-                  <small>GiB</small>
+                  <small className="text-xs font-normal text-muted-foreground">GiB</small>
                 </strong>
               </div>
-              <div>
-                <span>公网 IPv4</span>
-                <strong>{number(inventory.publicIps)}</strong>
+              <div className="flex min-w-0 flex-col gap-2">
+                <span className="text-xs text-muted-foreground">公网 IPv4</span>
+                <strong className="flex flex-wrap items-baseline gap-1 text-2xl leading-tight font-semibold">
+                  {number(inventory.publicIps)}
+                </strong>
               </div>
             </div>
-            <div className={styles.sectionNote}>
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
               <span>当前配置区域内的资源快照</span>
               {inventory.lastSyncedAt && (
                 <time dateTime={inventory.lastSyncedAt}>
@@ -181,11 +171,11 @@ export function AccountDetailsDialog({
         {resource.loading && <LoadingState label="正在读取 OCI 账号信息…" />}
         {cloud && (
           <>
-            <section className={styles.section} aria-label="OCI 租户">
-              <h3>OCI 租户</h3>
+            <section className={sectionClassName} aria-label="OCI 租户">
+              <h3 className="text-sm font-semibold">OCI 租户</h3>
               {tenancyError && <Alert tone="warning">{tenancyError}</Alert>}
               {cloud.tenancy && (
-                <dl className={styles.details}>
+                <dl className={detailGridClassName}>
                   <Detail label="租户名称">{cloud.tenancy.name}</Detail>
                   <Detail label="OCI 主区域">
                     {home ? (
@@ -204,11 +194,11 @@ export function AccountDetailsDialog({
                 </dl>
               )}
             </section>
-            <section className={styles.section} aria-label="OCI 身份用户">
-              <h3>OCI 身份用户</h3>
+            <section className={sectionClassName} aria-label="OCI 身份用户">
+              <h3 className="text-sm font-semibold">OCI 身份用户</h3>
               {userError && <Alert tone="warning">{userError}</Alert>}
               {cloud.user && (
-                <dl className={styles.details}>
+                <dl className={detailGridClassName}>
                   <Detail label="用户名称">{cloud.user.name}</Detail>
                   <Detail label="状态">
                     {cloud.user.state ? <CodeTag>{cloud.user.state}</CodeTag> : "—"}
@@ -230,25 +220,30 @@ export function AccountDetailsDialog({
                 </dl>
               )}
             </section>
-            <section className={styles.section} aria-label="OCI 已订阅区域">
-              <h3>OCI 已订阅区域</h3>
+            <section className={sectionClassName} aria-label="OCI 已订阅区域">
+              <h3 className="text-sm font-semibold">OCI 已订阅区域</h3>
               {regionError && <Alert tone="warning">{regionError}</Alert>}
               {cloud.regions &&
                 (cloud.regions.length ? (
-                  <div className={styles.regionList}>
+                  <div className="flex flex-col gap-3">
                     {cloud.regions.map((region) => (
-                      <div key={region.name} className={styles.regionRow}>
+                      <div
+                        key={region.name}
+                        className="flex flex-wrap items-center justify-between gap-3"
+                      >
                         <RegionTag region={region.name} />
-                        <div className={styles.tags}>
-                          {region.home && <Badge tone="info">主区域</Badge>}
-                          {account.regions.includes(region.name) && <Badge>已启用同步</Badge>}
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          {region.home && <StatusBadge tone="info">主区域</StatusBadge>}
+                          {account.regions.includes(region.name) && (
+                            <StatusBadge>已启用同步</StatusBadge>
+                          )}
                           <CodeTag>{region.status}</CodeTag>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className={styles.empty}>未返回已订阅区域。</p>
+                  <p className="text-xs text-muted-foreground">未返回已订阅区域。</p>
                 ))}
             </section>
           </>

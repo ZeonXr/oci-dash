@@ -1,4 +1,5 @@
 "use client";
+import { FilterBar, filterSelectClassName } from "@/components/view-layout";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -13,9 +14,9 @@ import { AnalyticsRange, useAnalyticsRange } from "@/components/analytics-range"
 import { AnalyticsChart, analyticsNumber, utcTimestamp } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
 import {
-  Badge,
+  StatusBadge,
   RefreshButton,
-  Card,
+  Panel,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -125,9 +126,10 @@ function TrafficContent() {
           disabled={!url}
         />
       </PageHeader>
-      <div className="analytics-controls mb-6 flex flex-wrap items-center gap-3">
-        <div className="analytics-filters contents *:data-[slot=select-trigger]:w-45 *:data-[slot=select-trigger]:max-w-full max-sm:*:data-[slot=select-trigger]:flex-1">
+      <FilterBar className="analytics-controls mb-6">
+        <div className="analytics-filters contents">
           <Select
+            className={filterSelectClassName}
             aria-label="流量账号"
             value={account}
             disabled={!accountsReady}
@@ -135,67 +137,67 @@ function TrafficContent() {
               setAccount(value);
               setFilters({ account: value, region: "", instance: "", vnic: "" });
             }}
-          >
-            <option value="">全部账号</option>
-            {accounts.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部账号" },
+              ...accounts.map((item) => ({ value: item.id, label: item.name })),
+            ]}
+          />
           <Select
+            className={filterSelectClassName}
             aria-label="流量区域"
             value={region}
             onValueChange={(value) => {
               changeFilters({ region: value, instance: "", vnic: "" });
             }}
-          >
-            <option value="">全部区域</option>
-            {regions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部区域" },
+              ...regions.map((item) => ({ value: item, label: item })),
+            ]}
+          />
           <Select
+            className={filterSelectClassName}
             aria-label="流量实例"
             value={instance}
             onValueChange={(value) => {
               changeFilters({ instance: value, vnic: "" });
             }}
-          >
-            <option value="">全部实例</option>
-            {visibleInstances.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.displayName}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部实例" },
+              ...visibleInstances.map((item) => ({ value: item.id, label: item.displayName })),
+            ]}
+          />
           <Select
+            className={filterSelectClassName}
             aria-label="流量网卡"
             value={vnic}
             onValueChange={(value) => changeFilters({ vnic: value })}
-          >
-            <option value="">全部网卡</option>
-            {vnics.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name || shortId(item.id)} · {item.instanceName}
-              </option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "全部网卡" },
+              ...vnics.map((item) => ({
+                value: item.id,
+                label: (
+                  <>
+                    {item.name || shortId(item.id)} · {item.instanceName}
+                  </>
+                ),
+              })),
+            ]}
+          />
         </div>
-        <div className="analytics-period contents *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-28">
+        <div className="analytics-period contents">
           <AnalyticsRange value={range} onChange={setRange} />
           <Select
+            className="w-auto min-w-28 max-sm:flex-1"
             aria-label="流量统计粒度"
             value={granularity}
             onValueChange={(value) => setGranularity(value as "hourly" | "daily")}
-          >
-            <option value="hourly">按小时</option>
-            <option value="daily">按日</option>
-          </Select>
+            options={[
+              { value: "hourly", label: "按小时" },
+              { value: "daily", label: "按日" },
+            ]}
+          />
         </div>
-      </div>
+      </FilterBar>
       {accountsError && (
         <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
       )}
@@ -206,7 +208,7 @@ function TrafficContent() {
       {accountsLoading || report.loading ? (
         <LoadingState label="正在读取流量统计…" />
       ) : !accountsReady ? null : !accounts.length ? (
-        <Card>
+        <Panel>
           <EmptyState
             title="先添加 OCI 账号"
             description="添加账号并同步实例后，可查询网卡流量。"
@@ -216,10 +218,10 @@ function TrafficContent() {
               </LinkButton>
             }
           />
-        </Card>
+        </Panel>
       ) : data ? (
         <div className="stack analytics-content flex flex-col gap-5" aria-busy={report.refreshing}>
-          <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 max-sm:grid-cols-1">
+          <div className="analytics-metrics grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-4 max-sm:grid-cols-1">
             <MetricCard
               label="接收流量"
               value={
@@ -263,7 +265,7 @@ function TrafficContent() {
               note={partialPoints ? "接收 + 发送 · 已获取小计" : "接收 + 发送"}
             />
           </div>
-          <Card
+          <Panel
             title="流量趋势"
             description={
               data.dataThrough
@@ -278,12 +280,12 @@ function TrafficContent() {
                   {
                     key: "received",
                     label: partialPoints ? "接收（已获取）" : "接收",
-                    color: "var(--primary)",
+                    color: "var(--chart-received)",
                   },
                   {
                     key: "sent",
                     label: partialPoints ? "发送（已获取）" : "发送",
-                    color: "#58baa7",
+                    color: "var(--chart-sent)",
                   },
                 ]}
                 unit="GiB"
@@ -299,9 +301,9 @@ function TrafficContent() {
             <p className="chart-note mt-2.5 text-xs text-muted-foreground">
               仅统计当前网卡，非公网计费流量。
             </p>
-          </Card>
-          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2 [&>h2]:m-0 [&>h2]:text-base [&>h2]:font-semibold">
-            <h2>网卡明细</h2>
+          </Panel>
+          <div className="section-heading flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="m-0 text-base font-semibold">网卡明细</h2>
             <span className="muted small text-xs text-muted-foreground">数值单位：GiB</span>
           </div>
           <TablePanel
@@ -369,7 +371,7 @@ function TrafficContent() {
                       {analyticsNumber(gib(totalBytes(row.receivedBytes, row.sentBytes)))}
                     </TableCell>
                     <TableCell>
-                      <Badge
+                      <StatusBadge
                         tone={
                           row.coverage === "complete"
                             ? "success"
@@ -383,7 +385,7 @@ function TrafficContent() {
                           : row.coverage === "partial"
                             ? "部分数据"
                             : "暂无数据"}
-                      </Badge>
+                      </StatusBadge>
                     </TableCell>
                   </TableRow>
                 ))}

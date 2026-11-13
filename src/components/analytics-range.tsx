@@ -93,8 +93,9 @@ export function AnalyticsRange({
     (!fullMonths || (start.endsWith("-01") && monthEnd?.getUTCDate() === 1)),
   );
   return (
-    <div className="analytics-range flex min-w-0 flex-wrap items-center gap-3 max-sm:flex-1 *:data-[slot=select-trigger]:w-auto *:data-[slot=select-trigger]:min-w-36 max-sm:*:data-[slot=select-trigger]:flex-1">
+    <div className="analytics-range flex min-w-0 flex-wrap items-center gap-3 max-sm:flex-1">
       <Select
+        className="w-auto min-w-36 max-sm:flex-1"
         aria-label="时间范围"
         title={`${value.startDate} 至 ${value.endDate}（UTC，包含首尾日期）`}
         value={editing ? "custom" : value.preset}
@@ -106,18 +107,23 @@ export function AnalyticsRange({
             onChange(analyticsRange(preset));
           }
         }}
-      >
-        {!fullMonths && <option value="today">今天 · UTC</option>}
-        {!fullMonths && <option value="last7">近 7 日 · UTC</option>}
-        {!fullMonths && <option value="month">本月 · UTC</option>}
-        <option value="lastMonth">上月 · UTC</option>
-        {allowYear && <option value="last12Months">过去 12 个完整月 · UTC</option>}
-        <option value="custom">自定义 · UTC</option>
-      </Select>
+        options={[
+          ...(!fullMonths
+            ? [
+                { value: "today", label: "今天 · UTC" },
+                { value: "last7", label: "近 7 日 · UTC" },
+                { value: "month", label: "本月 · UTC" },
+              ]
+            : []),
+          { value: "lastMonth", label: "上月 · UTC" },
+          ...(allowYear ? [{ value: "last12Months", label: "过去 12 个完整月 · UTC" }] : []),
+          { value: "custom", label: "自定义 · UTC" },
+        ]}
+      />
       {editing && (
         <>
           <Input
-            className="w-40 min-w-0 scheme-light dark:scheme-dark max-sm:w-36"
+            className="w-36 min-w-0 scheme-light sm:w-40 dark:scheme-dark"
             type="date"
             aria-label="开始日期（UTC）"
             value={start}
@@ -126,7 +132,7 @@ export function AnalyticsRange({
           />
           <span className="muted small text-xs text-muted-foreground">至</span>
           <Input
-            className="w-40 min-w-0 scheme-light dark:scheme-dark max-sm:w-36"
+            className="w-36 min-w-0 scheme-light sm:w-40 dark:scheme-dark"
             type="date"
             aria-label="结束日期（UTC）"
             value={end}

@@ -7,7 +7,7 @@ import type RFB from "@novnc/novnc";
 import type { InstanceSummary } from "@/lib/contracts";
 import type { ConsoleSessionSummary, ConsoleSocketTicket } from "@/lib/console-contracts";
 import { api, errorMessage, useResource } from "./api";
-import { Badge, Button, ErrorState, LoadingState, PageHeader, Status } from "./ui";
+import { StatusBadge, Button, ErrorState, LoadingState, PageHeader, Status } from "./ui";
 import { formatDate } from "./format";
 import { RegionTag } from "./region-label";
 
@@ -423,14 +423,14 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
         ref={panel}
         aria-label="VNC 控制台"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 max-[620px]:px-3 max-[620px]:py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
           <div
             className="flex flex-wrap items-center gap-2 text-muted-foreground"
             aria-live="polite"
             role="status"
           >
             <Monitor size={17} />
-            <Badge
+            <StatusBadge
               tone={
                 connected
                   ? "success"
@@ -440,10 +440,11 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               }
             >
               {stateText}
-            </Badge>
+            </StatusBadge>
           </div>
-          <div className="flex flex-wrap items-center gap-2 [&_button]:h-8 [&_button]:px-3 [&_button]:text-xs **:aria-pressed:border-primary **:aria-pressed:bg-primary/10 **:aria-pressed:text-primary max-[620px]:w-full max-[620px]:gap-1.5">
+          <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
             <Button
+              size="sm"
               icon={<Keyboard size={16} />}
               disabled={!connected}
               onClick={() => {
@@ -455,6 +456,8 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               Ctrl+Alt+Del
             </Button>
             <Button
+              size="sm"
+              className="aria-pressed:border-primary aria-pressed:bg-primary/10 aria-pressed:text-primary"
               aria-pressed={fit}
               onClick={() => {
                 const value = !fit;
@@ -466,6 +469,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               适应窗口
             </Button>
             <Button
+              size="sm"
               icon={fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               onClick={() => void toggleFullscreen()}
               aria-label={fullscreen ? "退出全屏" : "全屏"}
@@ -474,6 +478,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             </Button>
             {active ? (
               <Button
+                size="sm"
                 icon={<Unplug size={16} />}
                 disabled={creating}
                 loading={closing}
@@ -488,8 +493,9 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               </Button>
             ) : (
               <Button
+                size="sm"
                 icon={<Plug size={16} />}
-                variant="primary"
+                variant="default"
                 disabled={!canConnect}
                 loading={creating}
                 onClick={() => void connect()}
@@ -500,7 +506,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </div>
         </div>
         <div
-          className="console-viewport relative isolate h-[clamp(360px,calc(100dvh-310px),1000px)] min-h-0 bg-[#0c111b] max-[620px]:h-[max(330px,calc(100dvh-350px))]"
+          className="console-viewport relative isolate h-[clamp(360px,calc(100dvh-310px),1000px)] min-h-0 bg-[#0c111b] max-sm:h-[max(330px,calc(100dvh-350px))]"
           onPointerDown={touch}
           onPointerMove={touch}
           onKeyDownCapture={touch}
@@ -512,10 +518,10 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             aria-label="远程控制台画面"
           />
           {!connected && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0c111b] p-7 text-center text-[#98a8bf] [&_h2]:mt-1 [&_h2]:text-base [&_h2]:font-medium [&_h2]:text-[#d9e3f2] [&_p]:text-xs">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0c111b] p-6 text-center text-[#98a8bf]">
               <Monitor size={34} />
-              <h2>{placeholder}</h2>
-              <p>
+              <h2 className="mt-1 text-base font-medium text-[#d9e3f2]">{placeholder}</h2>
+              <p className="text-sm">
                 {active || creating
                   ? "状态会自动更新。"
                   : "点击连接后创建安全会话，离开此页面将断开连接。"}
@@ -523,7 +529,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
             </div>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground max-[620px]:gap-1 max-[620px]:px-3 max-[620px]:py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground">
           <span>全站限一个会话 · 长时间无操作将自动断开</span>
           <span>
             {active && session

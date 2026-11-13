@@ -61,7 +61,7 @@ export function OperationDialog({
             取消
           </Button>
           <Button
-            variant={danger ? "danger" : "primary"}
+            variant={danger ? "destructive" : "default"}
             loading={action.pending}
             disabled={Boolean(requireName && confirmation !== requireName)}
             onClick={execute}
@@ -73,11 +73,14 @@ export function OperationDialog({
     >
       <div className="flex flex-col gap-3">
         {summary.length > 0 && (
-          <div className="confirm-summary flex flex-col gap-2 rounded-lg bg-muted/50 px-4 py-3 [&>div]:flex [&>div]:items-baseline [&>div]:justify-between [&>div]:gap-3 [&>div]:text-xs [&>div>span]:text-muted-foreground [&_strong]:font-medium [&_strong]:wrap-anywhere">
+          <div className="confirm-summary flex flex-col gap-3 rounded-lg bg-muted/50 px-4 py-3">
             {summary.map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
+              <div
+                key={label}
+                className="flex min-w-0 items-baseline justify-between gap-3 text-sm"
+              >
+                <span className="shrink-0 text-muted-foreground">{label}</span>
+                <strong className="min-w-0 text-right font-medium wrap-anywhere">{value}</strong>
               </div>
             ))}
           </div>

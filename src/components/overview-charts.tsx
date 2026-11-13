@@ -23,17 +23,24 @@ import { displayCost } from "./analytics-cost-data";
 import { EmptyState } from "./ui";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
+import {
+  ChartFrame,
+  ChartLegend,
+  ChartLegendItem,
+  ChartSwatch,
+  ChartTooltip,
+  chartTick,
+} from "./chart-presentation";
 import type { CostOverviewData, CostOverviewDay, TrafficOverviewData } from "./overview-data";
 
 const dayLabel = (value: string) => value.slice(5, 10).replace("-", "/");
-const chartTick = { fill: "var(--muted-foreground)", fontSize: 10 };
 const chartColors = [
-  "var(--overview-cpu-4)",
-  "var(--primary)",
-  "var(--overview-cpu-1)",
-  "var(--overview-teal)",
-  "var(--overview-cpu-2)",
-  "var(--warning)",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-received)",
 ];
 
 export function OverviewLink({ href, children }: { href: string; children: ReactNode }) {
@@ -49,7 +56,7 @@ export function OverviewLink({ href, children }: { href: string; children: React
 
 export function Sparkline({
   values,
-  color = "var(--primary)",
+  color = "var(--chart-sent)",
 }: {
   values: (number | null)[];
   color?: string;
@@ -58,33 +65,33 @@ export function Sparkline({
   if (!values.some((value) => value !== null)) return null;
   return (
     <div
-      className="overview-sparkline h-10 w-[94px] shrink-0 max-xl:w-[72px] max-xl:overflow-hidden max-md:w-[94px] max-md:overflow-visible"
+      className="overview-sparkline h-10 w-24 shrink-0 max-xl:w-18 max-md:w-24"
       aria-hidden="true"
     >
-      <AreaChart
-        width={94}
-        height={40}
-        data={values.map((value) => ({ value }))}
-        margin={{ top: 3, right: 2, left: 2, bottom: 2 }}
-        accessibilityLayer={false}
-      >
-        <defs>
-          <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.14} />
-            <stop offset="100%" stopColor={color} stopOpacity={0.04} />
-          </linearGradient>
-        </defs>
-        <YAxis domain={[0, "auto"]} hide />
-        <Area
-          type="monotone"
-          dataKey="value"
-          stroke={color}
-          strokeWidth={1.8}
-          fill={`url(#${id})`}
-          connectNulls={false}
-          isAnimationActive={false}
-        />
-      </AreaChart>
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <AreaChart
+          data={values.map((value) => ({ value }))}
+          margin={{ top: 3, right: 2, left: 2, bottom: 2 }}
+          accessibilityLayer={false}
+        >
+          <defs>
+            <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.14} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.04} />
+            </linearGradient>
+          </defs>
+          <YAxis domain={[0, "auto"]} hide />
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={1.8}
+            fill={`url(#${id})`}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -109,16 +116,18 @@ export function OverviewSummary({
   return (
     <Card className="overview-summary gap-0">
       <CardContent className="flex items-center justify-between gap-3">
-        <div className="overview-summary-copy min-w-0 [&>h2]:text-sm [&>h2]:font-normal [&>h2]:text-muted-foreground [&>p]:mt-1 [&>p]:text-xs [&>p]:text-muted-foreground">
-          <h2>{label}</h2>
+        <div className="overview-summary-copy min-w-0">
+          <h2 className="text-sm font-normal text-muted-foreground">{label}</h2>
           <div
-            className="overview-summary-value flex items-baseline gap-1.5 tabular-nums [&>strong]:text-3xl [&>strong]:font-semibold [&>span]:text-sm [&>span]:text-muted-foreground"
+            className="overview-summary-value flex items-baseline gap-1.5 tabular-nums"
             aria-busy={loading}
           >
-            <strong>{loading && value == null ? "…" : analyticsNumber(value, 1)}</strong>
-            <span>{unit}</span>
+            <strong className="text-3xl font-semibold">
+              {loading && value == null ? "…" : analyticsNumber(value, 1)}
+            </strong>
+            <span className="text-sm text-muted-foreground">{unit}</span>
           </div>
-          <p>{note}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{note}</p>
         </div>
         <Sparkline values={values} color={color} />
       </CardContent>
@@ -129,12 +138,12 @@ export function OverviewSummary({
 export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
   const [shown, setShown] = useState({ sent: true, received: true });
   const series = [
-    { key: "sent" as const, dataKey: "sentGiB", label: "发送", color: "var(--primary)" },
+    { key: "sent" as const, dataKey: "sentGiB", label: "发送", color: "var(--chart-sent)" },
     {
       key: "received" as const,
       dataKey: "receivedGiB",
       label: "接收",
-      color: "var(--overview-teal)",
+      color: "var(--chart-received)",
     },
   ];
   const hasSamples = data.points.some(
@@ -144,11 +153,12 @@ export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
   return (
     <>
       <div className="overview-chart-meta flex flex-wrap items-center justify-between gap-3">
-        <div className="overview-chart-legend flex flex-wrap items-center gap-3.5 text-[11px] text-muted-foreground [&>span]:inline-flex [&>span]:items-center [&>span]:gap-1.5 [&>button]:inline-flex [&>button]:items-center [&>button]:gap-1.5 [&>button]:border-0 [&>button]:bg-transparent [&>button]:p-0 [&>button[aria-pressed=false]]:opacity-40 [&_i]:size-1.5 [&_i]:shrink-0 [&_i]:rounded-full">
+        <ChartLegend className="overview-chart-legend">
           {series.map((item) => (
             <button
               key={item.key}
               type="button"
+              className="inline-flex items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-xs aria-[pressed=false]:opacity-40"
               aria-label={`显示${item.label}流量`}
               aria-pressed={shown[item.key]}
               onClick={() =>
@@ -159,18 +169,18 @@ export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
                 )
               }
             >
-              <i style={{ background: item.color }} /> {item.label}
+              <ChartSwatch color={item.color} /> {item.label}
             </button>
           ))}
-        </div>
+        </ChartLegend>
         <span className="overview-chart-total text-xs text-foreground tabular-nums">
           {data.summary.coverage === "complete" ? "合计" : "已获取"}{" "}
           {analyticsNumber(data.summary.totalGiB, 1)} GiB
         </span>
       </div>
-      <div
-        className="overview-traffic-plot h-[204px] w-full min-w-0 min-[1800px]:h-[250px]"
-        role="img"
+      <ChartFrame
+        compact
+        className="overview-traffic-plot"
         aria-label="每日发送与接收流量，单位 GiB"
       >
         <ResponsiveContainer width="100%" height="100%" minWidth={0}>
@@ -200,12 +210,14 @@ export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
                   TrafficOverviewData["points"][number] | undefined;
                 if (!active || !point) return null;
                 return (
-                  <div className="overview-tooltip max-w-[300px] rounded-lg border border-border bg-popover px-3 py-2.5 text-xs text-popover-foreground shadow-md [&>strong]:mb-1.5 [&>strong]:block [&>strong]:font-semibold [&>small]:mt-1 [&>small]:block [&>small]:text-muted-foreground">
-                    <strong>{point.timestamp.slice(0, 10)} · UTC</strong>
+                  <ChartTooltip className="overview-tooltip">
+                    <strong className="font-semibold">{point.timestamp.slice(0, 10)} · UTC</strong>
                     <p>发送 {analyticsNumber(point.sentGiB, 3)} GiB</p>
                     <p>接收 {analyticsNumber(point.receivedGiB, 3)} GiB</p>
-                    {point.coverage !== "complete" && <small>部分数据 · 已观测小计</small>}
-                  </div>
+                    {point.coverage !== "complete" && (
+                      <small className="text-xs text-muted-foreground">部分数据 · 已观测小计</small>
+                    )}
+                  </ChartTooltip>
                 );
               }}
             />
@@ -231,11 +243,11 @@ export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
             ))}
           </AreaChart>
         </ResponsiveContainer>
-      </div>
-      <p className="overview-chart-caption text-xs text-muted-foreground [&>span]:mr-1 [&>span]:text-primary">
+      </ChartFrame>
+      <p className="overview-chart-caption text-xs text-muted-foreground">
         {data.peak ? (
           <>
-            <span>{dayLabel(data.peak.timestamp)}</span> 流量最高，为{" "}
+            <span className="mr-1 text-primary">{dayLabel(data.peak.timestamp)}</span> 流量最高，为{" "}
             {analyticsNumber(data.peak.totalGiB, 1)} GiB
           </>
         ) : (
@@ -260,7 +272,7 @@ export function TrafficRanking({ data }: { data: TrafficOverviewData }) {
         按发送 + 接收汇总{partial ? " · 已获取小计" : ""}
       </p>
       <ol
-        className="overview-ranking m-0 flex list-none flex-col gap-3 p-0 [&>li]:min-w-0 [&>li>p]:text-[10px] [&>li>p]:text-muted-foreground"
+        className="overview-ranking m-0 flex list-none flex-col gap-3 p-0"
         aria-label="实例流量排行"
       >
         {rows.map((row) => {
@@ -268,11 +280,12 @@ export function TrafficRanking({ data }: { data: TrafficOverviewData }) {
             row.totalGiB !== null && denominator > 0 ? (row.totalGiB / denominator) * 100 : null;
           const flag = regionCountryCode(row.region);
           return (
-            <li key={row.instanceId}>
-              <div className="overview-ranking-label flex items-center justify-between gap-2.5 text-xs [&>a]:flex [&>a]:min-w-0 [&>a]:items-center [&>a]:gap-1.5 [&>a:hover]:text-primary [&>a>span]:truncate [&_img]:h-3 [&_img]:w-4 [&_img]:shrink-0 [&_img]:border [&_img]:border-border [&_img]:object-cover [&>strong]:shrink-0 [&>strong]:font-medium [&>strong]:tabular-nums">
+            <li key={row.instanceId} className="min-w-0">
+              <div className="overview-ranking-label flex items-center justify-between gap-2.5 text-xs">
                 <Link
                   href={instanceHref(row.instanceId)}
                   title={`${row.instanceName} · ${row.accountName} · ${row.region}`}
+                  className="flex min-w-0 items-center gap-1.5 hover:text-primary"
                 >
                   {flag && (
                     <img
@@ -281,19 +294,25 @@ export function TrafficRanking({ data }: { data: TrafficOverviewData }) {
                       height={12}
                       alt=""
                       aria-hidden="true"
+                      className="h-3 w-4 shrink-0 border border-border object-cover"
                     />
                   )}
-                  <span>{row.instanceName}</span>
+                  <span className="truncate">{row.instanceName}</span>
                 </Link>
-                <strong>{analyticsNumber(row.totalGiB, 1)} GiB</strong>
+                <strong className="shrink-0 font-medium tabular-nums">
+                  {analyticsNumber(row.totalGiB, 1)} GiB
+                </strong>
               </div>
               <div
-                className="overview-ranking-track my-1.5 h-2 overflow-hidden rounded bg-canvas [&>span]:block [&>span]:h-full [&>span]:rounded-[inherit] [&>span]:bg-primary"
+                className="overview-ranking-track my-1.5 h-2 overflow-hidden rounded bg-muted"
                 aria-hidden="true"
               >
-                <span style={{ width: `${Math.max(0, Math.min(100, share ?? 0))}%` }} />
+                <span
+                  className="block h-full rounded bg-primary"
+                  style={{ width: `${Math.max(0, Math.min(100, share ?? 0))}%` }}
+                />
               </div>
-              <p>
+              <p className="text-xs text-muted-foreground">
                 {share !== null
                   ? `占${partial ? "已获取" : "总"}流量 ${analyticsNumber(share, 1)}%`
                   : row.totalGiB === 0
@@ -328,9 +347,9 @@ export function CostTrend({ data, generatedAt }: { data: CostOverviewData; gener
   const cutoff = Date.parse(generatedAt) - 48 * 3_600_000;
   return (
     <>
-      <div
-        className="overview-cost-plot h-[138px] w-full min-w-0 max-md:h-[170px]"
-        role="img"
+      <ChartFrame
+        compact
+        className="overview-cost-plot"
         aria-label={`每日服务费用，币种 ${data.currency}`}
       >
         <ResponsiveContainer width="100%" height="100%" minWidth={0}>
@@ -364,8 +383,8 @@ export function CostTrend({ data, generatedAt }: { data: CostOverviewData; gener
                 const point = payload?.[0]?.payload as CostOverviewDay | undefined;
                 if (!active || !point) return null;
                 return (
-                  <div className="overview-tooltip max-w-[300px] rounded-lg border border-border bg-popover px-3 py-2.5 text-xs text-popover-foreground shadow-md [&>strong]:mb-1.5 [&>strong]:block [&>strong]:font-semibold [&>small]:mt-1 [&>small]:block [&>small]:text-muted-foreground">
-                    <strong>
+                  <ChartTooltip className="overview-tooltip">
+                    <strong className="font-semibold">
                       {point.timestamp.slice(0, 10)} · {data.currency}
                     </strong>
                     {data.services.map((service) => (
@@ -374,9 +393,13 @@ export function CostTrend({ data, generatedAt }: { data: CostOverviewData; gener
                       </p>
                     ))}
                     <p>已报告合计 {displayCost(point.totalAmount)}</p>
-                    {point.coverage !== "complete" && <small>部分数据</small>}
-                    {Date.parse(point.timestamp) >= cutoff && <small>账单可能继续补报</small>}
-                  </div>
+                    {point.coverage !== "complete" && (
+                      <small className="text-xs text-muted-foreground">部分数据</small>
+                    )}
+                    {Date.parse(point.timestamp) >= cutoff && (
+                      <small className="text-xs text-muted-foreground">账单可能继续补报</small>
+                    )}
+                  </ChartTooltip>
                 );
               }}
             />
@@ -400,15 +423,14 @@ export function CostTrend({ data, generatedAt }: { data: CostOverviewData; gener
             ))}
           </BarChart>
         </ResponsiveContainer>
-      </div>
-      <div className="overview-chart-legend overview-cost-legend flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted-foreground [&>span]:inline-flex [&>span]:max-w-full [&>span]:items-center [&>span]:gap-1.5 [&>span]:wrap-anywhere [&_i]:size-1.5 [&_i]:shrink-0 [&_i]:rounded-full">
+      </ChartFrame>
+      <ChartLegend className="overview-chart-legend overview-cost-legend">
         {data.services.map((service, index) => (
-          <span key={service.key}>
-            <i style={{ background: chartColors[index % chartColors.length] }} />
+          <ChartLegendItem key={service.key} color={chartColors[index % chartColors.length]}>
             {service.label}
-          </span>
+          </ChartLegendItem>
         ))}
-      </div>
+      </ChartLegend>
       <p className="overview-panel-note text-xs text-muted-foreground">
         {data.summary.value === 0 ? "本期已报告费用为 0" : "最近两日可能继续补报"}
       </p>

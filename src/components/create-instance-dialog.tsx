@@ -130,7 +130,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
           <Button
             type="submit"
             form="create-instance-form"
-            variant="primary"
+            variant="default"
             loading={action.pending}
             disabled={!acknowledged || !ready}
           >
@@ -140,15 +140,13 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <form id="create-instance-form" onSubmit={submit} className="flex flex-col gap-5">
-        <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="OCI 账号" required>
-            <Select value={accountId} onValueChange={(value) => changeAccount(value)}>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
+            <Select
+              value={accountId}
+              onValueChange={changeAccount}
+              options={accounts.map((account) => ({ value: account.id, label: account.name }))}
+            />
           </Field>
           <Field label="区域" required>
             <Select
@@ -158,15 +156,10 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                 setCompartment("");
                 resetChoices();
               }}
-            >
-              {Array.from(new Set([account?.homeRegion, ...(account?.regions || [])]))
-                .filter(Boolean)
-                .map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-            </Select>
+              options={Array.from(new Set([account?.homeRegion, ...(account?.regions || [])]))
+                .filter((value): value is string => Boolean(value))
+                .map((value) => ({ value, label: value }))}
+            />
           </Field>
         </div>
         {options.error && <ErrorState message={options.error} retry={options.reload} />}
@@ -175,7 +168,7 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
         ) : (
           data && (
             <>
-              <div className="grid grid-cols-2 gap-4 max-[620px]:grid-cols-1">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="实例名称" required>
                   <Input
                     required
@@ -193,13 +186,11 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                       setCompartment(value);
                       resetChoices();
                     }}
-                  >
-                    {data.compartments.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </Select>
+                    options={data.compartments.map((compartment) => ({
+                      value: compartment.id,
+                      label: compartment.name,
+                    }))}
+                  />
                 </Field>
                 <Field label="可用域" required>
                   <Select
@@ -217,12 +208,12 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                         subnetId: "",
                       }));
                     }}
-                  >
-                    {!data.availabilityDomains.length && <option value="">该区域暂无可用域</option>}
-                    {data.availabilityDomains.map((ad) => (
-                      <option key={ad}>{ad}</option>
-                    ))}
-                  </Select>
+                    options={
+                      data.availabilityDomains.length
+                        ? data.availabilityDomains.map((value) => ({ value, label: value }))
+                        : [{ value: "", label: "该区域暂无可用域" }]
+                    }
+                  />
                 </Field>
                 <Field label="实例规格" required>
                   <Select
@@ -234,14 +225,12 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                       setAcknowledged(false);
                       setForm((current) => ({ ...current, shape, imageId: "" }));
                     }}
-                  >
-                    {!data.shapes.length && <option value="">该可用域暂无可用规格</option>}
-                    {data.shapes.map((s) => (
-                      <option key={s.name} value={s.name}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </Select>
+                    options={
+                      data.shapes.length
+                        ? data.shapes.map((shape) => ({ value: shape.name, label: shape.name }))
+                        : [{ value: "", label: "该可用域暂无可用规格" }]
+                    }
+                  />
                 </Field>
                 {shape?.flexible && (
                   <>
@@ -268,33 +257,29 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                     </Field>
                   </>
                 )}
-                <Field label="系统镜像" required className="col-span-2 max-[620px]:col-span-1">
+                <Field label="系统镜像" required className="sm:col-span-2">
                   <Select
                     value={form.imageId}
                     disabled={updating || !options.data}
                     onValueChange={(value) => setForm({ ...form, imageId: value })}
-                  >
-                    {!data.images.length && <option value="">该规格暂无兼容镜像</option>}
-                    {data.images.map((image) => (
-                      <option key={image.id} value={image.id}>
-                        {image.name}
-                      </option>
-                    ))}
-                  </Select>
+                    options={
+                      data.images.length
+                        ? data.images.map((image) => ({ value: image.id, label: image.name }))
+                        : [{ value: "", label: "该规格暂无兼容镜像" }]
+                    }
+                  />
                 </Field>
                 <Field label="子网" required>
                   <Select
                     value={form.subnetId}
                     disabled={updating || !options.data}
                     onValueChange={(value) => setForm({ ...form, subnetId: value })}
-                  >
-                    {!data.subnets.length && <option value="">该可用域暂无可用子网</option>}
-                    {data.subnets.map((subnet) => (
-                      <option key={subnet.id} value={subnet.id}>
-                        {subnet.name}
-                      </option>
-                    ))}
-                  </Select>
+                    options={
+                      data.subnets.length
+                        ? data.subnets.map((subnet) => ({ value: subnet.id, label: subnet.name }))
+                        : [{ value: "", label: "该可用域暂无可用子网" }]
+                    }
+                  />
                 </Field>
                 <Field label="启动卷容量 (GiB)" required>
                   <Input
@@ -329,9 +314,10 @@ export function CreateInstanceDialog({ onClose }: { onClose: () => void }) {
                   placeholder="ssh-ed25519 AAAA…"
                 />
               </Field>
-              <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-dashed p-3 text-xs [&_input]:min-w-0 [&_input]:max-w-full [&_input]:flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-dashed p-3 text-xs">
                 <Upload size={16} />
                 <Input
+                  className="min-w-0 max-w-full flex-1"
                   type="file"
                   accept=".pub,.txt"
                   aria-label="从文件读取 SSH 公钥"

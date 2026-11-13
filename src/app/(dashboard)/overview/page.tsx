@@ -18,7 +18,7 @@ import { CpuHeatmap } from "@/components/cpu-heatmap";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { displayCost } from "@/components/analytics-cost-data";
 import {
-  Card,
+  Panel,
   EmptyState,
   ErrorState,
   RefreshButton,
@@ -138,7 +138,7 @@ export default function OverviewPage() {
     trafficData?.summary.coverage === "partial" ? periodNote + " · 已获取小计" : periodNote;
   const detailQuery = accountId ? "?accountId=" + encodeURIComponent(accountId) : "";
   return (
-    <div className="data-overview flex flex-col gap-6 *:data-[slot=page-heading]:mb-0 [--overview-teal:#39a99c] [--overview-cpu-1:#d1e2fc] [--overview-cpu-2:#92b7f0] [--overview-cpu-4:#1e57a4] dark:[--overview-teal:#70d1c3] dark:[--overview-cpu-1:#3a567b] dark:[--overview-cpu-2:#6997d6] dark:[--overview-cpu-4:#a1c3fa]">
+    <div className="data-overview flex flex-col gap-6 *:data-[slot=page-heading]:mb-0">
       <PageHeader
         title="数据总览"
         description={
@@ -166,14 +166,11 @@ export default function OverviewPage() {
           value={accountId}
           onValueChange={setAccount}
           disabled={!accountsReady}
-        >
-          <option value="">全部账号</option>
-          {accounts.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </Select>
+          options={[
+            { value: "", label: "全部账号" },
+            ...accounts.map((item) => ({ value: item.id, label: item.name })),
+          ]}
+        />
         <Select
           aria-label="总览时间范围"
           value={period}
@@ -185,11 +182,12 @@ export default function OverviewPage() {
             setPeriod(value);
             setRange(dateRange(value));
           }}
-        >
-          <option value="7d">近 7 日</option>
-          <option value="30d">近 30 日</option>
-          <option value="month">本月</option>
-        </Select>
+          options={[
+            { value: "7d", label: "近 7 日" },
+            { value: "30d", label: "近 30 日" },
+            { value: "month", label: "本月" },
+          ]}
+        />
       </div>
       {accountsError && (
         <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
@@ -197,7 +195,7 @@ export default function OverviewPage() {
       {accountsLoading ? (
         <LoadingState />
       ) : !accountsReady ? null : !accounts.length ? (
-        <Card>
+        <Panel>
           <EmptyState
             title="添加账号后查看用量"
             description="连接 OCI 账号，即可读取流量、CPU 和费用记录。"
@@ -207,7 +205,7 @@ export default function OverviewPage() {
               </LinkButton>
             }
           />
-        </Card>
+        </Panel>
       ) : (
         <>
           <div className="overview-summaries grid grid-cols-3 gap-4 max-md:grid-cols-1">
@@ -226,7 +224,7 @@ export default function OverviewPage() {
               note={trafficNote}
               values={trafficData?.points.map((point) => point.receivedGiB) || []}
               loading={traffic.loading}
-              color="var(--overview-teal)"
+              color="var(--chart-received)"
             />
             <OverviewSummary
               label="平均 CPU"
@@ -240,8 +238,8 @@ export default function OverviewPage() {
               loading={cpu.loading}
             />
           </div>
-          <div className="overview-chart-grid grid grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] items-stretch gap-6 max-xl:grid-cols-[minmax(0,1.65fr)_minmax(250px,1fr)] max-xl:gap-4 max-md:grid-cols-1">
-            <Card
+          <div className="overview-chart-grid grid grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)] items-stretch gap-6 max-xl:grid-cols-[minmax(0,1.65fr)_minmax(16rem,1fr)] max-xl:gap-4 max-md:grid-cols-1">
+            <Panel
               className="overview-panel overview-flow min-w-0"
               title="收发流量趋势"
               action={
@@ -254,13 +252,13 @@ export default function OverviewPage() {
               <PanelContent query={traffic}>
                 {trafficData && <TrafficTrend data={trafficData} />}
               </PanelContent>
-            </Card>
-            <Card className="overview-panel overview-rank min-w-0" title="实例流量排行">
+            </Panel>
+            <Panel className="overview-panel overview-rank min-w-0" title="实例流量排行">
               <PanelContent query={traffic}>
                 {trafficData && <TrafficRanking data={trafficData} />}
               </PanelContent>
-            </Card>
-            <Card
+            </Panel>
+            <Panel
               className="overview-panel overview-load min-w-0"
               title="实例负载"
               action={
@@ -273,8 +271,8 @@ export default function OverviewPage() {
               <PanelContent query={cpu}>
                 {cpu.data && <CpuHeatmap report={cpu.data} />}
               </PanelContent>
-            </Card>
-            <Card
+            </Panel>
+            <Panel
               className="overview-panel overview-cost min-w-0"
               title="费用走势"
               action={
@@ -287,8 +285,11 @@ export default function OverviewPage() {
               <PanelContent query={costs}>
                 {costs.data && (
                   <>
-                    <div className="overview-cost-summary flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground [&>strong]:text-2xl [&>strong]:font-semibold [&>strong]:text-foreground [&>strong]:tabular-nums [&>strong]:wrap-anywhere *:data-[slot=select-trigger]:w-auto">
-                      <strong title={costData?.summary.amount ?? undefined}>
+                    <div className="overview-cost-summary flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground *:data-[slot=select-trigger]:w-auto">
+                      <strong
+                        className="text-2xl font-semibold text-foreground tabular-nums wrap-anywhere"
+                        title={costData?.summary.amount ?? undefined}
+                      >
                         {displayCost(costData?.summary.amount)}
                       </strong>
                       {currencies.length > 1 ? (
@@ -296,13 +297,8 @@ export default function OverviewPage() {
                           aria-label="总览费用币种"
                           value={selectedCurrency}
                           onValueChange={setCurrency}
-                        >
-                          {currencies.map((code) => (
-                            <option key={code} value={code}>
-                              {code}
-                            </option>
-                          ))}
-                        </Select>
+                          options={currencies.map((code) => ({ value: code, label: code }))}
+                        />
                       ) : (
                         <span>{selectedCurrency || "币种未提供"}</span>
                       )}
@@ -321,7 +317,7 @@ export default function OverviewPage() {
                   </>
                 )}
               </PanelContent>
-            </Card>
+            </Panel>
           </div>
         </>
       )}

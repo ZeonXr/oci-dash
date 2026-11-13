@@ -91,9 +91,13 @@ npm run build
 
 使用项目固定版本的 CLI 按需增加组件：`npx shadcn add <组件名>`。生成后检查依赖、交互及本地封装，新增依赖保持固定版本；不要自动覆盖已有组件。第三方组件的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-`src/components/ui.tsx` 封装项目的加载状态、确认弹窗和声明式选项。刷新入口使用 `RefreshButton`，通过 `loading` 控制统一动画、禁用和 busy 状态；普通异步按钮使用 `Button` 的 `icon` 与 `loading`，初始加载使用 `LoadingState` 或 `Spinner`。`Select` 使用 `onValueChange(value)`，浏览器测试通过可见的 combobox 和 option 操作；弹窗由 Dialog 管理焦点与键盘，菜单触发的弹窗需要传入稳定的焦点返回引用。
+`Button` 的实现统一位于 `src/components/ui/button.tsx`，`src/components/ui.tsx` 重导出同一组件。变体沿用 shadcn 的 `default`、`outline`、`secondary`、`ghost`、`destructive` 和 `link`；默认使用 `outline`，主操作显式使用 `default`。普通异步按钮使用 `icon` 与 `loading`，初始加载使用 `LoadingState` 或 `Spinner`。
 
-区域使用 `RegionTag`，仅在同一标签内展示国旗与 OCI 区域代码；规格、OCID 等标识使用 `CodeTag`。这些标签不承担按钮行为。长标识允许换行，提供复制时始终复制完整原值；连接和任务状态继续使用 `Status` 或 `Badge`。
+刷新入口使用 `RefreshButton`，回调返回实际刷新 Promise，由组件管理手动等待、动画和 busy 状态；`updatedAt` 用于单行时间提示。后台轮询不驱动按钮动画。`Panel` 提供标题、说明和操作区的卡片组合；基础 Card 仍使用 `ui/card` 的组合 API。`StatusBadge` 表达状态语义，基础 Badge 使用 `ui/badge` 的变体。
+
+`Select` 使用显式 `options` 数据与 `onValueChange(value)`，空字符串表示“全部”等空值选项；浏览器测试通过可见的 combobox 和 option 操作。弹窗由 Dialog 管理焦点与键盘，详情使用 `initialFocus="title"`，表单保留首个控件焦点；菜单触发的弹窗需要传入稳定的焦点返回引用。筛选搜索、详情列表和图表外观优先使用已有的轻量表现组件。样式、尺寸和响应式约定见[界面开发规范](docs/ui-development.md)。
+
+区域使用 `RegionTag`，仅在同一标签内展示国旗与 OCI 区域代码；规格、OCID 等标识使用 `CodeTag`。这些标签不承担按钮行为。长标识允许换行，提供复制时始终复制完整原值；连接和任务状态继续使用 `Status` 或 `StatusBadge`。
 
 按改动范围补充有意义的回归：
 

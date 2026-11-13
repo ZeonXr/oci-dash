@@ -59,14 +59,15 @@ volumes:
 
 ## 文档
 
-| 文档                                 | 内容                         |
-| ------------------------------------ | ---------------------------- |
-| [运维说明](docs/OPERATIONS.md)       | 部署、HTTPS、备份恢复与更新  |
-| [架构与 API](docs/IMPLEMENTATION.md) | 模块职责、运行方式与接口契约 |
-| [统计说明](docs/ANALYTICS.md)        | 流量、费用与 CPU 的统计口径  |
-| [验证指南](docs/VERIFICATION.md)     | 测试方法、发布结果与验收边界 |
-| [贡献指南](CONTRIBUTING.md)          | 开发环境、变更检查与发布流程 |
-| [安全说明](SECURITY.md)              | 凭据、会话与漏洞报告         |
+| 文档                                   | 内容                         |
+| -------------------------------------- | ---------------------------- |
+| [运维说明](docs/OPERATIONS.md)         | 部署、HTTPS、备份恢复与更新  |
+| [架构与 API](docs/IMPLEMENTATION.md)   | 模块职责、运行方式与接口契约 |
+| [统计说明](docs/ANALYTICS.md)          | 流量、费用与 CPU 的统计口径  |
+| [验证指南](docs/VERIFICATION.md)       | 测试方法、发布结果与验收边界 |
+| [贡献指南](CONTRIBUTING.md)            | 开发环境、变更检查与发布流程 |
+| [界面开发规范](docs/ui-development.md) | 组件、样式、尺寸与响应式约定 |
+| [安全说明](SECURITY.md)                | 凭据、会话与漏洞报告         |
 
 ## 许可证
 

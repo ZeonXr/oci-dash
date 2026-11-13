@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { DESKTOP_NAVIGATION_QUERY } from "@/lib/ui-layout";
 import {
   ChartNoAxesCombined,
   CircleDollarSign,
@@ -115,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const desktopNavigation = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const query = window.matchMedia("(min-width:901px)");
+    const query = window.matchMedia(DESKTOP_NAVIGATION_QUERY);
     const closeDesktopSheet = () => {
       if (query.matches) setMobileOpen(false);
     };
@@ -131,13 +132,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-dvh">
       <a
         href="#main-content"
-        className="fixed -top-16 left-60 z-100 rounded-md bg-primary px-4 py-2.5 text-primary-foreground focus:top-2.5 max-[900px]:left-5 max-[620px]:left-4"
+        className="fixed -top-16 left-4 z-100 rounded-md bg-primary px-4 py-2 text-primary-foreground focus:top-2 sm:left-6 lg:left-60"
       >
         跳至主要内容
       </a>
       <aside
         ref={desktopNavigation}
-        className="sidebar fixed inset-y-0 left-0 z-40 flex w-52 flex-col gap-6 overflow-y-auto border-r border-border bg-surface p-5 max-[900px]:hidden"
+        className="sidebar fixed inset-y-0 left-0 z-40 hidden w-52 flex-col gap-6 overflow-y-auto border-r border-border bg-surface p-5 lg:flex"
         id="primary-navigation"
         aria-label="主导航"
       >
@@ -148,7 +149,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <NavigationButton
             variant="outline"
             size="icon"
-            className="absolute top-4 left-5 z-30 hidden max-[900px]:inline-flex max-[620px]:left-4"
+            className="absolute top-4 left-4 z-30 sm:left-6 lg:hidden"
             aria-label="展开导航"
             title="展开导航"
           >
@@ -160,7 +161,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           showCloseButton={false}
           className="gap-6 overflow-y-auto p-5 data-[side=left]:w-72 data-[side=left]:sm:max-w-72"
           onCloseAutoFocus={(event) => {
-            if (!window.matchMedia("(min-width:901px)").matches) return;
+            if (!window.matchMedia(DESKTOP_NAVIGATION_QUERY).matches) return;
             event.preventDefault();
             desktopNavigation.current
               ?.querySelector<HTMLElement>('a[aria-current="page"]')
@@ -182,10 +183,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <NavigationContent onNavigate={() => setMobileOpen(false)} />
         </SheetContent>
       </Sheet>
-      <div className="ml-52 flex min-h-dvh w-[calc(100%-13rem)] flex-col max-[900px]:ml-0 max-[900px]:w-full">
+      <div className="flex min-h-dvh min-w-0 flex-1 flex-col lg:ml-52">
         <main
           id="main-content"
-          className="mx-auto w-full max-w-[1730px] flex-1 px-8 pt-8 pb-6 min-[1600px]:pt-9 max-[1180px]:px-6 max-[1180px]:pt-6 max-[900px]:px-5 max-[900px]:pt-16 max-[620px]:px-4"
+          className="mx-auto w-full max-w-7xl flex-1 px-4 pt-16 pb-6 sm:px-6 lg:px-8 lg:pt-8 2xl:pt-10"
         >
           {children}
         </main>

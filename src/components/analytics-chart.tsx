@@ -9,6 +9,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import {
+  ChartFrame,
+  ChartLegend,
+  ChartLegendItem,
+  ChartTooltip,
+  chartTick,
+} from "./chart-presentation";
 
 export interface AnalyticsChartPoint {
   timestamp: string;
@@ -66,24 +73,15 @@ export function AnalyticsChart({
   };
   return (
     <>
-      <div className="chart-legend analytics-legend mb-2 flex flex-wrap gap-[18px] text-[11px] text-muted-foreground [&>span]:flex [&>span]:items-center [&>span]:gap-[5px]">
+      <ChartLegend className="chart-legend analytics-legend mb-2">
         {series.map((item) => (
-          <span key={item.key}>
-            <i
-              className="legend-dot size-1.5 rounded-full bg-primary"
-              style={{ background: item.color }}
-            />
+          <ChartLegendItem key={item.key} color={item.color}>
             {item.label}
-          </span>
+          </ChartLegendItem>
         ))}
-        <span className="grow min-w-0 flex-1" />
-        <span>{unit} · UTC</span>
-      </div>
-      <div
-        className="chart-wrap analytics-chart h-[280px] min-w-0 max-[620px]:h-[230px] [&_.recharts-cartesian-axis-tick-value]:fill-muted-foreground [&_.recharts-cartesian-axis-tick-value]:text-[10px] [&_.recharts-cartesian-grid_line]:stroke-border"
-        role="img"
-        aria-label={label}
-      >
+        <span className="ml-auto">{unit} · UTC</span>
+      </ChartLegend>
+      <ChartFrame className="chart-wrap analytics-chart" aria-label={label}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={points} margin={{ top: 12, right: 18, left: 0, bottom: 8 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
@@ -92,6 +90,7 @@ export function AnalyticsChart({
               tickFormatter={tick}
               axisLine={false}
               tickLine={false}
+              tick={chartTick}
               minTickGap={45}
               tickMargin={12}
             />
@@ -99,24 +98,37 @@ export function AnalyticsChart({
               domain={[(minimum: number) => Math.min(0, minimum), "auto"]}
               axisLine={false}
               tickLine={false}
+              tick={chartTick}
               width={55}
               tickFormatter={(value) => analyticsNumber(value, 2)}
             />
             <Tooltip
-              contentStyle={{
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                fontSize: 12,
-                color: "var(--text)",
+              content={({ active, label: timestamp, payload, accessibilityLayer }) => {
+                if (!active || !payload?.length) return null;
+                const partial = payload.some((entry) => entry.payload?.coverage === "partial");
+                return (
+                  <ChartTooltip
+                    role={accessibilityLayer ? "status" : undefined}
+                    aria-live={accessibilityLayer ? "assertive" : undefined}
+                  >
+                    <p className="recharts-tooltip-label font-semibold">
+                      {utcTimestamp(String(timestamp))} UTC
+                      {partial ? " · 部分数据（已观测小计）" : ""}
+                    </p>
+                    {payload.map((entry) => (
+                      <div key={String(entry.dataKey)} className="flex justify-between gap-4">
+                        <span style={{ color: entry.color }}>
+                          {series.find((item) => item.key === entry.name)?.label ||
+                            String(entry.name)}
+                        </span>
+                        <strong className="font-semibold tabular-nums">
+                          {analyticsNumber(Number(entry.value), 4)} {unit}
+                        </strong>
+                      </div>
+                    ))}
+                  </ChartTooltip>
+                );
               }}
-              labelFormatter={(value, entries) =>
-                `${utcTimestamp(String(value))} UTC${entries.some((entry) => entry.payload?.coverage === "partial") ? " · 部分数据（已观测小计）" : ""}`
-              }
-              formatter={(value, name) => [
-                `${analyticsNumber(Number(value), 4)} ${unit}`,
-                series.find((item) => item.key === name)?.label || String(name),
-              ]}
             />
             {series.map((item) => {
               const samples = points.filter(
@@ -138,7 +150,7 @@ export function AnalyticsChart({
             })}
           </LineChart>
         </ResponsiveContainer>
-      </div>
+      </ChartFrame>
     </>
   );
 }

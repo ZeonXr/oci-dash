@@ -163,12 +163,12 @@ export default function LoginPage() {
     }
   };
   return (
-    <main className="grid min-h-dvh grid-cols-[minmax(330px,1fr)_minmax(400px,1fr)] bg-surface max-[900px]:grid-cols-1">
+    <main className="grid min-h-dvh min-w-0 bg-surface lg:grid-cols-2">
       <section
-        className="relative flex flex-col justify-center gap-6 bg-soft px-12 py-24 max-[900px]:hidden xl:px-20"
+        className="relative hidden min-w-0 flex-col justify-center gap-6 bg-soft px-10 py-24 lg:flex xl:px-16"
         aria-label="OCI Dash"
       >
-        <div className="brand absolute top-12 left-12 flex items-center gap-3 text-2xl font-semibold tracking-tight text-ink xl:left-20">
+        <div className="brand absolute top-10 left-10 flex items-center gap-3 text-2xl font-semibold tracking-tight text-ink xl:left-16">
           <img
             className="size-8 shrink-0 object-contain"
             src="/oci-logo.png"
@@ -199,10 +199,10 @@ export default function LoginPage() {
           <LoginPreview secondary />
         </div>
       </section>
-      <section className="login-panel flex flex-col justify-center p-10 max-[900px]:min-h-dvh max-[900px]:p-7 max-[620px]:p-6">
+      <section className="login-panel flex min-h-dvh min-w-0 flex-col justify-center p-6 sm:p-8 lg:p-10">
         {mode === "loading" || mode === "error" ? (
-          <div className="mx-auto w-full max-w-sm [&_h2]:mb-2 [&_h2]:text-3xl [&_h2]:font-semibold [&_h2]:text-ink [&>p]:mb-8 [&>p]:text-sm [&>p]:text-muted-foreground **:data-[slot=field]:mb-4 [&>button[type=submit]]:mt-1 [&>button[type=submit]]:w-full **:[[role=alert]]:mt-6 **:[[role=alert]]:flex-wrap [&_[role=alert]>div]:min-w-0 [&_[role=alert]>div]:flex-1 [&_[role=alert]>div]:wrap-anywhere">
-            <h2>OCI Dash</h2>
+          <div className="mx-auto flex w-full max-w-sm flex-col gap-6">
+            <h2 className="text-3xl font-semibold text-foreground">OCI Dash</h2>
             {mode === "loading" ? (
               <LoadingState label="正在检查登录状态…" />
             ) : (
@@ -217,13 +217,19 @@ export default function LoginPage() {
           </div>
         ) : (
           <form
-            className="mx-auto w-full max-w-sm [&_h2]:mb-2 [&_h2]:text-3xl [&_h2]:font-semibold [&_h2]:text-ink [&>p]:mb-8 [&>p]:text-sm [&>p]:text-muted-foreground **:data-[slot=field]:mb-4 [&>button[type=submit]]:mt-1 [&>button[type=submit]]:w-full"
+            className="mx-auto flex w-full max-w-sm flex-col gap-4"
             onSubmit={submit}
             noValidate
             aria-labelledby="login-heading"
           >
-            <h2 id="login-heading">{setup ? "创建管理员" : "欢迎回来"}</h2>
-            <p>{setup ? "首次使用，请设置管理员账号与登录密码。" : "登录 OCI Dash 管理面板。"}</p>
+            <div className="mb-2 flex flex-col gap-2">
+              <h2 id="login-heading" className="text-3xl font-semibold text-foreground">
+                {setup ? "创建管理员" : "欢迎回来"}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {setup ? "首次使用，请设置管理员账号与登录密码。" : "登录 OCI Dash 管理面板。"}
+              </p>
+            </div>
             <Field label="用户名" required>
               <Input
                 ref={usernameInput}
@@ -238,8 +244,9 @@ export default function LoginPage() {
               />
             </Field>
             <Field label="密码" required>
-              <div className="relative [&_input]:pr-12 [&_button]:absolute [&_button]:right-1 [&_button]:top-1">
+              <div className="relative">
                 <Input
+                  className="pr-12"
                   ref={passwordInput}
                   aria-label="密码"
                   aria-describedby={setup ? "setup-password-hint" : undefined}
@@ -257,6 +264,7 @@ export default function LoginPage() {
                   disabled={disabled}
                 />
                 <IconButton
+                  className="absolute top-1/2 right-1 -translate-y-1/2"
                   label={showPassword ? "隐藏密码" : "显示密码"}
                   disabled={disabled}
                   onClick={() => setShowPassword(!showPassword)}
@@ -267,9 +275,15 @@ export default function LoginPage() {
             </Field>
             {setup && (
               <>
-                <div className="-mt-2 mb-5 flex items-center gap-3 [&>span]:flex-1 [&>span]:text-xs [&>span]:leading-relaxed [&>span]:text-muted-foreground [&>button]:shrink-0 max-[360px]:flex-col max-[360px]:items-start">
-                  <span id="setup-password-hint">12–256 个字符，也可生成 32 位随机密码。</span>
+                <div className="-mt-2 flex flex-wrap items-center gap-3">
+                  <span
+                    id="setup-password-hint"
+                    className="min-w-0 flex-1 basis-48 text-xs leading-relaxed text-muted-foreground"
+                  >
+                    12–256 个字符，也可生成 32 位随机密码。
+                  </span>
                   <Button
+                    className="shrink-0"
                     type="button"
                     onClick={generateAndCopy}
                     loading={generating}
@@ -279,8 +293,9 @@ export default function LoginPage() {
                   </Button>
                 </div>
                 <Field label="确认密码" required>
-                  <div className="relative [&_input]:pr-12 [&_button]:absolute [&_button]:right-1 [&_button]:top-1">
+                  <div className="relative">
                     <Input
+                      className="pr-12"
                       ref={confirmationInput}
                       aria-label="确认密码"
                       type={showConfirmation ? "text" : "password"}
@@ -297,6 +312,7 @@ export default function LoginPage() {
                       disabled={disabled}
                     />
                     <IconButton
+                      className="absolute top-1/2 right-1 -translate-y-1/2"
                       label={showConfirmation ? "隐藏确认密码" : "显示确认密码"}
                       disabled={disabled}
                       onClick={() => setShowConfirmation(!showConfirmation)}
@@ -306,7 +322,7 @@ export default function LoginPage() {
                   </div>
                 </Field>
                 {copyState && (
-                  <div className="mb-4 [&_[role=alert]>div]:min-w-0 [&_[role=alert]>div]:wrap-anywhere">
+                  <div>
                     <Alert tone={copyState === "copied" ? "success" : "warning"}>
                       {copyState === "copied"
                         ? "密码已生成并复制，请保存到密码管理器。"
@@ -314,7 +330,7 @@ export default function LoginPage() {
                       {copyState === "failed" && (
                         <Button
                           type="button"
-                          className="mt-2.5 flex"
+                          className="mt-2 flex"
                           disabled={disabled}
                           onClick={() => {
                             setShowPassword(true);
@@ -344,14 +360,20 @@ export default function LoginPage() {
               </Field>
             )}
             {error && (
-              <div className="mb-4 [&_[role=alert]>div]:min-w-0 [&_[role=alert]>div]:wrap-anywhere">
+              <div>
                 <Alert tone="error">{error}</Alert>
               </div>
             )}
-            <Button type="submit" variant="primary" loading={pending} disabled={generating}>
+            <Button
+              className="w-full"
+              type="submit"
+              variant="default"
+              loading={pending}
+              disabled={generating}
+            >
               {setup ? "创建管理员" : mfa ? "验证并登录" : "登录"}
             </Button>
-            <div className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
+            <div className="mt-2 flex items-center justify-center gap-2 text-center text-xs text-muted-foreground">
               <LockKeyhole size={12} /> 仅供授权管理员访问
             </div>
           </form>
