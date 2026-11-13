@@ -77,7 +77,7 @@ services:
       APP_ORIGIN: https://oci.example.com
 ```
 
-开发及工具脚本要求 Node.js `>=26.13 <27`，与镜像一致的版本为 `26.13.0`；仅部署容器无需安装宿主机 Node.js。首次部署见 [README](../README.md#docker-部署)。修改容器配置后需要重新创建：
+开发及工具脚本要求 Node.js `>=26.13.1 <27`，与镜像一致的版本为 `26.13.1`；仅部署容器无需安装宿主机 Node.js。首次部署见 [README](../README.md#docker-部署)。修改容器配置后需要重新创建：
 
 ```sh
 docker compose up -d --force-recreate app
@@ -190,7 +190,7 @@ SSH 外层服务密钥须匹配 OCI API 指纹；内层仅通过该认证通道�
 
 只下载发布 Compose 的用户可以使用自己的 Docker 卷备份或宿主目录归档工具，不需要 Node.js。先结束活动任务和控制台会话，记录原运行状态，再执行 `docker compose stop app` 并确认已停止。完整归档挂载到 `/data` 的目录内容，包括数据库、WAL 等配套文件和隐藏的 `.master-key`；保留所有者和权限。备份目标必须在源数据目录之外，同时保存对应版本的 Compose 及自己的可选配置。备份完成后，仅在原来运行时恢复 `docker compose start app`。
 
-源码仓库另提供自动处理停止、归档及原状态恢复的工具；它不包含在单份发布 Compose 中，也不是普通部署的前置条件。额外取得对应版本源码、Node.js `26.13.0` 和 Docker CLI 后，可显式选择已有部署执行，例如：
+源码仓库另提供自动处理停止、归档及原状态恢复的工具；它不包含在单份发布 Compose 中，也不是普通部署的前置条件。额外取得对应版本源码、Node.js `26.13.1` 和 Docker CLI 后，可显式选择已有部署执行，例如：
 
 ```sh
 COMPOSE_FILE=/opt/oci-dash/compose.yaml \

@@ -4,13 +4,13 @@
 
 ## 开发环境
 
-需要 Node.js `>=26.13 <27` 和 npm，开发、Docker 镜像和 CI 统一使用 Node.js `26.13.0`。原生依赖在没有对应预编译包的平台上可能需要本机编译工具。
+需要 Node.js `>=26.13.1 <27` 和 npm，开发、Docker 镜像和 CI 统一使用 Node.js `26.13.1`。原生依赖在没有对应预编译包的平台上可能需要本机编译工具。
 
-可选使用 [mise](https://mise.jdx.dev/) 管理项目环境。仓库的 `mise.toml` 固定 Node.js `26.13.0`；安装 mise 后，在项目目录执行：
+可选使用 [mise](https://mise.jdx.dev/) 管理项目环境。仓库的 `mise.toml` 固定 Node.js `26.13.1`；安装 mise 后，在项目目录执行：
 
 ```sh
 mise trust
-mise install node@26.13.0
+mise install node@26.13.1
 mise exec node -- npm ci
 mise exec node -- npm run dev
 ```
@@ -51,7 +51,7 @@ docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
 
 该命令构建 `oci-dash:local`，数据挂载为 Compose 所在目录的 `./data:/data`。容器默认以 root 运行，Docker 自动创建缺失的数据目录，无需预先设置 UID/GID 或执行 `chown`；Docker Desktop 需允许 Docker 访问检出目录。不要在生产部署目录运行它，也不要把开发数据目录混用为生产数据；默认自动化验证仍使用下方的隔离入口。公开发布只需要单份 `compose.yaml`，不要求使用者取得 `compose.build.yaml` 或其他源码文件。
 
-`scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.0` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
+`scripts/` 中的工具脚本使用 TypeScript，由 Node.js `26.13.1` 原生移除类型后直接运行，无需额外的 TypeScript 运行器。脚本只使用可移除的类型语法和显式 `.ts` 导入路径，不依赖应用的路径别名；不能把原生执行视为支持全部 TypeScript 语法。
 
 PostCSS 插件列表使用静态 `postcss.config.json`，不需要可执行的 JavaScript 配置。
 

@@ -26,7 +26,7 @@ OCI Dash 采用 Next.js App Router、TypeScript、Drizzle ORM、SQLite（better-
 
 组件与页面样式使用同文件的 Tailwind 类，基础组件复用 shadcn 的交互，通过共享主题与基础组件统一蓝灰配色、控件尺寸和间距。全局 CSS 负责主题和基础规则；下拉选择、弹窗、菜单、提示及移动导航分别复用 Select、Dialog、Dropdown Menu、Tooltip 和 Sheet，通知复用 Sonner。图表保留数据驱动的颜色、位置和比例值，区域与标识标签复用 Badge。
 
-工具脚本通过 Node.js `26.13.0` 原生类型移除执行，只使用可移除的类型语法。Node.js 不执行类型检查；独立的严格配置 `scripts/tsconfig.json` 由 `tsc` 检查，`npm run typecheck` 同时覆盖应用与脚本。运行入口等服务端 TypeScript 经构建输出为 `dist/*.mjs`；这些是部署产物，不是单独维护的 JavaScript 源码。
+工具脚本通过 Node.js `26.13.1` 原生类型移除执行，只使用可移除的类型语法。Node.js 不执行类型检查；独立的严格配置 `scripts/tsconfig.json` 由 `tsc` 检查，`npm run typecheck` 同时覆盖应用与脚本。运行入口等服务端 TypeScript 经构建输出为 `dist/*.mjs`；这些是部署产物，不是单独维护的 JavaScript 源码。
 
 ## 运行与存储
 

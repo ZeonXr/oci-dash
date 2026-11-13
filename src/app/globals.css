@@ -141,7 +141,7 @@
     @apply font-sans;
   }
   body {
-    @apply m-0 bg-background text-sm leading-relaxed text-[var(--text)] antialiased;
+    @apply m-0 bg-background text-sm leading-relaxed text-(--text) antialiased;
   }
   button:not(:disabled),
   [role="button"]:not(:disabled) {

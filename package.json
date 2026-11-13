@@ -6,7 +6,11 @@
   "type": "module",
   "description": "A self-hosted OCI management console built with Next.js and TypeScript.",
   "engines": {
-    "node": ">=26.13 <27"
+    "node": ">=26.13.1 <27"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true
   },
   "scripts": {
     "dev": "node --import tsx src/runtime.ts --dev",

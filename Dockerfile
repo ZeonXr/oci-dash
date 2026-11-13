@@ -1,7 +1,8 @@
-FROM node:26.13.0-bookworm-slim AS build
+FROM node:26.13.1-bookworm-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN npm install --global npm@12.2.2 --ignore-scripts --no-audit --no-fund
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
@@ -9,13 +10,14 @@ RUN npm run build
 RUN rm -rf .next/cache .next/dev
 RUN npm prune --omit=dev --no-audit --no-fund
 
-FROM node:26.13.0-bookworm-slim AS runtime
+FROM node:26.13.1-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000 DATABASE_PATH=/data/oci-dash.db TMPDIR=/dev/shm
 LABEL org.opencontainers.image.source="https://github.com/ZeonXr/oci-dash" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.description="Self-hosted OCI management console"
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client ca-certificates tini && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && mkdir -p /data
 COPY --from=build /app/package.json /app/next.config.ts ./
 COPY --from=build /app/.next ./.next
