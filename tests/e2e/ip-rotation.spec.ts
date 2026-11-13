@@ -573,6 +573,17 @@ test("选择第二张网卡时预览精确绑定，取消不提交任何更换�
   await openCards(page);
   await addressButton(card(page), addresses.target).click();
   await expect(dialog(page)).toBeVisible();
+  const title = dialog(page).getByRole("heading", { name: "IP 详情", exact: true });
+  await expect(title).toBeFocused();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await page.keyboard.press("Tab");
+  await expect(
+    dialog(page).getByRole("button", { name: "复制IP 地址", exact: true }),
+  ).toBeFocused();
+  await expect(page.getByRole("tooltip", { name: "复制IP 地址", exact: true })).toBeVisible();
+  // Leave the tooltip before exercising the containing dialog's close behavior.
+  await dialog(page).getByRole("button", { name: "关闭", exact: true }).focus();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   const summary = dialog(page).locator(".confirm-summary");
   await expect(summary).toContainText("Rotation primary");
   await expect(summary).toContainText("Secondary egress");

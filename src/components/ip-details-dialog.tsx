@@ -77,6 +77,7 @@ export function IpDetailsDialog({
   return (
     <Modal
       open
+      initialFocus="title"
       title="IP 详情"
       description="查看地址及网卡绑定信息。"
       onClose={onClose}

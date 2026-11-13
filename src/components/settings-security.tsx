@@ -292,6 +292,7 @@ export function SettingsSecurity() {
       {modal === "recovery" && (
         <Modal
           open
+          initialFocus="title"
           busy={!saved}
           title="保存恢复码"
           description="无法使用验证器时，每条恢复码可以登录一次。此内容只显示一次。"

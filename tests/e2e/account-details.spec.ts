@@ -166,6 +166,23 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
   try {
+    const title = dialog.getByRole("heading", { name: "账号详情", exact: true });
+    const copyTenancy = dialog.getByRole("button", { name: "复制Tenancy OCID", exact: true });
+    await expect(title).toBeFocused();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
+    await page.keyboard.press("Tab");
+    await expect(copyTenancy).toBeFocused();
+    await expect(
+      page.getByRole("tooltip", { name: "复制Tenancy OCID", exact: true }),
+    ).toBeVisible();
+    await title.focus();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
+    await copyTenancy.hover();
+    await expect(
+      page.getByRole("tooltip", { name: "复制Tenancy OCID", exact: true }),
+    ).toBeVisible();
+    await page.mouse.move(0, 0, { steps: 5 });
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
     const refresh = dialog.getByRole("button", { name: "刷新详情", exact: true });
     await expect(refresh).toHaveText("刷新");
     await expect(refresh).toBeEnabled();
@@ -272,6 +289,14 @@ test("账号卡片在小屏保持操作间距，名称可通过键盘打开详�
   await trigger.focus();
   await trigger.press("Enter");
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
+  const title = dialog.getByRole("heading", { name: "账号详情", exact: true });
+  await expect(title).toBeFocused();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "复制Tenancy OCID", exact: true })).toBeFocused();
+  await expect(page.getByRole("tooltip", { name: "复制Tenancy OCID", exact: true })).toBeVisible();
+  await title.focus();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
   await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
   const dimensions = await dialog.evaluate((element) => {
     const body = element.querySelector('[data-slot="dialog-body"]')!;

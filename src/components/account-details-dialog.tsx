@@ -87,6 +87,7 @@ export function AccountDetailsDialog({
     <Modal
       open
       wide
+      initialFocus="title"
       title="账号详情"
       description={account.name}
       onClose={onClose}

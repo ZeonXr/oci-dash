@@ -591,6 +591,7 @@ export function Modal({
   onClose,
   busy = false,
   wide = false,
+  initialFocus = "first-control",
   returnFocusRef,
 }: {
   open: boolean;
@@ -601,9 +602,11 @@ export function Modal({
   onClose: () => void;
   busy?: boolean;
   wide?: boolean;
+  initialFocus?: "first-control" | "title";
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const descriptionId = useId();
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const previouslyOpen = useRef(false);
   const returnFocus = useRef<HTMLElement | null>(null);
   if (open && !previouslyOpen.current && typeof document !== "undefined") {
@@ -626,6 +629,12 @@ export function Modal({
         )}
         aria-modal="true"
         aria-describedby={description ? descriptionId : undefined}
+        onOpenAutoFocus={(event) => {
+          if (initialFocus === "title" && titleRef.current) {
+            event.preventDefault();
+            titleRef.current.focus({ preventScroll: true });
+          }
+        }}
         onEscapeKeyDown={(event) => {
           if (busy) event.preventDefault();
         }}
@@ -641,7 +650,13 @@ export function Modal({
         }}
       >
         <DialogHeader className="shrink-0 border-b bg-muted/50 px-6 py-4 pr-12">
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle
+            ref={titleRef}
+            tabIndex={initialFocus === "title" ? -1 : undefined}
+            className="outline-none"
+          >
+            {title}
+          </DialogTitle>
           {description && <DialogDescription id={descriptionId}>{description}</DialogDescription>}
         </DialogHeader>
         <div
