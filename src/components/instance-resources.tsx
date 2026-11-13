@@ -9,7 +9,7 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
-import { useState, type SubmitEvent } from "react";
+import { useEffect, useRef, useState, type SubmitEvent } from "react";
 import { HardDrive, Lock, Network, Plus, ShieldCheck } from "lucide-react";
 import type {
   BootVolumeSummary,
@@ -18,6 +18,7 @@ import type {
   SecurityGroup,
   SecurityRule,
 } from "@/lib/contracts";
+import { isJobPending } from "@/lib/job-state";
 import { useApp } from "./app-provider";
 import { send, useAction, useResource } from "./api";
 import { number, shortId, taskHref } from "./format";
@@ -347,7 +348,7 @@ function RuleDialog({
   instance: InstanceSummary;
   group: SecurityGroup;
   onClose: () => void;
-  onSubmitted: () => void;
+  onSubmitted: (job: JobSummary) => void;
 }) {
   const { notify } = useApp();
   const action = useAction();
@@ -396,7 +397,7 @@ function RuleDialog({
     );
     if (result) {
       notify("安全规则添加任务已提交。", taskHref(result.job.id));
-      onSubmitted();
+      onSubmitted(result.job);
       onClose();
     }
   };
@@ -554,14 +555,55 @@ const protocolLabels: Record<string, string> = {
   "58": "ICMPv6",
   all: "所有",
 };
-export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
+export function SecurityPanel({
+  instance,
+  jobs,
+  onSubmitted,
+}: {
+  instance: InstanceSummary;
+  jobs: JobSummary[];
+  onSubmitted: (job: JobSummary) => void;
+}) {
   const resource = useResource<{ groups: SecurityGroup[] }>(
     `/api/instances/${encodeURIComponent(instance.id)}/security`,
   );
+  const watched = useRef(new Map<string, string | null>());
+  useEffect(() => {
+    let completed = false;
+    for (const job of jobs) {
+      if (
+        job.accountId !== instance.accountId ||
+        job.resourceId !== instance.id ||
+        !["security-rule-add", "security-rule-delete"].includes(job.kind)
+      )
+        continue;
+      if (isJobPending(job)) watched.current.set(job.id, null);
+      else {
+        const completion = JSON.stringify([
+          job.state,
+          job.attempt,
+          job.maxAttempts,
+          job.finishedAt,
+        ]);
+        const previous = watched.current.get(job.id);
+        watched.current.set(job.id, completion);
+        if (previous !== undefined && previous !== completion) completed = true;
+      }
+    }
+    // The queued response precedes the cloud write. Re-read only after a watched
+    // task finishes, including failures/cancellation that may follow a partial write.
+    if (completed) void resource.reload();
+  }, [jobs, instance.accountId, instance.id, resource.reload]);
+  const submitted = (job: JobSummary) => {
+    watched.current.set(job.id, null);
+    onSubmitted(job);
+  };
   const [adding, setAdding] = useState<SecurityGroup | null>(null);
   const [deleting, setDeleting] = useState<{ group: SecurityGroup; rule: SecurityRule } | null>(
     null,
   );
+  const deletingGroup =
+    resource.data?.groups.find((group) => group.id === deleting?.group.id) ?? deleting?.group;
   if (resource.loading) return <LoadingState label="正在读取安全规则…" />;
   return (
     <div className="flex flex-col gap-5">
@@ -659,12 +701,12 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
       {adding && (
         <RuleDialog
           instance={instance}
-          group={adding}
+          group={resource.data?.groups.find((group) => group.id === adding.id) ?? adding}
           onClose={() => setAdding(null)}
-          onSubmitted={resource.reload}
+          onSubmitted={submitted}
         />
       )}
-      {deleting && (
+      {deleting && deletingGroup && (
         <OperationDialog
           title="删除安全规则"
           description="此规则将从安全组或安全列表移除，并影响所有关联资源。"
@@ -683,12 +725,12 @@ export function SecurityPanel({ instance }: { instance: InstanceSummary }) {
             payload: {
               groupId: deleting.group.id,
               groupKind: deleting.group.kind,
-              etag: deleting.group.etag,
+              etag: deletingGroup.etag,
               ruleId: deleting.rule.id,
             },
           }}
           onClose={() => setDeleting(null)}
-          onSuccess={resource.reload}
+          onSuccess={submitted}
         />
       )}
     </div>

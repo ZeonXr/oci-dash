@@ -673,7 +673,13 @@ export default function InstanceDetailPage() {
             </>
           )}
           {tab === "network" && <NetworkPanel instance={instance} onAddress={openIp} />}{" "}
-          {tab === "security" && <SecurityPanel instance={instance} />}{" "}
+          {tab === "security" && (
+            <SecurityPanel
+              instance={instance}
+              jobs={pendingJobs.jobs}
+              onSubmitted={pendingJobs.track}
+            />
+          )}{" "}
           {tab === "storage" && <StoragePanel instance={instance} />}{" "}
           {tab === "activity" && (
             <Card

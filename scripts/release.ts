@@ -112,10 +112,11 @@ export async function promoteRelease(port: ReleasePort, input: ReleaseInput, ver
   assert.ok(release, "Release does not exist");
   requireRelease(release, input.tag);
   for (const latest of await port.latestVersions()) {
-    if (latest.state === "unknown") return { promoted: false, reason: "Latest version is unknown" };
+    if (latest.state === "unknown")
+      throw new Error("Latest version is unknown; retry promotion when both channels are readable");
     if (latest.state === "present") {
       const previous = version(latest.version);
-      if (!previous) return { promoted: false, reason: "Latest version label is invalid" };
+      assert.ok(previous, "Latest version label is invalid; inspect the current latest release");
       const incoming = version(input.tag)!;
       const different = incoming.findIndex((value, index) => value !== previous[index]);
       if (different >= 0 && incoming[different]! < previous[different]!)

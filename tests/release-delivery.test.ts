@@ -188,17 +188,106 @@ describe("latest promotion", () => {
     expect(port.makeLatest).not.toHaveBeenCalled();
   });
 
-  it.each<LatestVersion>([{ state: "unknown" }, { state: "present", version: "invalid" }])(
-    "preserves latest when its current version cannot be established: %j",
-    async (latest) => {
+  it.each(
+    [0, 1].flatMap((channel) =>
+      [
+        { state: "unknown" },
+        { state: "present", version: "invalid" },
+        { state: "present", version: undefined },
+      ].map((latest) => ({ channel, latest: latest as LatestVersion })),
+    ),
+  )(
+    "fails without writes when channel $channel has an unverifiable latest: $latest",
+    async ({ channel, latest }) => {
       const { state, port } = fixture();
       await publishRelease(port, input, "notes");
-      state.latest[0] = latest;
-      await expect(promoteRelease(port, input, true)).resolves.toMatchObject({ promoted: false });
-      expect(port.tagImage).toHaveBeenCalledTimes(1);
+      port.tagImage.mockClear();
+      state.latest[channel] = latest;
+      await expect(promoteRelease(port, input, true)).rejects.toThrow("Latest version");
+      expect(port.tagImage).not.toHaveBeenCalled();
       expect(port.makeLatest).not.toHaveBeenCalled();
     },
   );
+
+  it.each([0, 1])("can retry after channel %s becomes readable again", async (channel) => {
+    const { state, port } = fixture();
+    await publishRelease(port, input, "notes");
+    port.tagImage.mockClear();
+    state.latest[channel] = { state: "unknown" };
+    await expect(promoteRelease(port, input, true)).rejects.toThrow("Latest version is unknown");
+    expect(port.tagImage).not.toHaveBeenCalled();
+    expect(port.makeLatest).not.toHaveBeenCalled();
+
+    state.latest[channel] = { state: "present", version: "v0.2.9" };
+    await expect(promoteRelease(port, input, true)).resolves.toMatchObject({ promoted: true });
+    expect(port.tagImage).toHaveBeenCalledExactlyOnceWith(
+      `${input.image}@${input.digest}`,
+      `${input.image}:latest`,
+    );
+    expect(port.makeLatest).toHaveBeenCalledExactlyOnceWith(10);
+  });
+
+  it("marks the real CLI entry as failed when latest cannot be read", async () => {
+    const argv = process.argv;
+    const exitCode = process.exitCode;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const run = vi.fn(async (_file: string, args: string[]) => {
+      if (args[0] !== "buildx" || args[2] !== "inspect")
+        throw new Error("Unexpected external command");
+      if (args[3] === `${input.image}:latest`) throw new Error("Synthetic registry read failure");
+      return JSON.stringify({ digest: input.digest });
+    });
+    const fetch = vi.fn(async (address: string, options: RequestInit) => {
+      if (options.method !== "GET") throw new Error("Unexpected external write");
+      if (address.endsWith(`/git/ref/tags/${input.tag}`))
+        return Response.json({ object: { type: "commit", sha: input.revision } });
+      if (address.endsWith(`/releases/tags/${input.tag}`))
+        return Response.json({
+          id: 10,
+          tag_name: input.tag,
+          draft: false,
+          prerelease: false,
+          assets: [],
+        });
+      if (address.endsWith("/releases/latest")) return Response.json({ tag_name: "v0.2.9" });
+      throw new Error("Unexpected external request");
+    });
+    vi.doMock("../scripts/lib/process.ts", () => ({ runProcess: run }));
+    vi.stubGlobal("fetch", fetch);
+    for (const [name, value] of Object.entries({
+      IMAGE: input.image,
+      RELEASE_TAG: input.tag,
+      INDEX_DIGEST: input.digest,
+      GITHUB_SHA: input.revision,
+      GH_REPO: "example/oci-dash",
+      GH_TOKEN: "synthetic-release-token",
+      VERIFICATION_RESULT: "success",
+    }))
+      vi.stubEnv(name, value);
+    process.argv = [process.execPath, resolve("scripts/release.ts"), "promote"];
+    try {
+      process.exitCode = undefined;
+      vi.resetModules();
+      await import("../scripts/release.ts");
+      await vi.waitFor(() => expect(process.exitCode).toBe(1));
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        "Latest version is unknown; retry promotion when both channels are readable",
+      );
+      expect(output).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      process.argv = argv;
+      process.exitCode = exitCode;
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+      vi.doUnmock("../scripts/lib/process.ts");
+      vi.resetModules();
+      error.mockRestore();
+      output.mockRestore();
+    }
+  });
 
   it("can resume after image latest advanced but GitHub latest failed", async () => {
     const { state, port } = fixture();
