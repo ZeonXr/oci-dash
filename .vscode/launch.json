@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OCI Dash: Development",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "DATABASE_PATH": "${workspaceFolder}/data/development/oci-dash.db"
+      }
+    }
+  ]
+}

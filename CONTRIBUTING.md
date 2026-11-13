@@ -11,11 +11,11 @@
 ```sh
 mise trust
 mise install node@26.13.0
-mise exec -- npm ci
-mise exec -- npm run dev
+mise exec node -- npm ci
+mise exec node -- npm run dev
 ```
 
-版本选择只作用于本项目，不修改全局默认版本。下文的检查命令也可加上 `mise exec --` 前缀。已有符合要求的 Node.js 时，可直接使用下面的 npm 命令。
+版本选择只作用于本项目，不修改全局默认版本。下文的检查命令也可加上 `mise exec node --` 前缀，只自动安装所选的 Node.js 工具。已有符合要求的 Node.js 时，可直接使用下面的 npm 命令。
 
 使用独立的开发检出目录和空数据库：
 
@@ -27,6 +27,10 @@ npm run dev
 `npm run dev` 启动同一进程内的 Next.js、业务 API、后台任务执行器和控制台网关。只运行这一个开发命令，不需要另外启动 Worker。打开 `http://localhost:6240`。首次在浏览器中填写用户名、密码和确认密码，或生成并复制 32 位随机密码；创建成功后自动登录并关闭初始化入口。主密钥自动保存到 `data/.master-key`，不生成默认管理员、初始密码文件或示例账号。高级配置通过终端环境变量传入，见[运维说明](docs/OPERATIONS.md#高级应用变量)。不要把生产配置复制到开发目录，也不要把密码放进提交或截图。
 
 开发服务器默认只监听 `127.0.0.1:6240`；需要其他端口时运行 `npm run dev -- --port 6241`，远程调试时显式指定 `--hostname`。Next.js 仍可能读取检出目录中的 `.env*`，请将旧文件移出开发目录，避免意外使用生产配置。
+
+使用 VS Code 时，直接打开仓库根目录，在“运行和调试”中选择 `OCI Dash: Development`，按 F5 调试运行，或从“运行”菜单选择“不调试运行”。[启动配置](.vscode/launch.json) 直接执行 `npm run dev`，使用终端 PATH 中的 Node.js 和 npm，不要求安装 mise。默认监听 `127.0.0.1:6240`，开发数据保存在 `data/development/`，首次启动需要创建管理员。
+
+同一端口只运行一个开发服务；切换到 VS Code 启动前，先停止其他终端中占用 6240 的实例。停止时在开发终端按 Ctrl+C，等待应用退出。
 
 页面和组件继续使用 Next.js HMR，开发产物保存在 `.next/dev`。后端与运行入口修改后，先按 Ctrl+C 等待退出，再重新运行开发命令；不使用整进程文件监听，避免新旧任务执行器重叠。开发入口也包含控制台网关，验证时使用合成 OCI 依赖；完整容器入口、WebSocket 和 OpenSSH 检查使用隔离测试。
 
