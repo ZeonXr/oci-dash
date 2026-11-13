@@ -466,7 +466,11 @@ describe("durable recovery of ambiguous OCI console creates", () => {
     f.store.reserve(row);
     const manager = createConsoleManager({
       store: f.store,
-      transport: { start: vi.fn(), cleanup: vi.fn(async () => {}) },
+      transport: {
+        connections: vi.fn(async () => []),
+        start: vi.fn(),
+        cleanup: vi.fn(async () => {}),
+      },
       resolveTarget: () => target,
       isActorValid: () => true,
     });

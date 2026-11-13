@@ -73,6 +73,69 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     throw new CloudError("等待 OCI 控制台连接超时", "CONSOLE_CONNECTION_TIMEOUT");
   }
 
+  async function connections({ target, signal }: Parameters<ConsoleTransport["connections"]>[0]) {
+    cancelled(signal);
+    let clients: OciClients | undefined;
+    try {
+      clients = await clientFactory(target.credentials, target.region, signal);
+      const compartmentId = await verifyConsoleTarget(clients, target, signal);
+      return (await listConsoles(clients, target, compartmentId, signal))
+        .filter((connection) => connection.lifecycleState !== "DELETED")
+        .map((connection) => ({
+          id: ocid(connection.id, "instanceconsoleconnection"),
+          state: String(connection.lifecycleState),
+        }));
+    } catch (error) {
+      throw cloudError(error, "查询 OCI 控制台连接失败");
+    } finally {
+      if (clients) await closeClients(clients);
+    }
+  }
+
+  async function removeConfirmed(
+    clients: OciClients,
+    id: string,
+    target: ConsoleTarget,
+    compartmentId: string,
+    signal: AbortSignal,
+  ) {
+    // This explicit path can end an untagged connection. Never use it for automatic cleanup.
+    let connection: CloudDocument;
+    try {
+      connection = await getConsole(clients, id, signal);
+    } catch (error) {
+      if (errorStatus(error) !== 404) throw error;
+      // Another client may already have removed it. A 404 alone also means lost
+      // permission, so require a complete successful list in the verified scope.
+      const current = await listConsoles(clients, target, compartmentId, signal);
+      if (current.some((item) => item.id === id && item.lifecycleState !== "DELETED")) throw error;
+      return;
+    }
+    if (connection.instanceId !== target.instanceId || connection.compartmentId !== compartmentId)
+      throw new CloudError("旧控制台连接不属于当前实例", "CONSOLE_TARGET_MISMATCH");
+    if (connection.lifecycleState === "ACTIVE") {
+      cancelled(signal);
+      await invoke(clients.compute, "deleteInstanceConsoleConnection", {
+        instanceConsoleConnectionId: id,
+        ...(typeof connection._consoleEtag === "string" && connection._consoleEtag
+          ? { ifMatch: connection._consoleEtag }
+          : {}),
+      });
+    } else if (!["DELETING", "DELETED"].includes(connection.lifecycleState)) {
+      throw new CloudError("旧控制台连接尚未就绪，请稍后重新查询", "CONSOLE_CONNECTION_EXISTS");
+    }
+    for (let attempt = 0; attempt < maxPolls; attempt++) {
+      const current = await listConsoles(clients, target, compartmentId, signal);
+      if (!current.some((item) => item.id === id && item.lifecycleState !== "DELETED")) return;
+      if (attempt + 1 < maxPolls) await consoleDelay(pollIntervalMs, signal);
+    }
+    throw new CloudError(
+      "旧控制台连接仍在结束中，请稍后重新查询",
+      "CONSOLE_REPLACEMENT_PENDING",
+      true,
+    );
+  }
+
   async function getForCleanup(
     clients: OciClients,
     id: string,
@@ -257,12 +320,14 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
   async function start({
     target,
     sessionId,
+    replaceConnectionId,
     signal,
     onCreationState,
     onCompartmentVerified,
     onConnectionCreated,
   }: Parameters<ConsoleTransport["start"]>[0]): Promise<ConsoleTunnel> {
     validateConsoleIdentity(target, sessionId);
+    if (replaceConnectionId) ocid(replaceConnectionId, "instanceconsoleconnection");
     cancelled(signal);
     let clients: OciClients | undefined;
     let ssh: ConsoleSshSession | undefined;
@@ -274,13 +339,30 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
       clients = await clientFactory(target.credentials, target.region);
       compartmentId = await verifyConsoleTarget(clients, target, signal);
       onCompartmentVerified?.(compartmentId);
-      const existing = await listConsoles(clients, target, compartmentId, signal);
-      if (existing.some((connection) => connection.lifecycleState !== "DELETED")) {
+      let existing = await listConsoles(clients, target, compartmentId, signal);
+      if (
+        existing.some(
+          (connection) =>
+            connection.lifecycleState !== "DELETED" && connection.id !== replaceConnectionId,
+        )
+      ) {
         // Even a same-session record must be cleaned first: it was created with a different key.
         throw new CloudError("实例已有控制台连接，请先结束原连接", "CONSOLE_CONNECTION_EXISTS");
       }
       ssh = await sshFactory({ sessionId, signal });
       cancelled(signal);
+      if (
+        replaceConnectionId &&
+        existing.some(
+          (connection) =>
+            connection.id === replaceConnectionId && connection.lifecycleState !== "DELETED",
+        )
+      ) {
+        await removeConfirmed(clients, replaceConnectionId, target, compartmentId, signal);
+        existing = await listConsoles(clients, target, compartmentId, signal);
+        if (existing.some((connection) => connection.lifecycleState !== "DELETED"))
+          throw new CloudError("实例已有其他控制台连接，请重新查询", "CONSOLE_CONNECTION_EXISTS");
+      }
       // Persist the ambiguity BEFORE dispatch. A process crash at any subsequent point
       // must leave enough metadata for cleanup to retain the slot and reconcile by tags.
       onCreationState?.("uncertain");
@@ -412,7 +494,7 @@ export function createConsoleTransport(options: ConsoleTransportOptions = {}): C
     }
   }
 
-  return { start, cleanup };
+  return { connections, start, cleanup };
 }
 
 export const consoleTransport = createConsoleTransport();

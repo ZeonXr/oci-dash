@@ -86,6 +86,7 @@ function setup() {
     deletePending?: boolean;
     instance?: CloudDocument;
     afterCreate?: () => void;
+    afterList?: () => void;
     transformGet?: (connection: CloudDocument) => CloudDocument;
   } = {};
   const call = vi.fn(async (operation: string, request: CloudDocument): Promise<CloudDocument> => {
@@ -101,6 +102,7 @@ function setup() {
       };
     if (operation === "listInstanceConsoleConnections") {
       if (state.listError) throw state.listError;
+      state.afterList?.();
       return { items: [...records.values()].map((record) => structuredClone(record)) };
     }
     if (operation === "createInstanceConsoleConnection") {
@@ -252,6 +254,186 @@ describe("OCI VNC command and key verification", () => {
 });
 
 describe("OCI console transport ownership and lifetime", () => {
+  it("lists only public connection metadata for the verified instance without changing resources", async () => {
+    const h = setup();
+    const deletedId = id("instanceconsoleconnection", "deleted");
+    const foreignId = id("instanceconsoleconnection", "foreign");
+    h.records.set(connectionId, live({ freeformTags: {} }));
+    h.records.set(deletedId, live({ id: deletedId, lifecycleState: "DELETED" }));
+    h.records.set(foreignId, live({ id: foreignId, instanceId: id("instance", "foreign") }));
+    expect(await h.transport.connections(h.input)).toEqual([{ id: connectionId, state: "ACTIVE" }]);
+    expect(h.history.at(-1)).toEqual({
+      operation: "listInstanceConsoleConnections",
+      request: { compartmentId: target.credentials.tenancyId, instanceId: target.instanceId },
+    });
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.ssh).not.toHaveBeenCalled();
+    expect(h.clientClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, "fresh-etag"])(
+    "replaces only the explicitly confirmed untagged connection using a fresh read (%s)",
+    async (etag) => {
+      const h = setup();
+      const oldId = id("instanceconsoleconnection", "old");
+      h.state.etag = etag;
+      h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+      const tunnel = await h.transport.start({ ...h.input, replaceConnectionId: oldId });
+      const deletionIndex = h.history.findIndex(
+        (entry) => entry.operation === "deleteInstanceConsoleConnection",
+      );
+      expect(h.history[deletionIndex - 1]).toEqual({
+        operation: "getInstanceConsoleConnection",
+        request: { instanceConsoleConnectionId: oldId },
+      });
+      expect(h.history[deletionIndex].request).toEqual({
+        instanceConsoleConnectionId: oldId,
+        ...(etag ? { ifMatch: etag } : {}),
+      });
+      const createIndex = h.history.findIndex(
+        (entry) => entry.operation === "createInstanceConsoleConnection",
+      );
+      expect(createIndex).toBeGreaterThan(deletionIndex);
+      expect(
+        h.history.slice(deletionIndex + 1, createIndex).map((entry) => entry.operation),
+      ).toEqual(["listInstanceConsoleConnections", "listInstanceConsoleConnections"]);
+      expect([...h.records.keys()]).toEqual([connectionId]);
+      expect(h.records.get(connectionId)?.freeformTags).toEqual(consoleTags(target, sessionId));
+      await tunnel.close();
+    },
+  );
+
+  it.each([
+    { instanceId: id("instance", "foreign") },
+    { compartmentId: id("compartment", "foreign") },
+    { id: id("instanceconsoleconnection", "different") },
+  ])("does not replace a connection whose fresh identity changed: %j", async (overrides) => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.transformGet = (value) => ({ ...value, ...overrides });
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toBeDefined();
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.records.has(oldId)).toBe(true);
+    expect(h.sshClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a different live connection even when another ID was confirmed", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.records.set(connectionId, live({ freeformTags: {} }));
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toMatchObject({ code: "CONSOLE_CONNECTION_EXISTS" });
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.ssh).not.toHaveBeenCalled();
+  });
+
+  it("prepares the local SSH session before ending the confirmed connection", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    vi.mocked(h.ssh).mockRejectedValue(new Error("SSH unavailable"));
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toBeDefined();
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.records.has(oldId)).toBe(true);
+  });
+
+  it("keeps the selected connection and creates nothing when cancellation follows listing", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.afterList = () => h.controller.abort();
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.ssh).not.toHaveBeenCalled();
+  });
+
+  it.each(["CREATING", "DELETING"])(
+    "does not create another connection while the old connection is %s",
+    async (lifecycleState) => {
+      const h = setup();
+      const oldId = id("instanceconsoleconnection", "old");
+      h.records.set(oldId, live({ id: oldId, lifecycleState, freeformTags: {} }));
+      await expect(
+        h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+      ).rejects.toMatchObject({
+        code:
+          lifecycleState === "CREATING"
+            ? "CONSOLE_CONNECTION_EXISTS"
+            : "CONSOLE_REPLACEMENT_PENDING",
+      });
+      expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+      expect(h.records.has(oldId)).toBe(true);
+    },
+  );
+
+  it("does not create if the explicitly deleted connection remains pending", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.deletePending = true;
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toMatchObject({ code: "CONSOLE_REPLACEMENT_PENDING" });
+    expect(h.history.filter((entry) => entry.operation.startsWith("delete"))).toHaveLength(1);
+    expect(h.history.some((entry) => entry.operation.startsWith("create"))).toBe(false);
+    expect(h.records.get(oldId)?.lifecycleState).toBe("DELETING");
+  });
+
+  it("does not infer deletion or start a new connection after a fresh read returns permission 404", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.readError = { statusCode: 404, code: "NotAuthorizedOrNotFound" };
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toMatchObject({ code: "NotAuthorizedOrNotFound" });
+    expect(h.history.some((entry) => /create|delete/i.test(entry.operation))).toBe(false);
+    expect(h.records.has(oldId)).toBe(true);
+  });
+
+  it("accepts a concurrently removed old connection only after a complete scoped list proves absence", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.transformGet = (value) => {
+      if (value.id === oldId) {
+        h.records.delete(oldId);
+        throw { statusCode: 404, code: "NotAuthorizedOrNotFound" };
+      }
+      return structuredClone(value);
+    };
+    const tunnel = await h.transport.start({ ...h.input, replaceConnectionId: oldId });
+    expect(h.history.some((entry) => entry.operation.startsWith("delete"))).toBe(false);
+    expect([...h.records.keys()]).toEqual([connectionId]);
+    expect(h.onConnectionCreated).toHaveBeenCalledExactlyOnceWith(connectionId);
+    await tunnel.close();
+  });
+
+  it("does not create if deletion cannot be proven by a successful scoped list", async () => {
+    const h = setup();
+    const oldId = id("instanceconsoleconnection", "old");
+    h.records.set(oldId, live({ id: oldId, freeformTags: {} }));
+    h.state.transformGet = (value) => {
+      h.state.listError = { statusCode: 403, code: "NotAuthorizedOrNotFound" };
+      return structuredClone(value);
+    };
+    await expect(
+      h.transport.start({ ...h.input, replaceConnectionId: oldId }),
+    ).rejects.toMatchObject({ code: "NotAuthorizedOrNotFound" });
+    expect(h.history.filter((entry) => entry.operation.startsWith("delete"))).toHaveLength(1);
+    expect(h.history.some((entry) => entry.operation.startsWith("create"))).toBe(false);
+    expect(h.onConnectionCreated).not.toHaveBeenCalled();
+  });
+
   it("cleans a known OCI connection without an undocumented ETag or a compartment scan", async () => {
     for (const etag of [undefined, "optional-console-etag"]) {
       const h = setup();

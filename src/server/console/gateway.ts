@@ -26,7 +26,17 @@ export interface ConsoleGateway {
 const identifier = "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})";
 const sessionRoute = new RegExp(`^/api/console/sessions/${identifier}(?:/(ticket|close|touch))?$`);
 const socketRoute = new RegExp(`^/api/console/sessions/${identifier}/socket$`);
-const startSchema = z.object({ instanceId: z.string().min(1).max(2048) }).strict();
+const instanceIdSchema = z.string().min(1).max(2048);
+const startSchema = z
+  .object({
+    instanceId: instanceIdSchema,
+    replaceConnectionId: z
+      .string()
+      .max(2048)
+      .regex(/^ocid1\.instanceconsoleconnection\.[A-Za-z0-9._-]+$/)
+      .optional(),
+  })
+  .strict();
 
 function actorFor(request: Request): ConsoleActor {
   const user = requireUser(request);
@@ -84,19 +94,37 @@ export function createConsoleGateway(options: GatewayOptions): ConsoleGateway {
   async function handleRequest(request: Request): Promise<Response> {
     try {
       if (stopping) throw new AppError("控制台服务正在停止", 503, "CONSOLE_UNAVAILABLE");
-      const path = new URL(request.url).pathname;
+      const url = new URL(request.url);
+      const path = url.pathname;
       const actor = authenticate(request);
       const method = request.method;
       if (!["GET", "HEAD"].includes(method)) {
         assertOrigin(request);
       }
       if (method === "GET" && path === "/api/console/session") {
-        return json({ session: manager.current(actor) });
+        const instanceId = url.searchParams.get("instanceId");
+        return json({
+          session: manager.current(
+            actor,
+            instanceId === null ? undefined : instanceIdSchema.parse(instanceId),
+          ),
+        });
+      }
+      if (method === "GET" && path === "/api/console/connections") {
+        const instanceId = instanceIdSchema.parse(url.searchParams.get("instanceId"));
+        return json({ connections: await manager.connections(instanceId, actor) });
       }
       if (method === "POST" && path === "/api/console/sessions") {
-        const { instanceId } = startSchema.parse(await readJson(request));
-        const session = await manager.create(instanceId, actor);
-        recordEvent(actor, "console.create", instanceId, "正在准备 VNC 控制台");
+        const { instanceId, replaceConnectionId } = startSchema.parse(await readJson(request));
+        const session = await manager.create(instanceId, actor, replaceConnectionId);
+        recordEvent(
+          actor,
+          replaceConnectionId ? "console.replace" : "console.create",
+          instanceId,
+          replaceConnectionId
+            ? `已请求替换指定控制台连接：${replaceConnectionId}`
+            : "正在准备 VNC 控制台",
+        );
         return json({ session }, 202);
       }
       const match = sessionRoute.exec(path);

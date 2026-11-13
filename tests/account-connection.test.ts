@@ -296,6 +296,7 @@ describe("atomic account save and background connection", () => {
     });
     let closed!: () => void;
     const transport: ConsoleTransport = {
+      connections: async () => [],
       start: async (request) => {
         request.onConnectionCreated(ocid("instanceconsoleconnection"));
         request.onCompartmentVerified?.(account.tenancyId);

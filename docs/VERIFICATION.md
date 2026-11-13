@@ -64,6 +64,20 @@ npm run test:e2e:isolated -- --no-build
 
 现有测试默认关闭 trace、video 和自动失败截图，避免把登录请求写进产物。隔离脚本会清理本次报告和截图。调试产物只允许包含测试拦截提供的合成数据；`E2E_SCREENSHOTS=1` 输出目录受 Git 忽略，不得为生产登录开启录制。浏览器检查应通过隔离脚本启动，不以个人部署作为测试目标。
 
+### VNC 开发与运行验证
+
+Windows 原生 Node.js 可用于界面和业务 API 开发；默认 VNC 通道依赖 OpenSSH ControlMaster，须在 Linux 容器中运行。Windows 上尝试创建 VNC 会话时返回 `CONSOLE_PLATFORM_UNSUPPORTED`，不会生成临时 SSH 密钥或会话目录。单元测试注入模拟 SSH runner，不受这一运行平台限制。
+
+只检查控制台界面时，使用已有 Dockerfile 和隔离浏览器套件：
+
+```sh
+npm run test:e2e:isolated -- tests/e2e/console.spec.ts
+```
+
+脚本自动通过仓库 Dockerfile 构建专用 Linux 镜像，以空数据库和随机本机端口启动独立测试项目，完成后清理本次镜像、容器、数据和报告。无需复制个人数据或配置 OCI 连接，也不影响正在运行的开发服务。已有本次源码镜像时，可按上一节使用 `--no-build`。
+
+控制台浏览器测试拦截 API 和 WebSocket，以模拟 RFB 服务验证真实 noVNC 客户端的握手和交互。通过此测试不代表已验证 OCI 的实际网络、权限、SSH 通道或来宾系统登录；真实 OCI 连通性需在明确授权的隔离资源上另行验收。
+
 ## 覆盖范围
 
 | 范围       | 主要检查                                                               |

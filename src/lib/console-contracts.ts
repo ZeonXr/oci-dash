@@ -19,3 +19,9 @@ export interface ConsoleSocketTicket {
   expiresAt: string;
   path: string;
 }
+
+/** Existing OCI connection metadata; never includes keys or connection commands. */
+export interface ConsoleConnectionSummary {
+  id: string;
+  state: string;
+}

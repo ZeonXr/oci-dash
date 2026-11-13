@@ -5,9 +5,25 @@ import Link from "next/link";
 import { ChevronRight, Keyboard, Maximize2, Minimize2, Monitor, Plug, Unplug } from "lucide-react";
 import type RFB from "@novnc/novnc";
 import type { InstanceSummary } from "@/lib/contracts";
-import type { ConsoleSessionSummary, ConsoleSocketTicket } from "@/lib/console-contracts";
-import { api, errorMessage, useResource } from "./api";
-import { StatusBadge, Button, ErrorState, LoadingState, PageHeader, Status } from "./ui";
+import type {
+  ConsoleConnectionSummary,
+  ConsoleSessionSummary,
+  ConsoleSocketTicket,
+} from "@/lib/console-contracts";
+import { api, ApiError, errorMessage, useResource } from "./api";
+import {
+  StatusBadge,
+  Button,
+  CopyButton,
+  ErrorState,
+  Field,
+  LoadingState,
+  Modal,
+  PageHeader,
+  Select,
+  Status,
+} from "./ui";
+import { CodeTag } from "./code-tag";
 import { formatDate } from "./format";
 import { RegionTag } from "./region-label";
 
@@ -67,6 +83,11 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
   const [transport, setTransport] = useState<TransportState>("idle");
   const [fit, setFit] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [connections, setConnections] = useState<ConsoleConnectionSummary[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
+  const [replacementId, setReplacementId] = useState("");
   const screen = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLElement>(null);
   const alive = useRef(false);
@@ -81,6 +102,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
   const pollingRef = useRef(false);
   const lastTouch = useRef(0);
   const fitRef = useRef(true);
+  const connectionsRequest = useRef(0);
 
   const showTransport = useCallback((value: TransportState) => {
     currentTransport.current = value;
@@ -93,10 +115,8 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
   }, []);
   const receive = useCallback((value: ConsoleSessionSummary | null) => {
     if (!alive.current) return;
-    // Retain the last completed result after the global slot becomes empty.
-    const next = value || (isActive(currentSession.current) ? null : currentSession.current);
-    currentSession.current = next;
-    setSession(next);
+    currentSession.current = value;
+    setSession(value);
     setLoaded(true);
     setFetchError(null);
     if (owned.current && value?.id === owned.current && !isActive(value)) {
@@ -110,9 +130,10 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
     const revision = mutation.current;
     const id = owned.current;
     try {
-      const result = await api<SessionResponse>(id ? sessionUrl(id) : "/api/console/session", {
-        signal: AbortSignal.timeout(10000),
-      });
+      const result = await api<SessionResponse>(
+        id ? sessionUrl(id) : `/api/console/session?instanceId=${encodeURIComponent(instanceId)}`,
+        { signal: AbortSignal.timeout(10000) },
+      );
       if (alive.current && revision === mutation.current && !creatingRef.current)
         receive(result.session);
     } catch (reason) {
@@ -120,7 +141,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
     } finally {
       pollingRef.current = false;
     }
-  }, [receive]);
+  }, [instanceId, receive]);
 
   useEffect(() => {
     alive.current = true;
@@ -170,7 +191,34 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
     [receive, showTransport, stopRfb],
   );
 
-  const connect = async () => {
+  const loadConnections = async () => {
+    const request = ++connectionsRequest.current;
+    setConnectionsOpen(true);
+    setConnectionsLoading(true);
+    setConnectionsError(null);
+    setConnections([]);
+    setReplacementId("");
+    try {
+      const result = await api<{ connections: ConsoleConnectionSummary[] }>(
+        `/api/console/connections?instanceId=${encodeURIComponent(instanceId)}`,
+        { signal: AbortSignal.timeout(10000) },
+      );
+      if (!alive.current || request !== connectionsRequest.current) return;
+      setConnections(result.connections);
+      if (result.connections.length === 1) setReplacementId(result.connections[0].id);
+    } catch (reason) {
+      if (alive.current && request === connectionsRequest.current)
+        setConnectionsError(errorMessage(reason));
+    } finally {
+      if (alive.current && request === connectionsRequest.current) setConnectionsLoading(false);
+    }
+  };
+  const closeConnections = () => {
+    connectionsRequest.current += 1;
+    setConnectionsOpen(false);
+  };
+
+  const connect = async (replaceConnectionId?: string) => {
     if (
       creatingRef.current ||
       closingRef.current ||
@@ -186,6 +234,7 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
     const revision = mutation.current;
     setCreating(true);
     setError(null);
+    setConnectionsError(null);
     showTransport("idle");
     try {
       // Do not abort this request on navigation: its eventual id is needed to
@@ -193,7 +242,10 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
       const result = await api<{ session: ConsoleSessionSummary }>("/api/console/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instanceId }),
+        body: JSON.stringify({
+          instanceId,
+          ...(replaceConnectionId ? { replaceConnectionId } : {}),
+        }),
       });
       if (!alive.current || revision !== mutation.current) {
         closeOnLeave(result.session.id);
@@ -202,9 +254,17 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
       owned.current = result.session.id;
       setOwnedId(result.session.id);
       receive(result.session);
+      closeConnections();
     } catch (reason) {
       if (alive.current) {
-        setError(errorMessage(reason));
+        const message = errorMessage(reason);
+        const conflict = reason instanceof ApiError && reason.code === "CONSOLE_CONNECTION_EXISTS";
+        const detail =
+          conflict && !message.includes("CONSOLE_CONNECTION_EXISTS")
+            ? `${message}（CONSOLE_CONNECTION_EXISTS）`
+            : message;
+        setError(detail);
+        if (replaceConnectionId) setConnectionsError(detail);
         // A conflict or lost response may mean another session owns the slot.
         // Recheck before allowing another create request.
         setLoaded(false);
@@ -349,6 +409,15 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
               ? stateLabels[session.state]
               : "未连接";
   const canConnect = loaded && !fetchError && !active && !creating && !closing && !terminated;
+  const connectionExists = [error, session?.lastError].some((message) =>
+    message?.includes("CONSOLE_CONNECTION_EXISTS"),
+  );
+  const selectedConnection = connections.find((connection) => connection.id === replacementId);
+  const canReplace =
+    canConnect &&
+    !connectionsLoading &&
+    !connectionsError &&
+    selectedConnection?.state === "ACTIVE";
   const placeholder = occupied
     ? "已有控制台会话正在使用"
     : session?.cleanupPending
@@ -416,6 +485,13 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
         {error && <ErrorState message={error} />}
         {session?.lastError && session.lastError !== error && (
           <ErrorState message={session.lastError} />
+        )}
+        {connectionExists && (
+          <div>
+            <Button disabled={!canConnect} onClick={() => void loadConnections()}>
+              处理已有连接
+            </Button>
+          </div>
         )}
       </div>
       <section
@@ -538,6 +614,92 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </span>
         </div>
       </section>
+      <Modal
+        open={connectionsOpen}
+        initialFocus="title"
+        title="处理已有控制台连接"
+        description="结束选中的旧连接会断开使用该连接的控制台，然后为当前实例重新创建 VNC 会话。"
+        busy={creating}
+        onClose={closeConnections}
+        footer={
+          <>
+            <Button disabled={creating} onClick={closeConnections}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!canReplace}
+              loading={creating}
+              onClick={() => {
+                if (canReplace) void connect(replacementId);
+              }}
+            >
+              结束旧连接并重新创建
+            </Button>
+          </>
+        }
+      >
+        {connectionsLoading ? (
+          <LoadingState />
+        ) : connectionsError ? (
+          <ErrorState message={connectionsError} retry={() => void loadConnections()} />
+        ) : (
+          <>
+            {connections.length > 1 && (
+              <Field label="选择要结束的连接">
+                <Select
+                  value={replacementId}
+                  onValueChange={setReplacementId}
+                  disabled={creating}
+                  options={[
+                    { value: "", label: "请选择连接" },
+                    ...connections.map((connection) => ({
+                      value: connection.id,
+                      label: connection.id,
+                    })),
+                  ]}
+                />
+              </Field>
+            )}
+            {connections.map((connection) => (
+              <div key={connection.id} className="flex min-w-0 flex-col gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <CodeTag>{connection.id}</CodeTag>
+                  <CopyButton value={connection.id} label="复制控制台连接 ID" />
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">状态</span>
+                  <CodeTag>{connection.state}</CodeTag>
+                </div>
+              </div>
+            ))}
+            {connections.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                当前没有已有控制台连接。关闭此窗口后可重试连接。
+              </p>
+            )}
+            {selectedConnection?.state === "DELETING" && (
+              <p className="text-sm text-muted-foreground">
+                此连接正在结束，请等待后点击“刷新”查看状态。
+              </p>
+            )}
+            {selectedConnection?.state === "CREATING" && (
+              <p className="text-sm text-muted-foreground">
+                此连接正在创建，请等待后点击“刷新”查看状态。
+              </p>
+            )}
+            <div>
+              <Button
+                disabled={creating}
+                loading={connectionsLoading}
+                onClick={() => void loadConnections()}
+              >
+                刷新
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
     </>
   );
 }

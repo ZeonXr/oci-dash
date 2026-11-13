@@ -134,19 +134,20 @@ IP 展示复用 `IpAddressButton` 和 `IpDetailsDialog`，列表与实例详情�
 
 页面位于 `/instances/[id]/console`。只有用户点击连接后才创建 OCI 控制台，临时 RSA 密钥不进入持久数据表。OpenSSH 使用结构化参数；OCI 命令仅作为数据解析，不交给 shell 执行。
 
-| 接口                                                     | 行为                                                               |
-| -------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/console/session`                               | `{session}`，查看全局占用。                                        |
-| `POST /api/console/sessions`                             | `{instanceId}` → `{session}`，HTTP 202。                           |
-| `GET /api/console/sessions/:id`                          | 登录会话所有者读取状态。                                           |
-| `DELETE /api/console/sessions/:id`、`POST .../:id/close` | 关闭并清理，返回 `{session}`。                                     |
-| `POST .../:id/touch`                                     | 记录用户操作。                                                     |
-| `POST .../:id/ticket`                                    | `{ticket,expiresAt,path}`；票据单次使用、有效 30 秒。              |
-| `GET .../:id/socket` 的 WebSocket Upgrade                | 使用 `oci-console` 和 `ticket.<value>` 协议，传输二进制 RFB 数据。 |
+| 接口                                                     | 行为                                                                                          |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET /api/console/session`                               | `{session}`，优先返回全局占用；可选 `instanceId` 查询当前登录在该实例最近的终态。             |
+| `GET /api/console/connections?instanceId=...`            | `{connections:[{id,state}]}`，只读查询实例已有连接。                                          |
+| `POST /api/console/sessions`                             | `{instanceId,replaceConnectionId?}` → `{session}`，HTTP 202；可选 ID 表示明确确认替换该连接。 |
+| `GET /api/console/sessions/:id`                          | 登录会话所有者读取状态。                                                                      |
+| `DELETE /api/console/sessions/:id`、`POST .../:id/close` | 关闭并清理，返回 `{session}`。                                                                |
+| `POST .../:id/touch`                                     | 记录用户操作。                                                                                |
+| `POST .../:id/ticket`                                    | `{ticket,expiresAt,path}`；票据单次使用、有效 30 秒。                                         |
+| `GET .../:id/socket` 的 WebSocket Upgrade                | 使用 `oci-console` 和 `ticket.<value>` 协议，传输二进制 RFB 数据。                            |
 
 握手检查登录、Origin、所有者/登录会话绑定及标准 WebSocket 头；存活连接会再次验证登录。票据和私钥不放入 URL。全局唯一槽覆盖活动会话及未完成清理，不能借新会话绕过清理失败。
 
-外层 SSH 主机密钥与 OCI API 指纹匹配；内层仅通过认证外层通道使用本次私有 known_hosts。清理只删除账号、实例和会话标签都匹配的连接。权限不足或创建结果不明确时保留记录和锁。完整应用启动后会按持久记录恢复和清理控制台。
+外层 SSH 主机密钥与 OCI API 指纹匹配；内层仅通过认证外层通道使用本次私有 known_hosts。自动清理只删除账号、实例和会话标签都匹配的连接。显式替换先准备本地 SSH 会话，再重新读取指定连接并核验实例和区间，结束后通过完整列表确认删除，才创建新连接。替换 ID 仅保留在内存中，服务重启不会恢复删除外部连接的动作。权限不足或创建结果不明确时保留记录和锁。完整应用启动后会按持久记录恢复和清理本应用连接。
 
 控制台记录保留已验证的所属区间。对于缺少该信息且父实例已不可读的旧记录，清理要求 `accessLevel=ANY` 的完整区间枚举及每个区间的连接枚举；失败或权限不足不能作为资源已经消失的证据。
 

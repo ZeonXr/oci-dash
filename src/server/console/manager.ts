@@ -1,7 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
 import type { Duplex } from "node:stream";
-import type { ConsoleSessionSummary, ConsoleSocketTicket } from "../../lib/console-contracts";
+import type {
+  ConsoleConnectionSummary,
+  ConsoleSessionSummary,
+  ConsoleSocketTicket,
+} from "../../lib/console-contracts";
 import { getCredentials } from "../accounts";
 import { getOrm } from "../db";
 import { sessions } from "../database/schema";
@@ -18,8 +22,13 @@ import type { ConsoleActor, ConsoleTarget, ConsoleTransport, ConsoleTunnel } fro
 
 export interface ConsoleManager {
   initialize(): Promise<void>;
-  current(actor: ConsoleActor): ConsoleSessionSummary | null;
-  create(instanceId: string, actor: ConsoleActor): Promise<ConsoleSessionSummary>;
+  current(actor: ConsoleActor, instanceId?: string): ConsoleSessionSummary | null;
+  connections(instanceId: string, actor: ConsoleActor): Promise<ConsoleConnectionSummary[]>;
+  create(
+    instanceId: string,
+    actor: ConsoleActor,
+    replaceConnectionId?: string,
+  ): Promise<ConsoleSessionSummary>;
   get(id: string, actor: ConsoleActor): ConsoleSessionSummary;
   issueTicket(id: string, actor: ConsoleActor): ConsoleSocketTicket;
   connect(id: string, ticket: string, actor: ConsoleActor): Promise<Duplex>;
@@ -64,6 +73,7 @@ const defaultLimits: ConsoleLimits = {
 
 interface Runtime {
   id: string;
+  replaceConnectionId?: string;
   target?: ConsoleTarget;
   controller: AbortController;
   preparePending: boolean;
@@ -326,6 +336,9 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
       const tunnel = await options.transport.start({
         target: runtime.target!,
         sessionId: runtime.id,
+        ...(runtime.replaceConnectionId
+          ? { replaceConnectionId: runtime.replaceConnectionId }
+          : {}),
         signal: runtime.controller.signal,
         onCompartmentVerified(compartmentId) {
           store.update(runtime.id, { compartmentId });
@@ -417,13 +430,26 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
       })();
       return initializing;
     },
-    current(actor) {
+    current(actor, instanceId) {
       ensureInitialized();
       validateActor(actor);
-      const row = store.active();
+      const row = store.active() ?? (instanceId ? store.latest(instanceId, actor) : null);
       return row ? consoleSummary(row) : null;
     },
-    async create(instanceId, actor) {
+    async connections(instanceId, actor) {
+      ensureInitialized();
+      validateActor(actor);
+      const target = resolveTarget(instanceId);
+      if (target.instanceId !== instanceId)
+        throw new AppError("控制台实例信息不匹配", 409, "CONSOLE_TARGET_MISMATCH");
+      const result = await options.transport.connections({
+        target,
+        signal: AbortSignal.timeout(30_000),
+      });
+      validateActor(actor);
+      return result;
+    },
+    async create(instanceId, actor, replaceConnectionId) {
       ensureInitialized();
       validateActor(actor);
       // Target resolution and reservation are synchronous; two requests cannot await into this slot.
@@ -466,6 +492,7 @@ export function createConsoleManager(options: ConsoleManagerOptions): ConsoleMan
         row.instanceName = target.instanceName;
       });
       const runtime = runtimeFor(row);
+      runtime.replaceConnectionId = replaceConnectionId;
       runtime.target = target;
       runtime.localClosed = false;
       runtime.preparePending = true;

@@ -1,10 +1,11 @@
 import type Database from "better-sqlite3";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { ConsoleSessionSummary } from "../../lib/console-contracts";
 import { getDatabase } from "../db";
 import { ormFor } from "../database/client";
 import { consoleSessions } from "../database/schema";
 import { AppError } from "../errors";
+import type { ConsoleActor } from "./types";
 
 type SessionRow = typeof consoleSessions.$inferSelect;
 /** Durable cleanup metadata only. Credentials and websocket tickets must never enter this row. */
@@ -34,6 +35,10 @@ type SessionPatch = Partial<
 
 export interface ConsoleSessionStore {
   active(): ConsoleSessionRecord | null;
+  latest(
+    instanceId: string,
+    actor: Pick<ConsoleActor, "userId" | "sessionHash">,
+  ): ConsoleSessionRecord | null;
   get(id: string): ConsoleSessionRecord | null;
   reserve(record: ConsoleSessionRecord, validate?: () => void): void;
   update(id: string, patch: SessionPatch): void;
@@ -69,6 +74,24 @@ export function createConsoleStore(db: Database.Database = getDatabase()): Conso
   return {
     active: () =>
       decode(orm.select().from(consoleSessions).where(eq(consoleSessions.slot, 1)).get()),
+    latest: (instanceId, actor) =>
+      decode(
+        orm
+          .select()
+          .from(consoleSessions)
+          .where(
+            and(
+              eq(consoleSessions.instanceId, instanceId),
+              eq(consoleSessions.ownerUserId, actor.userId),
+              eq(consoleSessions.ownerSessionHash, actor.sessionHash),
+              isNull(consoleSessions.slot),
+              inArray(consoleSessions.state, ["closed", "failed"]),
+            ),
+          )
+          .orderBy(desc(consoleSessions.createdAt), desc(consoleSessions.id))
+          .limit(1)
+          .get(),
+      ),
     get: (id) => decode(orm.select().from(consoleSessions).where(eq(consoleSessions.id, id)).get()),
     reserve(record, validate) {
       db.transaction(() => {

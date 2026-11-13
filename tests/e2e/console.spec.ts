@@ -1,6 +1,9 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import type { InstanceSummary } from "../../src/lib/contracts";
-import type { ConsoleSessionSummary } from "../../src/lib/console-contracts";
+import type {
+  ConsoleConnectionSummary,
+  ConsoleSessionSummary,
+} from "../../src/lib/console-contracts";
 
 // All API calls and WebSockets are intercepted. No login, credentials, OCI
 // writes or connection to a real console are used by this suite.
@@ -35,6 +38,12 @@ const summary = (id = "console-session-1"): ConsoleSessionSummary => ({
   expiresAt: now(),
   lastError: null,
   cleanupPending: false,
+});
+const conflictMessage = "实例已有控制台连接，请先结束原连接（CONSOLE_CONNECTION_EXISTS）";
+const failedSummary = (): ConsoleSessionSummary => ({
+  ...summary("failed-console-session"),
+  state: "failed",
+  lastError: conflictMessage,
 });
 
 function rfbFixture(socket: WebSocketRoute, authenticated: boolean) {
@@ -89,11 +98,19 @@ async function setup(
     preparing?: boolean;
     authenticated?: boolean;
     holdCreate?: Promise<void>;
+    connections?: ConsoleConnectionSummary[];
   } = {},
 ) {
   const origin = new URL(test.info().project.use.baseURL || "http://localhost:6240").origin;
   const fixture = {
     session: options.existing || (null as ConsoleSessionSummary | null),
+    slotActive: Boolean(
+      options.existing &&
+      (options.existing.cleanupPending || !["closed", "failed"].includes(options.existing.state)),
+    ),
+    connections: options.connections ?? [],
+    connectionReads: 0,
+    createBodies: [] as { instanceId: string; replaceConnectionId?: string }[],
     writes: [] as string[],
     unexpected: [] as string[],
     errors: [] as string[],
@@ -205,13 +222,33 @@ async function setup(
     if (path === `/api/instances/${instance.id}/metrics` && method === "GET")
       return json({ points: [], intervalSeconds: 60, available: false, source: "oci" });
     if (path === "/api/jobs" && method === "GET") return json({ jobs: [], recentJobs: [] });
-    if (path === "/api/console/session" && method === "GET")
-      return json({ session: fixture.session });
+    if (path === "/api/console/session" && method === "GET") {
+      expect(url.searchParams.get("instanceId")).toBe(instance.id);
+      return json({
+        session:
+          fixture.slotActive || fixture.session?.instanceId === url.searchParams.get("instanceId")
+            ? fixture.session
+            : null,
+      });
+    }
+    if (path === "/api/console/connections" && method === "GET") {
+      expect(url.searchParams.get("instanceId")).toBe(instance.id);
+      fixture.connectionReads += 1;
+      return json({ connections: fixture.connections });
+    }
     if (path === "/api/console/sessions" && method === "POST") {
       expect(["TERMINATED", "TERMINATING"]).not.toContain(options.instanceState);
-      expect(req.postDataJSON()).toEqual({ instanceId: instance.id });
+      const body = req.postDataJSON() as { instanceId: string; replaceConnectionId?: string };
+      expect(body.instanceId).toBe(instance.id);
+      if (body.replaceConnectionId) {
+        expect(fixture.connections.map((connection) => connection.id)).toContain(
+          body.replaceConnectionId,
+        );
+      } else expect(body).toEqual({ instanceId: instance.id });
+      fixture.createBodies.push(body);
       fixture.creates += 1;
       fixture.session = summary(`console-session-${fixture.creates}`);
+      fixture.slotActive = true;
       if (options.preparing) fixture.session.state = "preparing";
       if (options.holdCreate) await options.holdCreate;
       return json({ session: fixture.session }, 202);
@@ -238,6 +275,7 @@ async function setup(
           state: fixture.cleanupPending ? "failed" : "closed",
           cleanupPending: fixture.cleanupPending,
         };
+        fixture.slotActive = fixture.cleanupPending;
         return json({ session: fixture.session });
       }
     }
@@ -355,6 +393,106 @@ test("认证失败显示错误并回收本页会话", async ({ page }) => {
   await expect(page.locator(".console-notices [role=alert]")).toContainText("控制台认证未通过");
   await expect.poll(() => fixture.closes).toBe(1);
   await expect(page.getByRole("button", { name: "重试连接" })).toBeEnabled();
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("准备失败释放活动槽后，刷新仍显示当前实例的失败原因", async ({ page }) => {
+  const fixture = await setup(page, { preparing: true });
+  await page.goto(consolePath);
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await expect.poll(() => fixture.creates).toBe(1);
+  fixture.session = {
+    ...fixture.session!,
+    state: "failed",
+    lastError: conflictMessage,
+  };
+  fixture.slotActive = false;
+  await expect(page.locator(".console-notices [role=alert]")).toContainText(conflictMessage);
+  await expect(page.getByRole("button", { name: "重试连接" })).toBeEnabled();
+  expect(fixture.tickets).toBe(0);
+  expect(fixture.connectionReads).toBe(0);
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("连接失败");
+  await expect(page.locator(".console-notices [role=alert]")).toContainText(conflictMessage);
+  await expect(page.getByRole("button", { name: "处理已有连接" })).toBeEnabled();
+  expect(fixture.creates).toBe(1);
+  expect(fixture.closes).toBe(0);
+  expect(fixture.connectionReads).toBe(0);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("打开和取消处理已有连接只查询，不结束或创建连接", async ({ page }) => {
+  const connection = { id: "ocid1.instanceconsoleconnection.fixture-old", state: "ACTIVE" };
+  const fixture = await setup(page, {
+    existing: failedSummary(),
+    connections: [connection],
+  });
+  await page.goto(consolePath);
+  expect(fixture.connectionReads).toBe(0);
+  await page.getByRole("button", { name: "处理已有连接" }).click();
+  const dialog = page.getByRole("dialog", { name: "处理已有控制台连接" });
+  await expect(dialog.getByText(connection.id, { exact: true })).toBeVisible();
+  await expect(dialog.getByText("ACTIVE", { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/结束选中的旧连接会断开使用该连接的控制台/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "结束旧连接并重新创建" })).toBeEnabled();
+  expect(fixture.connectionReads).toBe(1);
+  expect(fixture.writes).toEqual([]);
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(fixture.creates).toBe(0);
+  expect(fixture.closes).toBe(0);
+  expect(fixture.writes).toEqual([]);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("多条已有连接必须选择，确认才提交准确的连接 ID 并完成 noVNC 握手", async ({ page }) => {
+  const connections = [
+    { id: "ocid1.instanceconsoleconnection.fixture-first", state: "ACTIVE" },
+    { id: "ocid1.instanceconsoleconnection.fixture-selected", state: "ACTIVE" },
+  ];
+  const fixture = await setup(page, { existing: failedSummary(), connections });
+  await page.goto(consolePath);
+  await page.getByRole("button", { name: "处理已有连接" }).click();
+  const dialog = page.getByRole("dialog", { name: "处理已有控制台连接" });
+  const confirm = dialog.getByRole("button", { name: "结束旧连接并重新创建" });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByRole("combobox", { name: "选择要结束的连接" }).click();
+  await page.getByRole("option", { name: connections[1].id, exact: true }).click();
+  await expect(confirm).toBeEnabled();
+  expect(fixture.creates).toBe(0);
+  expect(fixture.writes).toEqual([]);
+  await confirm.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("已连接");
+  expect(fixture.createBodies).toEqual([
+    { instanceId: instance.id, replaceConnectionId: connections[1].id },
+  ]);
+  expect(fixture.creates).toBe(1);
+  expect(fixture.tickets).toBe(1);
+  expect(fixture.connectionReads).toBe(1);
+  expect(fixture.unexpected).toEqual([]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("正在删除的已有连接只提示等待，手动刷新后才更新列表", async ({ page }) => {
+  const fixture = await setup(page, {
+    existing: failedSummary(),
+    connections: [{ id: "ocid1.instanceconsoleconnection.fixture-deleting", state: "DELETING" }],
+  });
+  await page.goto(consolePath);
+  await page.getByRole("button", { name: "处理已有连接" }).click();
+  const dialog = page.getByRole("dialog", { name: "处理已有控制台连接" });
+  await expect(dialog.getByText(/此连接正在结束，请等待后点击“刷新”查看状态/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "结束旧连接并重新创建" })).toBeDisabled();
+  expect(fixture.connectionReads).toBe(1);
+  fixture.connections = [];
+  await dialog.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(dialog.getByText(/当前没有已有控制台连接/)).toBeVisible();
+  expect(fixture.connectionReads).toBe(2);
+  expect(fixture.writes).toEqual([]);
   expect(fixture.unexpected).toEqual([]);
   expect(fixture.errors).toEqual([]);
 });

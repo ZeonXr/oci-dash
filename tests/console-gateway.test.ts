@@ -11,7 +11,7 @@ import { Duplex } from "node:stream";
 import { once } from "node:events";
 import { WebSocket, type RawData } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConsoleSessionSummary } from "@/lib/console-contracts";
+import type { ConsoleConnectionSummary, ConsoleSessionSummary } from "@/lib/console-contracts";
 import { createConsoleGateway } from "@/server/console/gateway";
 import type { ConsoleManager } from "@/server/console/manager";
 import type { ConsoleActor } from "@/server/console/types";
@@ -23,6 +23,7 @@ const ORIGIN = "https://console-tests.invalid";
 const COOKIE = "test_session=gateway-test-login";
 const SESSION_ID = "01234567-89ab-cdef-0123-456789abcdef";
 const TICKET = "test_only_socket_ticket_0123456789abcdefghijkl";
+const CONNECTION_ID = "ocid1.instanceconsoleconnection.oc1.ap-tokyo-1.gateway-test";
 const SOCKET_PATH = `/api/console/sessions/${SESSION_ID}/socket`;
 const actor: ConsoleActor = {
   userId: "test-user",
@@ -142,6 +143,11 @@ async function fixture(options: { origin?: string | null; requestOrigin?: string
   const manager = {
     initialize: vi.fn(async () => undefined),
     current: vi.fn(() => session),
+    connections: vi.fn(
+      async (_instanceId: string, _actor: ConsoleActor): Promise<ConsoleConnectionSummary[]> => [
+        { id: CONNECTION_ID, state: "ACTIVE" },
+      ],
+    ),
     create: vi.fn(async () => {
       session = { ...session, state: "preparing" };
       return session;
@@ -530,6 +536,8 @@ describe("console gateway HTTP API", () => {
     const f = await fixture();
     for (const [method, path] of [
       ["GET", "/api/console/session"],
+      ["GET", "/api/console/session?instanceId=test-instance"],
+      ["GET", "/api/console/connections?instanceId=test-instance"],
       ["POST", "/api/console/sessions"],
       ["GET", `/api/console/sessions/${SESSION_ID}`],
     ]) {
@@ -542,6 +550,7 @@ describe("console gateway HTTP API", () => {
       expect(JSON.parse(result.body.toString())).toMatchObject({ code: "UNAUTHORIZED" });
     }
     expect(f.manager.current).not.toHaveBeenCalled();
+    expect(f.manager.connections).not.toHaveBeenCalled();
     expect(f.manager.create).not.toHaveBeenCalled();
     expect(f.manager.get).not.toHaveBeenCalled();
   });
@@ -626,7 +635,7 @@ describe("console gateway HTTP API", () => {
     expect(JSON.parse(created.body.toString())).toMatchObject({
       session: { id: SESSION_ID, state: "preparing" },
     });
-    expect(f.manager.create).toHaveBeenCalledWith("test-instance", actor);
+    expect(f.manager.create).toHaveBeenCalledWith("test-instance", actor, undefined);
     const current = await f.api("/api/console/session");
     expect(JSON.parse(current.body.toString())).toMatchObject({
       session: { id: SESSION_ID },
@@ -670,6 +679,149 @@ describe("console gateway HTTP API", () => {
     const good = await f.api(`/api/console/sessions/${SESSION_ID}/close`, { method: "POST" });
     expect(good.status).toBe(200);
     expect(f.manager.close).toHaveBeenCalledWith(SESSION_ID, actor);
+  });
+
+  it("passes the optional instance scope to current and disables response caching", async () => {
+    const f = await fixture();
+    const unscoped = await f.api("/api/console/session");
+    expect(unscoped.status).toBe(200);
+    expect(f.manager.current).toHaveBeenLastCalledWith(actor, undefined);
+    const scoped = await f.api("/api/console/session?instanceId=test-instance");
+    expect(scoped.status).toBe(200);
+    expect(f.manager.current).toHaveBeenLastCalledWith(actor, "test-instance");
+    expect(scoped.headers["cache-control"]).toBe("no-store");
+    expect(f.manager.create).not.toHaveBeenCalled();
+    expect(f.manager.connections).not.toHaveBeenCalled();
+    expect(f.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it("returns authenticated existing-connection metadata only after an explicit read", async () => {
+    const f = await fixture();
+    expect(f.manager.connections).not.toHaveBeenCalled();
+    const response = await f.api("/api/console/connections?instanceId=test-instance");
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body.toString())).toEqual({
+      connections: [{ id: CONNECTION_ID, state: "ACTIVE" }],
+    });
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(f.manager.connections).toHaveBeenCalledExactlyOnceWith("test-instance", actor);
+    expect(f.manager.create).not.toHaveBeenCalled();
+    expect(f.manager.close).not.toHaveBeenCalled();
+    expect(f.recordEvent).not.toHaveBeenCalled();
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it.each([
+    "/api/console/session?instanceId=",
+    `/api/console/session?instanceId=${"x".repeat(2049)}`,
+    "/api/console/connections",
+    "/api/console/connections?instanceId=",
+    `/api/console/connections?instanceId=${"x".repeat(2049)}`,
+  ])("rejects invalid instance scope before any manager call (case %#)", async (path) => {
+    const f = await fixture();
+    const response = await f.api(path);
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body.toString())).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(f.manager.current).not.toHaveBeenCalled();
+    expect(f.manager.connections).not.toHaveBeenCalled();
+    expect(f.manager.create).not.toHaveBeenCalled();
+    expect(f.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it("preserves authorization errors from explicit existing-connection reads", async () => {
+    const f = await fixture();
+    f.manager.connections.mockRejectedValue(
+      new AppError("login cannot access this instance", 403, "CONSOLE_FORBIDDEN"),
+    );
+    const response = await f.api("/api/console/connections?instanceId=test-instance");
+    expect(response.status).toBe(403);
+    expect(JSON.parse(response.body.toString())).toMatchObject({ code: "CONSOLE_FORBIDDEN" });
+    expect(f.manager.create).not.toHaveBeenCalled();
+    expect(f.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it("forwards only the explicitly confirmed replacement ID and records its intent", async () => {
+    const f = await fixture();
+    const response = await f.api("/api/console/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        instanceId: "test-instance",
+        replaceConnectionId: CONNECTION_ID,
+      }),
+    });
+    expect(response.status).toBe(202);
+    expect(f.manager.create).toHaveBeenCalledExactlyOnceWith("test-instance", actor, CONNECTION_ID);
+    expect(f.manager.connections).not.toHaveBeenCalled();
+    expect(f.manager.close).not.toHaveBeenCalled();
+    expect(f.recordEvent).toHaveBeenCalledExactlyOnceWith(
+      actor,
+      "console.replace",
+      "test-instance",
+      `已请求替换指定控制台连接：${CONNECTION_ID}`,
+    );
+    expect(JSON.stringify(f.recordEvent.mock.calls)).not.toContain(TICKET);
+  });
+
+  it.each([
+    { replaceConnectionId: "" },
+    { replaceConnectionId: "not-an-oci-console-connection" },
+    { replaceConnectionId: "ocid1.instance.oc1.ap-tokyo-1.wrong-resource" },
+    { replaceConnectionId: `${CONNECTION_ID} extra` },
+    { replaceConnectionId: `${CONNECTION_ID}/unexpected` },
+    { replaceConnectionId: "ocid1.instanceconsoleconnection." },
+    { replaceConnectionId: `ocid1.instanceconsoleconnection.${"x".repeat(2048)}` },
+    { replaceConnectionId: null },
+    { replaceConnectionId: [CONNECTION_ID] },
+    { replaceConnectionId: CONNECTION_ID, force: true },
+  ])("rejects malformed or implicit replacement input (case %#)", async (replacement) => {
+    const f = await fixture();
+    const response = await f.api("/api/console/sessions", {
+      method: "POST",
+      body: JSON.stringify({ instanceId: "test-instance", ...replacement }),
+    });
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body.toString())).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(f.manager.create).not.toHaveBeenCalled();
+    expect(f.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "https://other.invalid"])(
+    "requires the same Origin protection for replacement: %s",
+    async (origin) => {
+      const f = await fixture();
+      const response = await http(f.port, "/api/console/sessions", {
+        method: "POST",
+        headers: {
+          cookie: COOKIE,
+          "content-type": "application/json",
+          ...(origin ? { origin } : {}),
+        },
+        body: JSON.stringify({
+          instanceId: "test-instance",
+          replaceConnectionId: CONNECTION_ID,
+        }),
+      });
+      expect(response.status).toBe(403);
+      expect(f.manager.create).not.toHaveBeenCalled();
+      expect(f.recordEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not record replacement intent when the manager rejects admission", async () => {
+    const f = await fixture();
+    f.manager.create.mockRejectedValue(
+      new AppError("another console owns this slot", 409, "CONSOLE_BUSY"),
+    );
+    const response = await f.api("/api/console/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        instanceId: "test-instance",
+        replaceConnectionId: CONNECTION_ID,
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(JSON.parse(response.body.toString())).toMatchObject({ code: "CONSOLE_BUSY" });
+    expect(f.recordEvent).not.toHaveBeenCalled();
   });
 
   it("rejects invalid or oversized create input before reaching the manager", async () => {

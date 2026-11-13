@@ -310,6 +310,11 @@ export function createOpenSshFactory(options: OpenSshOptions = {}): ConsoleSshFa
   const pollIntervalMs = options.pollIntervalMs ?? 150;
   return async ({ signal }) => {
     cancelled(signal);
+    if (process.platform === "win32" && options.runner === undefined)
+      throw new CloudError(
+        "Windows 原生 Node.js 不支持 VNC 控制台，请使用 Linux 容器运行此功能。",
+        "CONSOLE_PLATFORM_UNSUPPORTED",
+      );
     const directory = await mkdtemp(join(options.tempRoot ?? tmpdir(), "oci-dash-console-"));
     const lifetime = new AbortController();
     const commands = new Set<ConsoleSshProcess>();

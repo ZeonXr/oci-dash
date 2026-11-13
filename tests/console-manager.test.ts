@@ -60,6 +60,7 @@ function fixture(limits: Partial<ConsoleLimits> = {}, db = new Database(":memory
     closed: closed.promise,
   };
   const transport = {
+    connections: vi.fn<ConsoleTransport["connections"]>(async () => []),
     start: vi.fn<ConsoleTransport["start"]>(async (input) => {
       input.onConnectionCreated(tunnel.connectionId);
       return tunnel;
@@ -106,6 +107,69 @@ afterEach(async () => {
 });
 
 describe("console manager ownership and connection admission", () => {
+  it("lists connections for the resolved instance without reserving a local session", async () => {
+    const f = fixture();
+    const existing = [{ id: "existing-connection", state: "ACTIVE" }];
+    f.transport.connections.mockResolvedValue(existing);
+    await f.manager.initialize();
+    await expect(f.manager.connections(target.instanceId, actor)).resolves.toEqual(existing);
+    expect(f.resolveTarget).toHaveBeenCalledWith(target.instanceId);
+    expect(f.transport.connections).toHaveBeenCalledExactlyOnceWith({
+      target,
+      signal: expect.any(AbortSignal),
+    });
+    expect(f.transport.start).not.toHaveBeenCalled();
+    expect(f.transport.cleanup).not.toHaveBeenCalled();
+    expect(f.store.active()).toBeNull();
+  });
+
+  it("does not query connections before initialization or for an invalid login or target", async () => {
+    const f = fixture();
+    await expect(f.manager.connections(target.instanceId, actor)).rejects.toMatchObject({
+      code: "CONSOLE_UNAVAILABLE",
+    });
+    await f.manager.initialize();
+    f.valid.delete(actor.sessionHash);
+    await expect(f.manager.connections(target.instanceId, actor)).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    expect(f.resolveTarget).not.toHaveBeenCalled();
+    f.valid.add(actor.sessionHash);
+    f.resolveTarget.mockReturnValue({ ...target, instanceId: "another-instance" });
+    await expect(f.manager.connections(target.instanceId, actor)).rejects.toMatchObject({
+      code: "CONSOLE_TARGET_MISMATCH",
+    });
+    expect(f.transport.connections).not.toHaveBeenCalled();
+  });
+
+  it("does not return a connection query after its login is revoked", async () => {
+    const f = fixture();
+    const pending = deferred<{ id: string; state: string }[]>();
+    f.transport.connections.mockImplementation(() => pending.promise);
+    await f.manager.initialize();
+    const result = f.manager.connections(target.instanceId, actor);
+    const failure = expect(result).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    f.valid.delete(actor.sessionHash);
+    pending.resolve([{ id: "existing-connection", state: "ACTIVE" }]);
+    await failure;
+  });
+
+  it.each([undefined, "ocid1.instanceconsoleconnection.oc1.phx.confirmed"])(
+    "forwards only the explicitly confirmed replacement to background preparation: %s",
+    async (replaceConnectionId) => {
+      const f = fixture();
+      await f.manager.initialize();
+      const session = await f.manager.create(target.instanceId, actor, replaceConnectionId);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.transport.start).toHaveBeenCalledTimes(1);
+      const request = f.transport.start.mock.calls[0]![0];
+      expect(request).toMatchObject({ target, sessionId: session.id });
+      if (replaceConnectionId) expect(request.replaceConnectionId).toBe(replaceConnectionId);
+      else expect(request).not.toHaveProperty("replaceConnectionId");
+      expect(f.manager.get(session.id, actor).state).toBe("ready");
+    },
+  );
+
   it("reserves the global slot before background preparation and rejects a concurrent create", async () => {
     const f = fixture(),
       pending = deferred<ConsoleTunnel>();
@@ -145,6 +209,69 @@ describe("console manager ownership and connection admission", () => {
     });
     await f.manager.connect(session.id, ticket.ticket, actor);
     expect(f.manager.get(session.id, actor).state).toBe("connected");
+  });
+
+  it("restores a released failure only for the same instance, user and login", async () => {
+    const f = fixture();
+    f.transport.start.mockRejectedValue(
+      new CloudError("实例已有控制台连接，请先结束原连接", "CONSOLE_CONNECTION_EXISTS"),
+    );
+    await f.manager.initialize();
+    const session = await f.manager.create(target.instanceId, actor);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.get(session.id)).toMatchObject({
+      state: "failed",
+      cleanupPending: false,
+      slot: null,
+    });
+    expect(f.manager.current(actor)).toBeNull();
+    expect(f.manager.current(actor, target.instanceId)).toMatchObject({
+      id: session.id,
+      state: "failed",
+      lastError: expect.stringContaining("CONSOLE_CONNECTION_EXISTS"),
+    });
+    expect(f.manager.current(otherActor, target.instanceId)).toBeNull();
+    expect(f.manager.current({ ...actor, userId: "another-user" }, target.instanceId)).toBeNull();
+    expect(f.manager.current(actor, "another-instance")).toBeNull();
+  });
+
+  it("returns the latest terminal session, including an explicitly closed session", async () => {
+    const f = fixture();
+    f.transport.start.mockRejectedValueOnce(
+      new CloudError("实例已有控制台连接", "CONSOLE_CONNECTION_EXISTS"),
+    );
+    await f.manager.initialize();
+    const failed = await f.manager.create(target.instanceId, actor);
+    await vi.advanceTimersByTimeAsync(1);
+    const closed = await f.manager.create(target.instanceId, actor);
+    await vi.advanceTimersByTimeAsync(0);
+    await f.manager.close(closed.id, actor);
+    expect(f.store.get(failed.id)?.state).toBe("failed");
+    expect(f.manager.current(actor, target.instanceId)).toMatchObject({
+      id: closed.id,
+      state: "closed",
+      lastError: null,
+    });
+    expect(f.manager.current(actor)).toBeNull();
+  });
+
+  it("prefers the globally active session over the requested instance's terminal history", async () => {
+    const f = fixture();
+    f.transport.start.mockRejectedValueOnce(
+      new CloudError("实例已有控制台连接", "CONSOLE_CONNECTION_EXISTS"),
+    );
+    await f.manager.initialize();
+    await f.manager.create(target.instanceId, actor);
+    await vi.advanceTimersByTimeAsync(1);
+    const active = await f.manager.create(target.instanceId, otherActor);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const instanceId of [undefined, target.instanceId, "another-instance"]) {
+      expect(f.manager.current(actor, instanceId)).toMatchObject({
+        id: active.id,
+        state: "ready",
+        lastError: null,
+      });
+    }
   });
 
   it("uses expiring one-use tickets and rejects a second simultaneous websocket handshake", async () => {

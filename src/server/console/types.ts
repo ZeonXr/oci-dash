@@ -1,4 +1,5 @@
 import type { Duplex } from "node:stream";
+import type { ConsoleConnectionSummary } from "../../lib/console-contracts";
 import type { OciCredentials } from "../oci/types";
 
 export interface ConsoleActor {
@@ -28,9 +29,15 @@ export interface ConsoleTunnel {
 export type ConsoleCreationState = "not_attempted" | "uncertain" | "created" | "rejected";
 
 export interface ConsoleTransport {
+  connections(input: {
+    target: ConsoleTarget;
+    signal: AbortSignal;
+  }): Promise<ConsoleConnectionSummary[]>;
   start(input: {
     target: ConsoleTarget;
     sessionId: string;
+    /** The exact existing connection the user explicitly confirmed replacing. */
+    replaceConnectionId?: string;
     signal: AbortSignal;
     onCompartmentVerified?(compartmentId: string): void;
     onCreationState?(state: ConsoleCreationState): void;
