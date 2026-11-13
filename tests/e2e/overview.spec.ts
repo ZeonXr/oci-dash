@@ -386,13 +386,11 @@ test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", as
     await page.goto("/overview");
     await expect(summary(page, "发送流量")).toHaveText("269.8");
     await expect(page.locator(".overview-cost").getByText("正在读取统计…")).toBeVisible();
-    const refresh = page.getByRole("button", { name: "刷新总览", exact: true });
-    await expect(refresh).toBeDisabled();
-    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    const refresh = page.getByRole("button", { name: "刷新", exact: true });
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).not.toHaveAttribute("aria-busy", "true");
     await expect(refresh.locator("svg")).toHaveCount(1);
-    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
-    await expect(refresh.locator("svg")).toHaveCSS("animation-duration", "1s");
-    await expect(refresh.locator("svg")).toHaveCSS("animation-timing-function", "linear");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
   } finally {
     release();
     overview.costGate = undefined;
@@ -409,12 +407,107 @@ test("费用慢请求不阻塞流量，筛选与分币种统计独立更新", as
   await expect(page.locator(".overview-cost-summary strong")).toHaveText("4.50");
 });
 
+test("手动刷新等待各统计完成，更新时间只在按钮提示中显示", async ({ page, overview }) => {
+  await page.goto("/overview");
+  await expect(page.locator(".overview-cost-summary strong")).toBeVisible();
+  const refresh = page.getByRole("button", { name: "刷新", exact: true });
+  await expect(refresh).toHaveText("刷新");
+  await expect(page.locator('[data-slot="heading-actions"] time.updated-at')).toHaveCount(0);
+  await refresh.hover();
+  await expect(page.getByRole("tooltip")).toHaveText(/^上次更新：\d{2}:\d{2}$/);
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("white-space", "nowrap");
+  await page.mouse.move(0, 0, { steps: 5 });
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+
+  let release!: () => void;
+  overview.costGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await refresh.click();
+    await expect.poll(() => overview.count("/api/analytics/costs", "POST")).toBe(1);
+    await expect(refresh).toBeDisabled();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(refresh.locator("svg")).toHaveCount(1);
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-duration", "1s");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-timing-function", "linear");
+    expect(overview.count("/api/analytics/traffic", "POST")).toBe(1);
+    expect(overview.count("/api/analytics/cpu", "POST")).toBe(1);
+  } finally {
+    release();
+    overview.costGate = undefined;
+  }
+  await expect(refresh).toBeEnabled();
+  await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+  await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+});
+
+test("后台GET不占用刷新按钮，手动刷新等待读取后补发POST并等待完成", async ({ page, overview }) => {
+  await page.clock.install({ time: NOW });
+  overview.expiryMs = 5000;
+  await page.goto("/overview");
+  const refresh = page.getByRole("button", { name: "刷新", exact: true });
+  const cost = page.locator(".overview-cost-summary strong");
+  await expect(summary(page, "发送流量")).toHaveText("269.8");
+  await expect(cost).toHaveText("1.05");
+  await expect(page.locator(".overview-load")).toContainText("SG-Oracle-01");
+
+  let releaseGet!: () => void;
+  let releasePost!: () => void;
+  overview.costGate = new Promise<void>((resolve) => {
+    releaseGet = resolve;
+  });
+  const postGate = new Promise<void>((resolve) => {
+    releasePost = resolve;
+  });
+  try {
+    overview.now += 5001;
+    await page.clock.fastForward(5001);
+    await expect.poll(() => overview.count("/api/analytics/costs")).toBe(2);
+    await expect(page.locator(".overview-cost .overview-panel-content")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+    await expect(cost).toHaveText("1.05");
+
+    await refresh.click();
+    await expect(refresh).toBeDisabled();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    expect(overview.count("/api/analytics/costs", "POST")).toBe(0);
+    await expect(cost).toHaveText("1.05");
+
+    overview.costGate = postGate;
+    releaseGet();
+    await expect.poll(() => overview.count("/api/analytics/costs", "POST")).toBe(1);
+    overview.zeroCost = true;
+    await expect(refresh).toBeDisabled();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+    await expect(cost).toHaveText("1.05");
+    await expect(summary(page, "发送流量")).toHaveText("269.8");
+  } finally {
+    releaseGet();
+    releasePost();
+    overview.costGate = undefined;
+  }
+  await expect(cost).toHaveText("0.00");
+  await expect(refresh).toBeEnabled();
+  await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+  await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+  expect(overview.count("/api/analytics/costs")).toBe(2);
+  expect(overview.count("/api/analytics/costs", "POST")).toBe(1);
+});
+
 test("刷新失败保留已加载统计，恢复后可重试", async ({ page, overview }) => {
   await page.goto("/overview");
-  await expect(page.getByRole("button", { name: "刷新总览" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "刷新" })).toBeEnabled();
   await expect(summary(page, "发送流量")).toHaveText("269.8");
   overview.failTraffic = true;
-  await page.getByRole("button", { name: "刷新总览" }).click();
+  await page.getByRole("button", { name: "刷新" }).click();
   await expect(
     page.locator(".overview-flow").getByRole("button", { name: "更新失败 · 重试" }),
   ).toBeVisible();
@@ -522,7 +615,7 @@ test("常驻页面跨UTC月份后本月统计自动切换到新月份", async ({
         ?.params.get("endDate"),
     )
     .toBe("2026-11-30");
-  await expect(page.getByRole("button", { name: "刷新总览" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "刷新" })).toBeEnabled();
   overview.now += 3000;
   await page.clock.fastForward(3000);
   await expect

@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { refreshTooltip } from "./format";
 import { Button as UiButton } from "./ui/button";
 import { Badge as UiBadge } from "./ui/badge";
 import {
@@ -112,24 +113,51 @@ export function Button({
 }
 
 export function RefreshButton({
-  iconOnly = false,
   label,
-  children = "刷新",
-  variant = iconOnly ? "ghost" : "secondary",
+  updatedAt,
+  onClick,
+  variant = "secondary",
   ...props
-}: Omit<ButtonProps, "icon" | "loadingIcon"> & { iconOnly?: boolean; label?: string }) {
+}: Omit<ButtonProps, "icon" | "loadingIcon" | "loading" | "title" | "children"> & {
+  label?: string;
+  updatedAt?: string | null;
+}) {
+  const [pending, setPending] = useState(false);
+  const [tooltipNow, setTooltipNow] = useState<Date>();
+  const busy = useRef(false);
   return (
-    <Button
-      {...props}
-      variant={variant}
-      size={iconOnly ? "icon" : props.size}
-      aria-label={label ?? props["aria-label"] ?? (iconOnly ? "刷新" : undefined)}
-      title={props.title || label}
-      icon={<RefreshCw />}
-      loadingIcon={<RefreshCw className="animate-spin" />}
+    <Tooltip
+      onOpenChange={(open) => {
+        if (open) setTooltipNow(new Date());
+      }}
     >
-      {iconOnly ? null : children}
-    </Button>
+      <TooltipTrigger asChild>
+        <Button
+          {...props}
+          variant={variant}
+          aria-label={label ?? props["aria-label"]}
+          icon={<RefreshCw />}
+          loadingIcon={<RefreshCw className="animate-spin" />}
+          loading={pending}
+          onClick={async (event) => {
+            if (busy.current) return;
+            busy.current = true;
+            setPending(true);
+            try {
+              await onClick?.(event);
+            } finally {
+              busy.current = false;
+              setPending(false);
+            }
+          }}
+        >
+          刷新
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent className="whitespace-nowrap">
+        {refreshTooltip(updatedAt, tooltipNow)}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

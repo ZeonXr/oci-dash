@@ -64,7 +64,6 @@ import {
 } from "@/components/format";
 import { MetricsChart } from "@/components/metrics-chart";
 import { instanceMetrics, metricSampleNote } from "@/components/instance-metrics";
-import { UpdatedAt } from "@/components/updated-at";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { NetworkPanel, SecurityPanel, StoragePanel } from "@/components/instance-resources";
 import { OperationDialog, type OperationDialogProps } from "@/components/operation-dialog";
@@ -362,16 +361,7 @@ export default function InstanceDetailPage() {
         }
       >
         <InventoryFreshness instance={instance} />
-        <UpdatedAt
-          value={instance.syncedAt}
-          title="此实例基础信息最近一次从 OCI 同步的时间；部分未更新的字段另行标记"
-        />
-        <RefreshButton
-          iconOnly
-          onClick={sync.refresh}
-          loading={resource.refreshing || sync.refreshing}
-          label="刷新实例"
-        />
+        <RefreshButton onClick={sync.refresh} updatedAt={instance.syncedAt} label="刷新实例" />
         {instance.state === "STOPPED" && (
           <Button onClick={() => lifecycle("instance-start")} icon={<Play size={16} />}>
             启动
@@ -655,10 +645,9 @@ export default function InstanceDetailPage() {
                       <option value="7d">过去 7 天</option>
                     </Select>
                     <RefreshButton
-                      iconOnly
                       label="刷新监控"
                       onClick={metrics.reload}
-                      loading={metrics.refreshing}
+                      updatedAt={metrics.updatedAt}
                     />
                   </div>
                 }
@@ -684,7 +673,7 @@ export default function InstanceDetailPage() {
           {tab === "activity" && (
             <Card
               title="任务与活动"
-              action={<RefreshButton onClick={jobs.reload} loading={jobs.refreshing} />}
+              action={<RefreshButton onClick={jobs.reload} updatedAt={jobs.updatedAt} />}
             >
               {jobs.error && <ErrorState message={jobs.error} retry={jobs.reload} />}
               {taskRows()}

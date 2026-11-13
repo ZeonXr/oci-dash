@@ -131,6 +131,11 @@ const test = base.extend<{ detailsApi: Fixture }>({
   ],
 });
 
+test.use({ timezoneId: "UTC" });
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-11-09T00:10:00.000Z"));
+});
+
 test("账号详情按需读取，保留连接配置并展示云身份及区域标签", async ({ page, detailsApi }) => {
   let release!: () => void;
   detailsApi.gate = new Promise<void>((resolve) => {
@@ -151,6 +156,7 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
   await expect(trigger).toBeVisible();
   await expect(trigger).toHaveText(account.name);
   const card = page.locator(".account-card");
+  await expect(card.locator("time")).toHaveCount(0);
   await expect(card.getByRole("button", { name: "详情", exact: true })).toHaveCount(0);
   await expect(card.getByText("us-phoenix-1", { exact: true })).toHaveCount(1);
   await expect(card.getByText("ap-tokyo-1", { exact: true })).toHaveCount(1);
@@ -160,10 +166,18 @@ test("账号详情按需读取，保留连接配置并展示云身份及区域�
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "账号详情", exact: true });
   try {
+    const refresh = dialog.getByRole("button", { name: "刷新详情", exact: true });
+    await expect(refresh).toHaveText("刷新");
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+    await refresh.hover();
+    await expect(page.getByRole("tooltip", { name: "刷新", exact: true })).toBeVisible();
     await expect(dialog.getByText(account.tenancyId, { exact: true })).toBeVisible();
     await expect(dialog.getByText("正在读取 OCI 账号信息…", { exact: true })).toBeVisible();
     release();
     await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
+    await expect(dialog.locator('[data-slot="dialog-footer"] time')).toHaveCount(0);
+    await expect(page.getByRole("tooltip", { name: "上次更新：00:05", exact: true })).toBeVisible();
     await expect(dialog.getByText("fixture@example.invalid", { exact: true })).toBeVisible();
     await expect(
       dialog.getByText("配置主区域", { exact: true }).locator("..").locator("code"),
@@ -204,9 +218,27 @@ test("账号详情的局部失败可重试，刷新失败仍保留已取得的�
   await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
   await expect(dialog.getByText("部分资源未更新", { exact: true })).toBeVisible();
   detailsApi.failNext = true;
-  await dialog.getByRole("button", { name: "刷新详情", exact: true }).click();
-  await expect(dialog.getByText("Synthetic details unavailable", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
+  let release!: () => void;
+  detailsApi.gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const refresh = dialog.getByRole("button", { name: "刷新详情", exact: true });
+  try {
+    await refresh.click();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(refresh).toBeDisabled();
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "spin");
+    await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
+    detailsApi.gate = undefined;
+    release();
+    await expect(dialog.getByText("Synthetic details unavailable", { exact: true })).toBeVisible();
+    await expect(refresh).not.toHaveAttribute("aria-busy", "true");
+    await expect(refresh).toBeEnabled();
+    await expect(dialog.getByText("Fixture tenancy", { exact: true })).toBeVisible();
+  } finally {
+    detailsApi.gate = undefined;
+    release();
+  }
   detailsApi.response = details();
   await dialog.getByRole("button", { name: "重试", exact: true }).click();
   await expect(dialog.getByText("fixture-user", { exact: true })).toBeVisible();

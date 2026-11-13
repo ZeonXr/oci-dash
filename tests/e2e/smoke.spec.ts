@@ -358,6 +358,10 @@ test("数据总览展示用量摘要与四个统计面板", async ({ page }, tes
 
 test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
   await page.goto("/instances");
+  const refresh = page.getByRole("button", { name: "刷新", exact: true });
+  await expect(refresh).toHaveText("刷新");
+  await expect(refresh).toHaveAttribute("data-variant", "outline");
+  await expect(page.locator('[data-slot="heading-actions"] time')).toHaveCount(0);
   await page.getByRole("button", { name: "表格视图", exact: true }).click();
   const rows = page.locator(".resource-table tbody tr");
   await expect(rows.first()).toBeVisible();
@@ -421,12 +425,18 @@ test("实例搜索、状态与账号筛选", async ({ page }, testInfo) => {
 
 test("实例详情六个标签及键盘导航", async ({ page }, testInfo) => {
   await instancePage(page);
+  const refresh = page.getByRole("button", { name: "刷新实例", exact: true });
+  await expect(refresh).toHaveText("刷新");
+  await expect(refresh).toHaveAttribute("data-variant", "outline");
+  await expect(page.locator('[data-slot="heading-actions"] time')).toHaveCount(0);
   for (const label of ["概览", "监控", "网络", "安全规则", "存储", "任务与活动"]) {
     await test.step(`${label}内容可以加载`, async () => {
       await page.getByRole("tab", { name: label, exact: true }).click();
       await expect(page.getByRole("tabpanel")).toBeVisible();
       if (label === "安全规则")
-        await expect(page.getByRole("button", { name: "刷新规则", exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "刷新规则", exact: true })).toHaveText(
+          "刷新",
+        );
       if (label === "存储")
         await expect(page.getByRole("button", { name: "调整容量与性能" }).first()).toBeEnabled();
       expect(
@@ -544,8 +554,10 @@ test("账号列表完成加载且凭据操作可用", async ({ page }, testInfo)
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeEnabled();
   for (const name of ["刷新资源", "编辑", "移除"]) {
     await test.step(`${name}按钮可用`, async () => {
-      for (const button of await page.getByRole("button", { name, exact: true }).all())
+      for (const button of await page.getByRole("button", { name, exact: true }).all()) {
         await expect(button).toBeEnabled();
+        if (name === "刷新资源") await expect(button).toHaveText("刷新");
+      }
     });
   }
   await capture(page, testInfo, "accounts");

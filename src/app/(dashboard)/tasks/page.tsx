@@ -85,11 +85,7 @@ function TasksContent() {
   return (
     <>
       <PageHeader title="任务" description="追踪云操作的执行进度、结果与重试记录。">
-        <RefreshButton
-          onClick={resource.reload}
-          loading={resource.refreshing}
-          title="页面可见时每 5 秒检查任务状态；点击立即刷新"
-        />
+        <RefreshButton onClick={resource.reload} updatedAt={resource.updatedAt} />
       </PageHeader>
       {resource.error && (
         <div className="mb-4">

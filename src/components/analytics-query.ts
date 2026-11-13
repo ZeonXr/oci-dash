@@ -16,6 +16,7 @@ export function useAnalytics<T>(url: string | null) {
     let disposed = false;
     let controller: AbortController | undefined;
     let pending: Promise<void> | null = null;
+    let pendingForce = false;
     setFailure(null);
     if (!url) {
       setRefreshing(false);
@@ -24,7 +25,9 @@ export function useAnalytics<T>(url: string | null) {
     }
     const run = (force: boolean): Promise<void> => {
       if (disposed) return Promise.resolve();
-      if (pending) return pending;
+      // A manual refresh must still force a new read after a pending cache GET.
+      if (pending) return force && !pendingForce ? pending.then(() => run(true)) : pending;
+      pendingForce = force;
       controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
       setRefreshing(true);

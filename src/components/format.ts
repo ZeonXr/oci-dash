@@ -10,6 +10,17 @@ export const formatDate = (value?: string | null, full = false) =>
         ...(full ? { year: "numeric" } : {}),
       }).format(new Date(value))
     : "—";
+export function refreshTooltip(value?: string | null, now = new Date()): string {
+  if (!value || Number.isNaN(Date.parse(value))) return "刷新";
+  const date = new Date(value);
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const sameDay =
+    sameYear && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  const pad = (part: number) => String(part).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const day = `${pad(date.getMonth() + 1)}/${pad(date.getDate())}`;
+  return `上次更新：${sameDay ? time : `${sameYear ? "" : `${date.getFullYear()}/`}${day} ${time}`}`;
+}
 export const shortId = (value?: string | null) =>
   !value ? "—" : value.length > 34 ? `${value.slice(0, 20)}…${value.slice(-9)}` : value;
 export const number = (value?: number | null, digits = 0) =>

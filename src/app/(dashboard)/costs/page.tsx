@@ -12,7 +12,6 @@ import { useAnalytics } from "@/components/analytics-query";
 import { AnalyticsRange, analyticsRange, useAnalyticsRange } from "@/components/analytics-range";
 import { AnalyticsChart } from "@/components/analytics-chart";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
-import { UpdatedAt } from "@/components/updated-at";
 import {
   compareCostAmounts,
   costChartPoints,
@@ -161,16 +160,13 @@ function CostsContent() {
     <>
       <PageHeader title="成本分析" description="OCI 已报告成本，账单数据可能延迟约 48 小时。">
         {data && <AnalyticsStatusNote report={data} />}
-        <UpdatedAt value={data?.generatedAt} title="统计查询时间，不代表账单上报时间" />
         <RefreshButton
-          onClick={() => {
-            if (!refreshRange()) void report.refresh();
+          updatedAt={data?.generatedAt}
+          onClick={async () => {
+            if (!refreshRange()) await report.refresh();
           }}
-          loading={report.refreshing}
           disabled={!url}
-        >
-          刷新数据
-        </RefreshButton>
+        />
       </PageHeader>
       <div className="analytics-controls mb-6 flex flex-wrap items-center gap-3">
         <div className="analytics-filters contents *:data-[slot=select-trigger]:w-45 *:data-[slot=select-trigger]:max-w-full max-sm:*:data-[slot=select-trigger]:flex-1">

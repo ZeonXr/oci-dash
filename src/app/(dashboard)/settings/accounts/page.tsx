@@ -24,7 +24,6 @@ import {
 } from "@/components/ui";
 import { taskHref } from "@/components/format";
 import { RegionTag } from "@/components/region-label";
-import { UpdatedAt } from "@/components/updated-at";
 
 function connectionLabel(account: AccountSummary, job: JobSummary): string {
   if (job.state === "queued") return account.lastSyncAt ? "等待刷新" : "等待连接";
@@ -64,13 +63,10 @@ export default function AccountsPage() {
   const [viewing, setViewing] = useState<AccountSummary | null>(null);
   const [removing, setRemoving] = useState<AccountSummary | null>(null);
   const [removeName, setRemoveName] = useState("");
-  const [busyKey, setBusyKey] = useState("");
-  const refresh = () => {
-    resource.reload();
-    reloadAccounts();
+  const refresh = async () => {
+    await Promise.all([resource.reload(), reloadAccounts()]);
   };
   const sync = async (account: AccountSummary) => {
-    setBusyKey(`${account.id}:sync`);
     const response = await action.run(() =>
       send<{ job: JobSummary }>(`/api/accounts/${encodeURIComponent(account.id)}/sync`),
     );
@@ -87,9 +83,8 @@ export default function AccountsPage() {
             }
           : current,
       );
-      refresh();
+      await refresh();
     }
-    setBusyKey("");
   };
   const remove = async () => {
     if (!removing || removeName !== removing.name) return;
@@ -127,7 +122,6 @@ export default function AccountsPage() {
                 account.lastError ||
                 (job && ["failed", "interrupted"].includes(job.state) ? job.lastError : null);
               const label = connectionAction(account, job);
-              const requesting = busyKey === `${account.id}:sync`;
               return (
                 <Card
                   key={account.id}
@@ -167,21 +161,16 @@ export default function AccountsPage() {
                         <span>另 {account.regions.length - 3} 个区域</span>
                       )}
                     </div>
-                    <UpdatedAt
-                      value={account.lastSyncAt}
-                      title="此账号最近一次从 OCI 获取资源快照的时间"
-                    />
                   </div>
                   {!syncing && error && <Alert tone="error">{error}</Alert>}
                   <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3.5">
                     <RefreshButton
                       size="sm"
+                      label={label}
                       disabled={action.pending || syncing}
-                      loading={requesting || syncing}
+                      updatedAt={account.lastSyncAt}
                       onClick={() => sync(account)}
-                    >
-                      {label}
-                    </RefreshButton>
+                    />
                     <Button size="sm" variant="ghost" onClick={() => setEditing(account)}>
                       编辑
                     </Button>

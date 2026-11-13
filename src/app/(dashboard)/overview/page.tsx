@@ -17,7 +17,6 @@ import {
 import { CpuHeatmap } from "@/components/cpu-heatmap";
 import { AnalyticsStatusNote } from "@/components/analytics-status";
 import { displayCost } from "@/components/analytics-cost-data";
-import { UpdatedAt } from "@/components/updated-at";
 import {
   Card,
   EmptyState,
@@ -131,16 +130,9 @@ export default function OverviewPage() {
     () => (costs.data && selectedCurrency ? costOverview(costs.data, selectedCurrency) : undefined),
     [costs.data, selectedCurrency],
   );
-  const refreshing = traffic.refreshing || costs.refreshing || cpu.refreshing;
   const generated = [traffic.data?.generatedAt, costs.data?.generatedAt, cpu.data?.generatedAt]
     .filter((time): time is string => Boolean(time) && Number.isFinite(Date.parse(time!)))
     .sort();
-  const updateTitle = [
-    "流量查询：" + (traffic.data?.generatedAt || "尚未取得"),
-    "费用查询：" + (costs.data?.generatedAt || "尚未取得"),
-    "CPU 查询：" + (cpu.data?.generatedAt || "尚未取得"),
-    "显示已加载统计中最早的查询时间；费用上报可能延迟。",
-  ].join("\n");
   const periodNote = periodNames[period];
   const trafficNote =
     trafficData?.summary.coverage === "partial" ? periodNote + " · 已获取小计" : periodNote;
@@ -156,6 +148,19 @@ export default function OverviewPage() {
           " · UTC"
         }
       >
+        <RefreshButton
+          updatedAt={generated[0]}
+          disabled={!enabled}
+          onClick={async () => {
+            const next = dateRange(period);
+            if (next.startDate !== range.startDate || next.endDate !== range.endDate) {
+              setRange(next);
+              await cpu.refresh();
+            } else await Promise.all([traffic.refresh(), costs.refresh(), cpu.refresh()]);
+          }}
+        />
+      </PageHeader>
+      <div className="analytics-controls flex flex-wrap items-center gap-3">
         <Select
           aria-label="总览账号"
           value={accountId}
@@ -185,24 +190,7 @@ export default function OverviewPage() {
           <option value="30d">近 30 日</option>
           <option value="month">本月</option>
         </Select>
-        <UpdatedAt value={generated[0]} title={updateTitle} />
-        <RefreshButton
-          iconOnly
-          label="刷新总览"
-          disabled={!enabled}
-          loading={refreshing}
-          onClick={() => {
-            const next = dateRange(period);
-            if (next.startDate !== range.startDate || next.endDate !== range.endDate)
-              setRange(next);
-            else {
-              void traffic.refresh();
-              void costs.refresh();
-            }
-            void cpu.refresh();
-          }}
-        />
-      </PageHeader>
+      </div>
       {accountsError && (
         <ErrorState message={`账号读取失败：${accountsError}`} retry={reloadAccounts} />
       )}

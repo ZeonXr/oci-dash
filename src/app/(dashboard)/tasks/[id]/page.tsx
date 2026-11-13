@@ -87,7 +87,7 @@ export default function TaskDetailPage() {
           </>
         }
       >
-        <RefreshButton onClick={resource.reload} loading={resource.refreshing} />
+        <RefreshButton onClick={resource.reload} updatedAt={resource.updatedAt} />
         {isJobRetryable(job) && (
           <Button
             onClick={() => {

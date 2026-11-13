@@ -102,6 +102,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(url));
   const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const lastUrl = useRef(url);
   const loader = useRef<() => Promise<void>>(async () => {});
   const poller = useRef<() => Promise<void>>(async () => {});
@@ -114,6 +115,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
     if (lastUrl.current !== url) {
       setData(undefined);
       setError(null);
+      setUpdatedAt(null);
       setLoading(Boolean(url));
       lastUrl.current = url;
     }
@@ -136,6 +138,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
           if (disposed || read.signal.aborted) return;
           setData(value);
           setError(null);
+          setUpdatedAt(new Date().toISOString());
         })
         .catch((reason) => {
           if (disposed || read.signal.aborted) return;
@@ -200,6 +203,7 @@ export function useResource<T>(url: string | null, pollMs = 0) {
     error: lastUrl.current === url ? error : null,
     loading: Boolean(url) && (lastUrl.current !== url || loading) && currentData === undefined,
     refreshing,
+    updatedAt: lastUrl.current === url ? updatedAt : null,
     reload,
     setData,
   };

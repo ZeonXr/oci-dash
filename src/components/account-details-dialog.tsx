@@ -7,7 +7,6 @@ import { useResource } from "./api";
 import { CodeTag } from "./code-tag";
 import { formatDate, number } from "./format";
 import { RegionTag } from "./region-label";
-import { UpdatedAt } from "./updated-at";
 import {
   Alert,
   Badge,
@@ -36,7 +35,6 @@ const styles = {
     "grid grid-cols-5 gap-4 max-sm:grid-cols-2 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-col [&>div]:gap-2 [&_span]:text-xs [&_span]:text-muted-foreground [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground [&_strong]:flex [&_strong]:flex-wrap [&_strong]:items-baseline [&_strong]:gap-1 [&_strong]:text-2xl [&_strong]:font-semibold [&_strong]:leading-tight max-sm:[&>div:first-child]:col-span-full",
   regionList: "flex flex-col gap-3",
   regionRow: "flex flex-wrap items-center justify-between gap-3",
-  footerMeta: "min-w-0 flex-1 max-sm:basis-full",
   empty: "text-xs text-muted-foreground",
 };
 
@@ -94,19 +92,7 @@ export function AccountDetailsDialog({
       onClose={onClose}
       footer={
         <>
-          <div className={styles.footerMeta}>
-            <UpdatedAt
-              value={cloud?.checkedAt}
-              label="查询于"
-              title="最近一次查询 OCI 账号信息的时间"
-            />
-          </div>
-          <RefreshButton
-            loading={resource.loading || resource.refreshing}
-            onClick={resource.reload}
-          >
-            刷新详情
-          </RefreshButton>
+          <RefreshButton label="刷新详情" onClick={resource.reload} updatedAt={cloud?.checkedAt} />
           <Button onClick={onClose}>关闭</Button>
         </>
       }
@@ -182,11 +168,11 @@ export function AccountDetailsDialog({
             </div>
             <div className={styles.sectionNote}>
               <span>当前配置区域内的资源快照</span>
-              <UpdatedAt
-                value={inventory.lastSyncedAt}
-                label="同步于"
-                title="资源快照最近同步时间"
-              />
+              {inventory.lastSyncedAt && (
+                <time dateTime={inventory.lastSyncedAt}>
+                  同步于 {formatDate(inventory.lastSyncedAt, true)}
+                </time>
+              )}
             </div>
           </section>
         )}

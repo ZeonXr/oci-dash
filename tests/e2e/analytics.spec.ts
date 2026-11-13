@@ -361,7 +361,7 @@ for (const target of [
   }) => {
     const apiPath = `/api/analytics${target.path}`;
     await page.goto(target.path);
-    const refresh = page.getByRole("button", { name: "刷新数据", exact: true });
+    const refresh = page.getByRole("button", { name: "刷新", exact: true });
     await expect(refresh).toBeEnabled();
     await page.clock.setFixedTime(new Date("2026-11-08T12:30:00Z"));
     await refresh.click();
@@ -415,7 +415,7 @@ for (const target of [
     await expect
       .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
       .toBe("2026-11-30");
-    await expect(page.getByRole("button", { name: "刷新数据", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
     await page.clock.fastForward(3000);
     await expect
       .poll(() => analyticsApi.latest(apiPath)?.query.get("startDate"))
@@ -619,11 +619,11 @@ test("手动刷新使用POST，失败保留已显示流量", async ({ page, anal
   await page.goto("/traffic");
   await expect(metric(page, "接收流量")).toHaveText("7 GiB");
   analyticsApi.trafficFactor = 2;
-  await page.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(metric(page, "接收流量")).toHaveText("14 GiB");
   expect(analyticsApi.count("/api/analytics/traffic", "POST")).toBe(1);
   analyticsApi.failTrafficPost = true;
-  await page.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(page.getByText("模拟流量刷新失败", { exact: true })).toBeVisible();
   await expect(metric(page, "接收流量")).toHaveText("14 GiB");
   await expect(page.locator(".analytics-table tbody tr")).toHaveCount(3);
@@ -696,7 +696,7 @@ test("零成本、缺失金额、部分返回与空记录保持不同状态", as
   await expect(zeroPoint).toHaveCount(1);
   await expect(zeroPoint).toBeVisible();
   analyticsApi.costMode = "unknown";
-  await page.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(metric(page, "USD · 已获取小计")).toHaveText("—");
   await page
     .locator("[data-slot=heading-actions]")
@@ -706,7 +706,7 @@ test("零成本、缺失金额、部分返回与空记录保持不同状态", as
   await page.getByRole("dialog").getByRole("button", { name: "关闭对话框", exact: true }).click();
   await expect(page.getByText("暂无可绘制的成本数据", { exact: true })).toBeVisible();
   analyticsApi.costMode = "empty";
-  await page.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(page.getByText("暂无已报告成本", { exact: true })).toBeVisible();
   await expect(page.locator(".analytics-metrics [data-slot=metric-card]")).toHaveCount(0);
 });
@@ -742,7 +742,7 @@ test("月成本常驻跨月后滚动过去12个完整月", async ({ page, analyt
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
     .toBe("2025-11-01");
   expect(analyticsApi.latest("/api/analytics/costs")?.query.get("endDate")).toBe("2026-10-31");
-  await expect(page.getByRole("button", { name: "刷新数据", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
   await page.clock.fastForward(3000);
   await expect
     .poll(() => analyticsApi.latest("/api/analytics/costs")?.query.get("startDate"))
@@ -763,10 +763,14 @@ for (const pageName of ["traffic", "costs"] as const) {
     await page.goto(`/${pageName}`);
     await expect(page.locator(".analytics-table tbody tr").first()).toBeVisible();
     await expect(page.locator(".analytics-chart").first()).toBeVisible();
-    await expect(page.locator('[data-slot="heading-actions"] time.updated-at')).toHaveAttribute(
-      "datetime",
-      now,
-    );
+    const refresh = page.getByRole("button", { name: "刷新", exact: true });
+    await expect(refresh).toHaveText("刷新");
+    await expect(page.locator('[data-slot="heading-actions"] time.updated-at')).toHaveCount(0);
+    await refresh.hover();
+    await expect(page.getByRole("tooltip")).toHaveText(/^上次更新：\d{2}:\d{2}$/);
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("white-space", "nowrap");
+    await page.mouse.move(0, 0, { steps: 5 });
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     await expect(page.getByRole("search")).toHaveCount(0);
     for (const width of [1440, 2191]) {
       await page.setViewportSize({ width, height: 1039 });

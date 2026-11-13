@@ -611,9 +611,7 @@ export function SecurityPanel({
         <p className="text-muted-foreground text-xs">
           同时显示网卡关联的网络安全组与子网安全列表。
         </p>
-        <RefreshButton onClick={resource.reload} loading={resource.refreshing}>
-          刷新规则
-        </RefreshButton>
+        <RefreshButton label="刷新规则" onClick={resource.reload} updatedAt={resource.updatedAt} />
       </div>
       {resource.error && <ErrorState message={resource.error} retry={resource.reload} />}
       {resource.data?.groups.length

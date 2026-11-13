@@ -37,7 +37,6 @@ import { InstanceCard } from "@/components/instance-card";
 import { InventoryFreshness } from "@/components/inventory-freshness";
 import { RegionTag } from "@/components/region-label";
 import { CodeTag } from "@/components/code-tag";
-import { UpdatedAt } from "@/components/updated-at";
 import { IpDetailsDialog } from "@/components/ip-details-dialog";
 import { IpAddressButton, primaryIpTarget, type IpDetailsTarget } from "@/components/ip-address";
 import { ipRotationContext } from "@/components/public-ip-rotation";
@@ -153,18 +152,14 @@ function InstancesContent() {
   return (
     <>
       <PageHeader title="实例" description="跨账号查看与管理计算资源。">
-        <UpdatedAt
-          value={
+        <RefreshButton
+          onClick={sync.refresh}
+          updatedAt={
             filtered
               .map((instance) => instance.syncedAt)
               .filter((value) => Number.isFinite(Date.parse(value)))
               .sort((left, right) => Date.parse(right) - Date.parse(left))[0]
           }
-          title="当前筛选实例中最新的 OCI 资源快照时间"
-        />
-        <RefreshButton
-          onClick={sync.refresh}
-          loading={resource.refreshing || sync.refreshing}
           disabled={!accountsReady || !accounts.length}
         />
         <Button

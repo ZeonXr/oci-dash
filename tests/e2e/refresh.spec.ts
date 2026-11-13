@@ -1033,7 +1033,7 @@ test("批量同步立即检查状态，快账号先显示且不等待慢账号�
   }
 });
 
-test("账号逐个完成后仅慢账号保留转圈，失败账号及时显示错误", async ({ page, refreshApi }) => {
+test("后台账号同步使用状态和禁用按钮，失败账号及时显示错误", async ({ page, refreshApi }) => {
   const slow = twoAccounts(refreshApi);
   refreshApi.syncJobs = refreshApi.accounts.map((item) => ({
     ...job(`active-${item.id}`),
@@ -1049,14 +1049,17 @@ test("账号逐个完成后仅慢账号保留转圈，失败账号及时显示�
   const slowCard = page
     .locator(".account-card")
     .filter({ has: page.getByRole("button", { name: `查看 ${slow.name} 详情`, exact: true }) });
-  await expect(fastCard.locator(".animate-spin")).toHaveCount(1);
-  await expect(slowCard.locator(".animate-spin")).toHaveCount(1);
+  await expect(fastCard.locator(".animate-spin")).toHaveCount(0);
+  await expect(slowCard.locator(".animate-spin")).toHaveCount(0);
+  await expect(fastCard.getByRole("button", { name: "刷新中", exact: true })).toBeDisabled();
+  await expect(slowCard.getByRole("button", { name: "刷新中", exact: true })).toBeDisabled();
   refreshApi.finish("failed");
   await advance(page, refreshApi);
   await expect(fastCard.locator(".animate-spin")).toHaveCount(0);
   await expect(fastCard.getByRole("button", { name: "重试刷新", exact: true })).toBeEnabled();
   await expect(fastCard).toContainText("模拟 OCI 读取失败");
-  await expect(slowCard.locator(".animate-spin")).toHaveCount(1);
+  await expect(slowCard.locator(".animate-spin")).toHaveCount(0);
+  await expect(slowCard.getByRole("button", { name: "刷新中", exact: true })).toBeDisabled();
   refreshApi.finishAccount(slow.id, "succeeded");
   await advance(page, refreshApi);
   await expect(slowCard.locator(".animate-spin")).toHaveCount(0);
