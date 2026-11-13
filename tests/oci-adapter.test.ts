@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { models } from "oci-core";
 import { createOciAdapter } from "@/server/oci/adapter";
 import { allPages, cloudError, type CloudDocument, type OciClients } from "@/server/oci/sdk";
 import { CloudError, type ExecutionContext, type OciCredentials } from "@/server/oci/types";
@@ -765,6 +766,15 @@ describe("OCI inventory and client boundaries", () => {
 });
 
 describe("OCI mutations are scoped and optimistic", () => {
+  function serializedSecurityWrite(groupKind: string, request: CloudDocument): CloudDocument {
+    const body =
+      groupKind === "nsg"
+        ? models.AddNetworkSecurityGroupSecurityRulesDetails.getJsonObj(
+            request.addNetworkSecurityGroupSecurityRulesDetails,
+          )
+        : models.UpdateSecurityListDetails.getJsonObj(request.updateSecurityListDetails);
+    return JSON.parse(JSON.stringify(body));
+  }
   const rule = {
     direction: "INGRESS",
     protocol: "6",
@@ -775,6 +785,123 @@ describe("OCI mutations are scoped and optimistic", () => {
     portMin: 443,
     portMax: 443,
   };
+  it.each([
+    ["security-list", "INGRESS", "all", ""],
+    ["security-list", "INGRESS", "6", ""],
+    ["security-list", "EGRESS", "all", undefined],
+    ["security-list", "EGRESS", "6", "   "],
+    ["nsg", "INGRESS", "all", undefined],
+    ["nsg", "INGRESS", "6", " \t "],
+    ["nsg", "EGRESS", "all", ""],
+    ["nsg", "EGRESS", "6", undefined],
+  ] as const)(
+    "omits blank descriptions from SDK JSON for %s %s protocol %s (%j)",
+    async (groupKind, direction, protocol, description) => {
+      const f = fixture();
+      const peer = direction === "INGRESS" ? "0.0.0.0/0" : "192.0.2.0/24";
+      await f.adapter.execute(
+        credentials,
+        operation("security-rule-add", {
+          groupKind,
+          groupId: groupKind === "nsg" ? ids.nsg : ids.securityList,
+          etag: groupKind === "nsg" ? "nsg-e1" : "list-e1",
+          rule: {
+            direction,
+            protocol,
+            peer,
+            peerType: "CIDR_BLOCK",
+            stateless: false,
+            ...(description === undefined ? {} : { description }),
+            ...(protocol === "6" ? { portMin: 22, portMax: 22 } : {}),
+          },
+        }),
+        jobContext(),
+      );
+      const body = serializedSecurityWrite(groupKind, f.writes()[0]!.request);
+      const writtenRule =
+        groupKind === "nsg"
+          ? body.securityRules[0]
+          : body[direction === "INGRESS" ? "ingressSecurityRules" : "egressSecurityRules"].at(-1);
+      expect(writtenRule).toEqual({
+        protocol,
+        isStateless: false,
+        ...(groupKind === "nsg" ? { direction } : {}),
+        ...(direction === "INGRESS"
+          ? { source: peer, sourceType: "CIDR_BLOCK" }
+          : { destination: peer, destinationType: "CIDR_BLOCK" }),
+        ...(protocol === "6" ? { tcpOptions: { destinationPortRange: { min: 22, max: 22 } } } : {}),
+      });
+    },
+  );
+  it.each(["security-list", "nsg"])(
+    "preserves nonblank description whitespace in %s SDK JSON",
+    async (groupKind) => {
+      const f = fixture();
+      const description = "  Keep this description exactly  ";
+      await f.adapter.execute(
+        credentials,
+        operation("security-rule-add", {
+          groupKind,
+          groupId: groupKind === "nsg" ? ids.nsg : ids.securityList,
+          etag: groupKind === "nsg" ? "nsg-e1" : "list-e1",
+          rule: { ...rule, description },
+        }),
+        jobContext(),
+      );
+      const body = serializedSecurityWrite(groupKind, f.writes()[0]!.request);
+      const writtenRule =
+        groupKind === "nsg" ? body.securityRules[0] : body.ingressSecurityRules.at(-1);
+      expect(writtenRule.description).toBe(description);
+    },
+  );
+  it("retries a saved security-list intent with an empty description without changing its checkpoint or ETag", async () => {
+    const f = fixture();
+    const update = f.handlers.updateSecurityList;
+    const initial = await f.handlers.getSecurityList({});
+    initial.securityList.ingressSecurityRules[0].description = "  Keep existing spacing  ";
+    initial.securityList.egressSecurityRules[0].description = " \t ";
+    await update({ updateSecurityListDetails: initial.securityList });
+    const saved: Record<string, unknown> = {};
+    const op = operation("security-rule-add", {
+      groupKind: "security-list",
+      groupId: ids.securityList,
+      etag: "list-e2",
+      rule: { ...rule, peer: "0.0.0.0/0", portMin: 22, portMax: 22, description: "" },
+    });
+    f.handlers.updateSecurityList = () => {
+      throw { statusCode: 400, serviceCode: "InvalidParameter" };
+    };
+    await expect(f.adapter.execute(credentials, op, jobContext(saved))).rejects.toMatchObject({
+      code: "InvalidParameter",
+    });
+    const intent = saved.securityListIntent as CloudDocument;
+    // Simulate a task saved by the old serializer. Missing and empty descriptions
+    // have the same semantic fingerprint, so its original hashes remain valid.
+    intent.after.ingressSecurityRules.at(-1).description = "";
+    const checkpoints = structuredClone(saved);
+    f.handlers.updateSecurityList = (request) => {
+      const body = serializedSecurityWrite("security-list", request);
+      expect(body.ingressSecurityRules.at(-1)).not.toHaveProperty("description");
+      expect(body.ingressSecurityRules[0]).toEqual(intent.after.ingressSecurityRules[0]);
+      expect(body.ingressSecurityRules[0].tcpOptions.sourcePortRange).toEqual({
+        min: 3000,
+        max: 4000,
+      });
+      expect(body.egressSecurityRules).toEqual(intent.after.egressSecurityRules);
+      return update({ ...request, updateSecurityListDetails: body });
+    };
+    const retry = jobContext(saved);
+    await expect(f.adapter.execute(credentials, op, retry)).resolves.toMatchObject({
+      message: "安全列表规则已更新",
+    });
+    expect(retry.checkpoint).not.toHaveBeenCalled();
+    expect(retry.checkpoints).toEqual(checkpoints);
+    expect(saved).toEqual(checkpoints);
+    await expect(f.adapter.execute(credentials, op, jobContext(saved))).resolves.toMatchObject({
+      message: "安全列表规则已更新",
+    });
+    expect(f.writes().map((write) => write.request.ifMatch)).toEqual(["list-e2", "list-e2"]);
+  });
   it("requires security-list ETag and preserves untouched rules and their source-port options", async () => {
     const f = fixture();
     await expect(

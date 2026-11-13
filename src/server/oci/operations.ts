@@ -115,6 +115,12 @@ function securityListFingerprint(list: CloudDocument): string {
     egress: list.egressSecurityRules.map(semanticRule),
   });
 }
+function securityListRuleForUpdate(rule: CloudDocument): CloudDocument {
+  if (rule.description !== "") return rule;
+  // Saved intents may contain an empty description; omitting it preserves the rule fingerprint.
+  const { description: _description, ...rest } = rule;
+  return rest;
+}
 
 export async function executeOperation(
   clients: OciClients,
@@ -813,7 +819,15 @@ async function changeSecurityRule(
   await invoke(
     clients.network,
     "updateSecurityList",
-    { securityListId: groupId, ifMatch: intent.etag, updateSecurityListDetails: intent.after },
+    {
+      securityListId: groupId,
+      ifMatch: intent.etag,
+      updateSecurityListDetails: {
+        ...intent.after,
+        ingressSecurityRules: intent.after.ingressSecurityRules.map(securityListRuleForUpdate),
+        egressSecurityRules: intent.after.egressSecurityRules.map(securityListRuleForUpdate),
+      },
+    },
     context,
   );
   const verified = await invoke(

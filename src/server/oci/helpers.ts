@@ -169,10 +169,11 @@ export function ruleToCloud(input: unknown, nsg: boolean): CloudDocument {
       throw new CloudError("请提供有效的 CIDR 网段", "VALIDATION_ERROR");
   }
   if (peerType === "NETWORK_SECURITY_GROUP") ocid(peer, "networksecuritygroup");
+  const description = typeof r.description === "string" ? r.description.slice(0, 255) : "";
   const result: CloudDocument = {
     protocol,
     isStateless: r.stateless === true,
-    description: typeof r.description === "string" ? r.description.slice(0, 255) : "",
+    ...(description.trim() ? { description } : {}),
     ...(nsg ? { direction: r.direction } : {}),
     ...(r.direction === "INGRESS"
       ? { source: peer, sourceType: peerType }
