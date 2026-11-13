@@ -93,7 +93,7 @@ export function AnalyticsRange({
     (!fullMonths || (start.endsWith("-01") && monthEnd?.getUTCDate() === 1)),
   );
   return (
-    <div className="analytics-range flex min-w-0 flex-wrap items-center gap-3 max-sm:flex-1">
+    <div className="analytics-range flex min-w-36 flex-wrap items-center gap-3 max-sm:flex-1">
       <Select
         className="w-auto min-w-36 max-sm:flex-1"
         aria-label="时间范围"

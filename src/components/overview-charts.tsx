@@ -202,7 +202,6 @@ export function TrafficTrend({ data }: { data: TrafficOverviewData }) {
               axisLine={false}
               tickLine={false}
               tick={chartTick}
-              label={{ value: "GiB", position: "insideTopLeft", offset: 0, ...chartTick }}
             />
             <Tooltip
               content={({ active, payload }) => {

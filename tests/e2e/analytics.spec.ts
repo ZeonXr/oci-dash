@@ -791,6 +791,62 @@ for (const pageName of ["traffic", "costs"] as const) {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.setViewportSize({ width: 1440, height: 1080 });
     await capture(page, info, `${pageName}-desktop`);
+    const period = page.getByLabel("时间范围", { exact: true });
+    const originalPreset = await period.getAttribute("data-value");
+    expect(originalPreset).not.toBeNull();
+    for (const custom of [false, true]) {
+      if (custom) {
+        await selectOption(period, "custom");
+        await expect(page.getByLabel("开始日期（UTC）", { exact: true })).toBeVisible();
+      }
+      for (const width of [320, 390, 640]) {
+        await test.step(`${width}px ${custom ? "自定义日期" : "预设日期"}控件自然换行且互不重叠`, async () => {
+          await page.setViewportSize({ width, height: 844 });
+          const container = page.locator(".analytics-controls");
+          const bounds = await container.boundingBox();
+          expect(bounds).not.toBeNull();
+          const controls = await container
+            .locator('[role="combobox"], input[type="date"], button')
+            .evaluateAll((elements) =>
+              elements.map((element) => {
+                const rect = element.getBoundingClientRect();
+                return {
+                  label: element.getAttribute("aria-label") ?? element.textContent?.trim(),
+                  left: rect.left,
+                  top: rect.top,
+                  right: rect.right,
+                  bottom: rect.bottom,
+                };
+              }),
+            );
+          expect(controls).toHaveLength((pageName === "traffic" ? 6 : 5) + (custom ? 3 : 0));
+          for (const control of controls) {
+            expect(control.left, `${control.label} left`).toBeGreaterThanOrEqual(bounds!.x - 1);
+            expect(control.top, `${control.label} top`).toBeGreaterThanOrEqual(bounds!.y - 1);
+            expect(control.right, `${control.label} right`).toBeLessThanOrEqual(
+              bounds!.x + bounds!.width + 1,
+            );
+            expect(control.bottom, `${control.label} bottom`).toBeLessThanOrEqual(
+              bounds!.y + bounds!.height + 1,
+            );
+          }
+          for (let index = 0; index < controls.length; index++) {
+            for (const other of controls.slice(index + 1)) {
+              const current = controls[index]!;
+              const overlapWidth =
+                Math.min(current.right, other.right) - Math.max(current.left, other.left);
+              const overlapHeight =
+                Math.min(current.bottom, other.bottom) - Math.max(current.top, other.top);
+              expect(
+                overlapWidth > 1 && overlapHeight > 1,
+                `${current.label} and ${other.label} overlap`,
+              ).toBe(false);
+            }
+          }
+        });
+      }
+    }
+    await selectOption(period, originalPreset!);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))
