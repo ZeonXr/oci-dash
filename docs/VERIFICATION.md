@@ -112,6 +112,14 @@ npm run test:e2e:isolated -- tests/e2e/console.spec.ts
 
 结果对应指定源码和执行环境。完整日志以链接的 GitHub Actions 为准，历史通过数不代表后续提交或任意 OCI 环境都已通过。
 
+### v0.7.0 发布验收
+
+**2026-11-17**，源码 [`4dbebc7`](https://github.com/ZeonXr/oci-dash/commit/4dbebc7e118123c8470988e802d41ba71979ecb3) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/44029734393) 和[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/44029734530) 均通过。发布检查包括完整源码与浏览器验证、AMD64 和 ARM64 原生构建及运行检查，以及匿名镜像拉取和全新部署。推广日志确认 `promoted: true`。
+
+发布后独立匿名核对确认：GitHub Latest 与 GHCR `latest` 均指向 `v0.7.0`，两个平台的镜像标签均记录本次源码提交。正式镜像索引为 `sha256:9ecea40331222ab35e8c14b4d0d86be950e7403a974ccde53a1a6c506a39b88a`。
+
+Release 正文与[版本说明](releases/v0.7.0.md) 一致。[Compose 附件](https://github.com/ZeonXr/oci-dash/releases/download/v0.7.0/compose.yaml) 为 240 字节，固定引用本版本，SHA-256 为 `3128ae22f6cb7e1e30b02e060a1d4acb92122873abc0a2b899d1018b9f801ad1`，与发布源码生成的内容一致。真实 OCI 控制台验证范围见[本次 VNC 验收](#真实-oci-vnc-验收)。
+
 ### v0.6.0 发布验收
 
 **2026-11-10**，源码 [`dd165a5`](https://github.com/ZeonXr/oci-dash/commit/dd165a5bc3bc8169671114819ab6bdd0aec285f3) 的[主分支 CI](https://github.com/ZeonXr/oci-dash/actions/runs/42829228405) 和[发布流程](https://github.com/ZeonXr/oci-dash/actions/runs/42829228863) 均通过。Linux 检查覆盖 736 项单元测试、118 项浏览器检查、5 项容器生命周期和 4 项备份恢复检查。Windows 本地结果为 730 项单元测试通过、6 项按平台跳过，118 项浏览器检查通过。
